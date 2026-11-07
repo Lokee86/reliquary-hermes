@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "profile": "minimal",
+  "capabilities": [
+    "protocol"
+  ],
+  "docs_root": "docs",
+  "root_index": "docs/INDEX.md",
+  "folder_index": "INDEX.md",
+  "required_paths": [
+    "README.md",
+    "AGENTS.md",
+    "docs/INDEX.md",
+    "docs/documentation-policy.md",
+    "docs/host-audit.md",
+    "docs/protocol.md",
+    "docs/handoff-contract.md",
+    "docs/verification.md",
+    "docs/ui-contract.md",
+    "contracts/dashboard-v1.schema.json"
+  ],
+  "index_exempt_directories": [],
+  "section_exemptions": [
+    "docs/INDEX.md"
+  ],
+  "required_sections": [
+    "Purpose",
+    "Overview",
+    "Related docs",
+    "Notes"
+  ],
+  "coverage": [
+    {
+      "paths": [
+        "src/reliquary_hermes/validation.py",
+        "src/reliquary_hermes/protocol.py",
+        "src/reliquary_hermes/tools.py"
+      ],
+      "docs": [
+        "docs/protocol.md"
+      ]
+    },
+    {
+      "paths": [
+        "src/reliquary_hermes/authority.py",
+        "src/reliquary_hermes/source.py"
+      ],
+      "docs": [
+        "docs/protocol.md",
+        "docs/host-audit.md"
+      ]
+    },
+    {
+      "paths": [
+        "src/reliquary_hermes/consumption.py",
+        "src/reliquary_hermes/__init__.py"
+      ],
+      "docs": [
+        "docs/handoff-contract.md",
+        "docs/host-audit.md"
+      ]
+    },
+    {
+      "paths": [
+        "tests/**",
+        "pyproject.toml"
+      ],
+      "docs": [
+        "docs/verification.md"
+      ]
+    },
+    {
+      "paths": [
+        "src/reliquary_hermes/ui_schema.py",
+        "src/reliquary_hermes/ui_contract.py",
+        "contracts/dashboard-v1.schema.json"
+      ],
+      "docs": [
+        "docs/ui-contract.md",
+        "docs/verification.md"
+      ]
+    }
+  ],
+  "change_rules": [
+    {
+      "paths": [
+        "src/reliquary_hermes/**"
+      ],
+      "docs": [
+        "docs/protocol.md",
+        "docs/handoff-contract.md",
+        "docs/host-audit.md",
+        "docs/verification.md"
+      ]
+    },
+    {
+      "paths": [
+        "tests/**",
+        "pyproject.toml"
+      ],
+      "docs": [
+        "docs/verification.md"
+      ]
+    },
+    {
+      "paths": [
+        "contracts/**",
+        "src/reliquary_hermes/ui_schema.py",
+        "src/reliquary_hermes/ui_contract.py"
+      ],
+      "docs": [
+        "docs/ui-contract.md",
+        "docs/verification.md"
+      ]
+    }
+  ]
+}

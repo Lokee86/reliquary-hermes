@@ -1,0 +1,62 @@
+# HP01 web-dashboard DTO contract v1
+
+## Purpose
+
+Freeze the complete typed mock interface required by the dashboard implementation spec before HU01/backend parallel work. This is a contract and deterministic fixture deliverable, not a running dashboard tab, backend route, product facade or HU01 acceptance.
+
+## Overview
+
+The canonical machine-readable contract is [dashboard-v1.schema.json](../contracts/dashboard-v1.schema.json), generated from `ui_schema.py::SCHEMA`. It is standard JSON Schema 2020-12 with exact objects and a discriminated request/response union for every operation below. `UIRequest`/`UIResponse` apply additional scope, correlation, byte-budget and privacy rules; the schema alone does not authenticate requests. The exported schema must equal its canonical builder in tests. `jsonschema>=4,<5` is a declared contract-validator dependency; the existing 4.26.0 installation was used without installing or changing an environment.
+
+`ui_contract.py` is distinct from provider DTOs. A provider `ProfileGrant` cannot authorize UI operations. A future backend must construct `VerifiedUIContext` only from verified Hermes request authentication plus server-bound Reliquary owner grants, an authorized session-to-REL map/active session, and same-origin checks. Its booleans are trusted fixture inputs, not a login implementation or fields accepted from a browser. The browser never receives the long-lived service credential, owner paths, SQL/store handles or arbitrary source-export access.
+
+## Common typed envelopes
+
+Requests contain exactly protocol version 1, request/operation IDs, profile/principal IDs, nullable session ID, owner ID/generation/cut, nullable expected revision, nullable idempotency key and operation arguments. `ui.owner_sessions` alone has null owner/generation/cut. Every other operation requires those scope values. Generation, revision, timestamp and count integers are bounded decimal strings (up to 39 digits), preserving values above JavaScript's safe integer range. IDs follow the shared 128-character ASCII rule.
+
+Successful owner responses bind `owner_id`, `owner_kind` (`REL`/`PHY`), `display_label`, decimal `generation`, `cut` and exact boolean capabilities. Owner/session enumeration instead has null top-level binding and a separately bound entry for each authorized owner. Capabilities are `view`, `manage`, `history`, `provenance`, `graph`, `community`, `status`, `memory_create`, `memory_edit`, `memory_retire`, `relation_edit`, `community_rename`. They advertise only actual implemented/tested operations in a future live server, never success for an absent API.
+
+All responses match request ID/operation. The verified UI context also binds response owner kind/display label and forbids capability widening, while mutation responses may advance only their validated committed generation/cut. Session mapping must reference an authorized REL, never a PHY. Successful reads match owner, generation and cut exactly; a late response from the prior selection/cut is rejected. Detail/provenance/history match target IDs and requested revisions. Mutations match stable request/idempotency keys, return a product receipt and refreshed committed value, and require a newly advanced generation/cut for `changed=true`. Errors use `denied`, `unavailable`, `stale_cursor`, `conflict`, `invalid` or `unsupported`, with null binding and only stable code/retryable fields. No private title, source existence, payload or count is reflected in an error.
+
+## Frozen views and operations
+
+- `ui.owner_sessions`: cursor/limit; authorized bound owner page, active session ID and authorized REL session mapping. Unknown/no active owner is explicit null. Non-null request sessions must exist in the trusted session map; enumeration returns the exact selected or authenticated active session-to-REL mapping. Null session means owner-level/no-session mode except enumeration, which resolves the trusted active session. Selected-session REL operational status must match that session's mapped REL. There is no ambient cross-owner merge. Foreign/private PHYs remain absent and unauthorized.
+- `ui.memory_list`: cursor/limit and server filters (query, category, type, lifecycle, community). Records contain stable Memory ID, decimal revision, body ID, title/excerpt, category/type, lifecycle, canonical status, optional supported native Freshness and community ID. Freshness is not synthesized; absent support is null. A supported native decimal value binds its cut without inventing a new ranking algorithm.
+- `ui.memory_detail`: Memory ID and nullable requested revision. Result contains summary, exact body revision/body ID/availability/content, retained revisions, supersession target, tombstone flag and typed provenance. Available content is a string; missing/unauthorized/pruned/corrupt content is null. A current body cannot substitute for an unavailable historical revision.
+- `ui.memory_history`: Memory ID and paged exact retained revision/body IDs, availability, decimal creation time and nullable content digest.
+- `ui.provenance`: exact Memory/revision and typed source records. Hermes source records preserve profile namespace, session/message UID, nullable branch/source revision, digest and an exact authorized UTF-8 byte range with the label `Hermes source / copied snapshot`. Unknown/stale/deleted/unauthorized/pruned/corrupt source is a typed `source_unavailable` reason without private source IDs/range. User-origin records identify the authenticated principal and creation time. Drill-down must revalidate source authorization/revision in the actual host.
+- `ui.graph_page`: seed/community scope, depth, node/edge limits and cursor. Nodes have stable semantic node IDs, Memory/community IDs, kind/origin, label, revision/cut. Edges have stable semantic IDs, kind/origin, source/target, revision/cut and active state. Canvas/rendering IDs are not Memory IDs. Returned edges resolve only to nodes in the bounded page and every element matches the cut. Missing routing metadata is unavailable, not an empty successful graph.
+- `ui.community_list`: cursor/limit; stable community ID/generation/member count/name/name-origin and optional member cursor. Missing community metadata is an explicit unavailable response, not an empty list.
+- `ui.operational_status`: selected owner/session's accepted source cursor, last completed receipt, actual worker state and decimal pending/held/error counts. Latest recall distinguishes none/candidate/selected/injected/confirmed, with searched/selected/injected IDs and actual delivery/receipt IDs. The pinned host cannot parse a claimed confirmed-use state because its handoff API is absent. No percentage or canned provider-success field exists.
+
+Management pages have at most 128 items and 256 KiB, matching accepted product constants in `reliquary-application/src/management_workflow.rs:7-8`. The complete wire envelope also stays within 256 KiB. Graph pages additionally have at most 500 nodes and 1,000 edges, and never exceed the caller's smaller requested limits or byte budget. Truncation and next cursor are explicit. Depth is 1-3; queries are at most 4,096 UTF-8 bytes, body/range text at most 32,768 UTF-8 bytes. All bounds compose; a page must satisfy the tightest one.
+
+## User-origin operations
+
+Every mutation requires server-side manage plus its operation capability, same-origin verified UI context, expected owner generation/cut and a stable idempotency key. Existing-target edits also require an expected revision. `verify_expected_revisions` specifies the mandatory named-product CAS gate against trusted current target revisions, including both relation endpoints; this fixture is not a mutable-store reader. A literal body field claiming user origin is not authorization. Product workflows must reject stale revisions, preserve drafts for conflict handling and return the actual committed result.
+
+- `ui.memory_create`: title/body/category/type through a manual user-origin workflow. No caller source citation/provenance field exists. The committed result must cite the same authenticated principal as user origin, never fabricated Hermes evidence.
+- `ui.memory_edit`: Memory ID, title and body with expected Memory revision; refreshed committed body/title/revision.
+- `ui.memory_retire`: Memory ID and explicit retirement effect with expected revision; committed lifecycle must be retired. HU03 still needs the actual owner/Memory/effect confirmation UI and policy-compliant action authorization.
+- `ui.relation_change`: named user association link/unlink, source/target IDs and revisions. Unlink also names the existing edge/revision. The committed edge must retain user origin, exact endpoints and link/unlink active state. An unlink's committed edge revision must advance beyond the expected revision when changed, or equal it for a no-op. Raw/canonical/duplicate/supersession edge edits are not exposed by this API. Their read kinds remain visible; closure-rule mutations require a later separately approved named workflow, not arbitrary edge writes.
+- `ui.community_rename`: community ID, expected community generation (carried as `expected_revision`, distinct from the owner generation) and name; committed name-origin is user. The committed community generation must advance beyond the expected revision when changed, or equal it for a no-op.
+
+These reserved named operations require HP02 public Root/Gateway/Application mappings to existing semantics or the minimal allowed owner-level addition. Their DTOs are frozen now; they are not successful no-ops or implemented product APIs. All required v1 user actions remain required for HU04, not silently reduced to disabled controls.
+
+## Cursor, scope and security contract
+
+`CursorBinding` specifies a trusted server registry entry bound to operation, profile/principal, session, owner/generation/cut and exact filters/arguments. The browser supplies only an opaque cursor ID. Filter/owner/remount/cut changes require stale-cursor/resync, never stitching old pages into a new view. The fake registry entry is not a signed cursor or authentication implementation.
+
+Owner changes cancel requests and clear private selections/cache before new rendering. The DTO correlation tests reject prior-owner/cut results; actual cancellation/render cleanup requires HU01/HU02 component/browser tests. The backend must enforce these checks independently of hidden controls. HTML/Markdown/source text stays untrusted, requiring safe rendering, safe URLs, no raw executable HTML and no tool execution; there is no frontend renderer in HP01 to certify.
+
+## Related docs
+
+- [Host and web SDK audit](host-audit.md)
+- [Provider/service contract](protocol.md)
+- [Required handoff boundary](handoff-contract.md)
+- [Verification and real-service gates](verification.md)
+- [Documentation index](INDEX.md)
+
+## Notes
+
+Schema, grant, cursor and receipt tests are deterministic contract evidence. Actual Hermes authentication/profile derivation, loopback service, Root operations, source authorization, cursor registry, product receipts, dashboard bundle/manifest and React rendering are unimplemented. HU01 can use these typed fixtures; its real loader/donor/build/browser acceptance remains a separate ticket. HU04 still needs real authenticated service/provider behavior and all required actions.

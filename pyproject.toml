@@ -1,0 +1,14 @@
+[project]
+name = "reliquary-hermes-contract"
+version = "0.1.0"
+description = "HP01 contract fixtures, not an installable Hermes provider"
+requires-python = ">=3.11,<4"
+dependencies = ["jsonschema>=4,<5"]
+
+[project.optional-dependencies]
+test = ["pytest>=9.1,<10"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests"]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers -p no:cacheprovider"
