@@ -84,7 +84,8 @@ def test_pinned_setup_activates_and_keeps_token_in_profile_dotenv(
         assert token in (home / ".env").read_text(encoding="utf-8")
         for path in (home / "config.yaml", *sorted((home / "reliquary").glob("*.json"))):
             assert token not in path.read_text(encoding="utf-8")
-        assert token not in capsys.readouterr().out
+        captured = capsys.readouterr()
+        assert token not in captured.out + captured.err
 
         owner_config = home / "reliquary" / "owners.json"
         owner_values = json.loads(owner_config.read_text(encoding="utf-8"))
@@ -246,3 +247,46 @@ def test_availability_rejects_non_regular_config(pinned_provider, tmp_path):
         assert not pinned_provider.ReliquaryMemoryProvider().is_available()
     finally:
         reset_hermes_home_override(scope)
+
+
+def test_shutdown_drops_an_in_flight_attachment(pinned_provider, monkeypatch, tmp_path):
+    home = tmp_path / "shutdown"
+    save_settings(home, _profile(home, "shutdown-profile"))
+    (home / ".env").write_text(
+        f"{TOKEN_VAR}=isolated-shutdown-test-profile-token\n", encoding="utf-8",
+    )
+    started, release = Event(), Event()
+    workers = []
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def attach(self, session_id):
+            started.set()
+            assert release.wait(3)
+            return SimpleNamespace(session_id=session_id, rel_id="late-rel", user_id="late-phy")
+
+    spawn = pinned_provider.spawn_context_thread
+
+    def capture_worker(*args, **kwargs):
+        worker = spawn(*args, **kwargs)
+        workers.append(worker)
+        return worker
+
+    monkeypatch.setattr(pinned_provider, "HostClient", Client)
+    monkeypatch.setattr(pinned_provider, "spawn_context_thread", capture_worker)
+    provider = pinned_provider.ReliquaryMemoryProvider()
+    provider.initialize("session", hermes_home=str(home))
+    try:
+        assert started.wait(3)
+        provider.shutdown()
+        assert provider.lifecycle_status == "stopped"
+        assert provider.binding is None
+    finally:
+        release.set()
+        for worker in workers:
+            worker.join(timeout=3)
+            assert not worker.is_alive()
+    assert provider.lifecycle_status == "stopped"
+    assert provider.binding is None
