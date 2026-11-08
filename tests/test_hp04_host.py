@@ -2,6 +2,7 @@
 
 from contextlib import ExitStack, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from hashlib import sha256
 import json
 import subprocess
 from threading import Thread
@@ -15,6 +16,7 @@ from reliquary_hermes.source_capture import capture_snapshot
 from reliquary_hermes.validation import canonical, decode
 from test_host_client import TOKEN
 from test_hp03_host import binaries, config, owner, stop
+from test_hp03_provider import pinned_provider
 
 
 SESSION = "session-a"
@@ -146,8 +148,10 @@ def _fixture_reply(request):
                   "temporal_status": "current", "ownership": "project", "title": uid,
                   "content": TEXT[uid], "source_node_id": uid, "source_quote": TEXT[uid],
                   "authority_source": None, "grounding_source": None, "routing_mentions": []}]}
+    elif name == "dream_pair_classification":
+        result = {"relation": "none", "direction": "none", "evidence": []}
     else:
-        raise ValueError("unexpected processing schema")
+        raise ValueError(f"unexpected synthetic processing schema: {name}")
     return {"choices": [{"message": {"content": json.dumps(result)}}]}
 
 
@@ -210,15 +214,7 @@ def test_hp04_processed_append_tombstones_both_exact_source_turns(tmp_path, bina
         assert extension_receipt != initial_receipt
         assert client.deliver_source_job(extension) == extension_receipt
         assert outbox.acknowledge(extension, extension_receipt)
-
-        [conversation] = _cli(cli, "rel", "archive", "conversations", rel)["page"]["items"]
-        conversation_id = conversation["value"]["conversation_id"]
-        assert conversation["value"]["turn_count"] == 2
-        original = _turn(cli, rel, conversation_id, "accepted")
-        assert original["timestamp_ns"] == 1700000000250000000
-        assert original["content"] == TEXT["accepted"]
-        assert original["imported"]["message_id"] == "accepted"
-
+        assert client.deliver_source_job(initial) == initial_receipt
         outbox.terminal(SESSION, "delete")
         terminal = outbox.next_job(SESSION)
         terminal_receipt = _when_ready(client, terminal)
@@ -227,10 +223,73 @@ def test_hp04_processed_append_tombstones_both_exact_source_turns(tmp_path, bina
         with pytest.raises(HostUnavailable, match="source_terminal"):
             client.deliver_source_job(extension)
         stop(client._process)
+        terminal_bytes = rel.read_bytes()
+        reopened = _host(binary, state, cleanup)
+        assert reopened.deliver_source_job(terminal) == terminal_receipt
+        with pytest.raises(HostUnavailable, match="source_terminal"):
+            reopened.deliver_source_job(initial)
+        stop(reopened._process)
+        assert rel.read_bytes() == terminal_bytes
 
+    encoded_profile = PROFILE.encode("ascii")
+    conversation_id = "hermes-copy:" + sha256(b"reliquary/hermes-copied-conversation/v1\0" +
+                                               len(encoded_profile).to_bytes(8, "little") + encoded_profile +
+                                               SESSION.encode("ascii")).hexdigest()
     for uid, second in (("accepted", 0), ("appended", 1)):
         turn = _turn(cli, rel, conversation_id, uid)
         assert (turn["availability"], turn["content"], turn["imported"]["message_id"]) == ("terminal", None, uid)
         assert turn["timestamp_ns"] == 1700000000250000000 + second * 1_000_000_000
     info = _cli(cli, "rel", "info", rel)["owner"]
     assert (info["rel_turn_count"], info["memory_count"]) == (2, 2)
+
+
+def test_hp04_pinned_provider_delivers_and_fences_late_same_session_callback(
+        tmp_path, binaries, pinned_provider, monkeypatch):
+    from hermes_cli.memory_setup import _post_setup_hook
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    binary, cli = binaries
+    home = tmp_path / "hermes-profile"
+    home.mkdir()
+    rel, phy = tmp_path / "provider.rel", tmp_path / "provider.phy"
+    owner(cli, "rel", rel, "unspecified")
+    owner(cli, "phy", phy)
+    provider = pinned_provider.ReliquaryMemoryProvider()
+    prompts = iter((PROFILE, PRINCIPAL, str(rel), str(phy), str(binary)))
+    monkeypatch.setattr("builtins.input", lambda _: next(prompts))
+
+    def wait_for(predicate):
+        deadline = monotonic() + 10
+        while not predicate() and monotonic() < deadline:
+            sleep(0.02)
+        assert predicate(), provider.sync_status
+
+    def callback(uid):
+        provider.sync_turn(TEXT[uid], "", session_id=SESSION, messages=[{
+            "message_uid": uid, "role": "user", "timestamp": 1700000000.25,
+            "content": TEXT[uid],
+        }])
+
+    scope = set_hermes_home_override(home)
+    try:
+        assert _post_setup_hook(provider, {})
+        provider.initialize(SESSION, hermes_home=str(home))
+        outbox = SourceOutbox(home / "reliquary", PROFILE, PRINCIPAL)
+        try:
+            wait_for(lambda: provider.lifecycle_status == "attached" and provider.sync_status == "source_ready")
+            callback("accepted")
+            wait_for(lambda: provider.sync_status == "source_accepted_durable")
+            assert outbox.cursor(SESSION).last_message_uid == "accepted"
+            provider.on_session_switch(SESSION, rewound=True)
+            wait_for(lambda: outbox.cursor(SESSION).kind == "invalidate")
+            callback("appended")
+            assert provider.sync_status == "source_reconciliation_required"
+            assert outbox.next_job(SESSION) is None
+        finally:
+            if provider._client is not None and provider._client._process is not None:
+                stop(provider._client._process)
+            provider.shutdown()
+    finally:
+        reset_hermes_home_override(scope)
+    info = _cli(cli, "rel", "info", rel)["owner"]
+    assert info["rel_turn_count"] == 1

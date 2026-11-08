@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 from .authority import Discovery
 from .protocol import Request, Response
-from .validation import (ContractError, MAX_WIRE_BYTES, canonical, decode,
+from .validation import (ContractError, MAX_WIRE_BYTES, canonical, decode, digest,
                          identifier, obj, require)
 
 
@@ -119,7 +119,8 @@ class HostClient:
         except ContractError:
             raise HostUnavailable("invalid_discovery") from None
 
-    def _exchange(self, discovery: Discovery, path: str, body: bytes, deadline: float) -> bytes:
+    def _exchange(self, discovery: Discovery, path: str, body: bytes, deadline: float,
+                  *, response_seconds: float = _REQUEST_SECONDS) -> bytes:
         url = urlsplit(discovery.endpoint)
         nonce = secrets.token_hex(16)
         nonce_bytes = nonce.encode("ascii")
@@ -139,7 +140,7 @@ class HostClient:
             except ConnectionRefusedError:
                 raise _ConnectionRefused("host_connection_refused") from None
             with connection:
-                deadline = min(deadline, time.monotonic() + _REQUEST_SECONDS)
+                deadline = min(deadline, time.monotonic() + response_seconds)
                 connection.settimeout(_remaining(deadline))
                 connection.sendall(header + body)
                 status, fields, reply = _response(connection, deadline)
@@ -153,6 +154,13 @@ class HostClient:
             raise HostUnavailable("invalid_host_response") from None
         if status != 200:
             code = {403: "host_denied", 409: "host_conflict", 503: "host_unavailable"}.get(status)
+            if path == "/v1/source":
+                try:
+                    error = obj(decode(reply), {"code", "retryable"})
+                    require(type(error["retryable"]) is bool, "invalid_source_response")
+                    code = identifier(error["code"])
+                except ContractError:
+                    code = None
             raise HostUnavailable(code or "invalid_host_response")
         return reply
 
@@ -213,6 +221,39 @@ class HostClient:
             if current is not None and current != previous:
                 return self._attach(current, session_id, deadline)
             time.sleep(min(0.03, remaining))
+
+    def deliver_source_job(self, job) -> str:
+        """Deliver only scoped durable outbox work and verify the exact receipt."""
+        if job._scope != (self._profile_id, self._principal_id):
+            raise HostUnavailable("source_scope_mismatch")
+        discovery = self._read_discovery()
+        if discovery is None:
+            raise HostUnavailable("host_unavailable")
+        arguments = {}
+        if job.kind == "snapshot":
+            source = decode(job.snapshot_json)
+            view = {key: source[key] for key in
+                    ("profile_id", "session_id", "branch_id", "source_revision", "messages")}
+            arguments = {"snapshot_digest": job.snapshot.snapshot_digest,
+                         "source_json": canonical(view).decode("utf-8")}
+        elif job.kind == "terminal":
+            arguments = {"reason": job.reason}
+        envelope = canonical({"protocol_version": 1, "profile_id": self._profile_id,
+                              "principal_id": self._principal_id, "session_id": job.session_id,
+                              "generation": job.generation, "idempotency_key": job.idempotency_key,
+                              "operation": job.kind, "arguments": arguments})
+        if len(envelope) > MAX_WIRE_BYTES:
+            raise HostUnavailable("source_snapshot_too_large")
+        reply = self._exchange(discovery, "/v1/source", envelope, time.monotonic() + _CONNECT_SECONDS + 8,
+                               response_seconds=8)
+        try:
+            result = obj(decode(reply), {"session_id", "generation", "idempotency_key", "receipt", "durable"})
+            require(result["session_id"] == job.session_id and type(result["generation"]) is int and
+                    result["generation"] == job.generation and result["idempotency_key"] == job.idempotency_key and
+                    result["durable"] is True, "source_receipt_mismatch")
+            return digest(result["receipt"])
+        except ContractError:
+            raise HostUnavailable("invalid_source_receipt") from None
 
     def request(self, raw: bytes) -> Response:
         """Send a frozen provider request for the currently attached session."""

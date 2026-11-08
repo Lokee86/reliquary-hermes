@@ -14,6 +14,8 @@ from .settings import (
     save_settings,
     setup_defaults,
 )
+from .source_capture import capture_snapshot
+from .source_worker import SourceWorker
 from .validation import ContractError, identifier, require
 
 
@@ -33,6 +35,7 @@ class ReliquaryMemoryProvider(MemoryProvider):
     def __init__(self):
         self._lock = Lock()
         self._client = None
+        self._source = self._source_profile = None
         self._binding = None
         self._session_id = None
         self._status = "uninitialized"
@@ -55,7 +58,7 @@ class ReliquaryMemoryProvider(MemoryProvider):
     @property
     def sync_status(self):
         with self._lock:
-            return self._sync_status
+            return self._source.status if self._source is not None else self._sync_status
 
     def is_available(self):
         try:
@@ -83,6 +86,8 @@ class ReliquaryMemoryProvider(MemoryProvider):
                 self._client = HostClient(
                     settings.state_dir, settings.profile_id, settings.principal_id, token, binary=settings.binary,
                 )
+                self._source = SourceWorker(settings, self._client)
+                self._source_profile = settings.profile_id
             except (OSError, HostUnavailable, RuntimeError, ValueError):
                 self._status = "unavailable"
                 return
@@ -98,6 +103,8 @@ class ReliquaryMemoryProvider(MemoryProvider):
         except ContractError:
             self._status = "unavailable"
             return
+        if self._source is not None:
+            self._source.activate(self._session_id)
         self._pending = (self._generation, self._session_id)
         self._status = "connecting"
         if not self._attaching:
@@ -132,8 +139,15 @@ class ReliquaryMemoryProvider(MemoryProvider):
 
     def on_session_switch(self, new_session_id, *, parent_session_id="", reset=False, rewound=False, **kwargs):
         with self._lock:
-            if self._client is not None:
-                self._queue_attach(new_session_id)
+            if self._client is None:
+                return
+            prior, source = self._session_id, self._source
+            fence = source is not None and prior is not None and (rewound or (reset and prior == new_session_id))
+            if fence:
+                source.pause(prior)
+            self._queue_attach(new_session_id)
+        if fence:
+            source.invalidate(prior)
 
     def on_turn_start(self, turn_number, message, **kwargs):
         with self._lock:
@@ -143,10 +157,18 @@ class ReliquaryMemoryProvider(MemoryProvider):
                 self._queue_attach(self._session_id)
 
     def sync_turn(self, user_content, assistant_content, *, session_id="", messages=None, turn_author=None):
-        # HP04 owns durable source handoff. This callback never sends or retains the transcript.
         with self._lock:
-            if self._status not in {"non_primary", "stopped"}:
-                self._sync_status = "source_ingestion_unavailable"
+            if self._status in {"non_primary", "stopped"} or session_id != self._session_id:
+                return
+            source, profile = self._source, self._source_profile
+        if source is None:
+            return
+        try:
+            snapshot = capture_snapshot(profile, session_id, messages)
+        except ContractError:
+            source.unavailable(session_id)
+            return
+        source.submit(snapshot)
 
     def get_tool_schemas(self):
         # HP05 owns retrieval dispatch and prefetch. Publish tools only when they can execute.
@@ -156,7 +178,11 @@ class ReliquaryMemoryProvider(MemoryProvider):
         with self._lock:
             self._generation += 1
             self._pending = self._binding = self._client = self._session_id = None
+            source = self._source
+            self._source = self._source_profile = None
             self._status = self._sync_status = "stopped"
+        if source is not None:
+            source.stop()
 
     def get_config_schema(self):
         return [{"key": key, "description": prompt, "required": True} for key, prompt in PROMPTS]
@@ -184,7 +210,13 @@ class ReliquaryMemoryProvider(MemoryProvider):
                 require(not is_managed(), "managed_setup")
                 self.save_config(values, home)
                 ensure_setup_token(home)
-                save_config({"memory": {"provider": self.name}}, merge_existing=True)
+                plugins = _config.get("plugins") or {}
+                enabled = list(plugins.get("enabled") or ())
+                observer = "reliquary-source-observer"
+                if observer not in (plugins.get("disabled") or ()) and observer not in enabled:
+                    enabled.append(observer)
+                save_config({"memory": {"provider": self.name}, "plugins": {"enabled": enabled}},
+                            merge_existing=True)
             finally:
                 reset_hermes_home_override(scope)
         except (EOFError, KeyboardInterrupt):

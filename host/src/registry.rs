@@ -255,6 +255,19 @@ impl Registry {
             .is_some())
     }
 
+    pub(crate) fn source_owner(
+        &self,
+        session_id: &str,
+        require_bound: bool,
+    ) -> Result<OwnerId, RegistryError> {
+        let route = self.route_for(session_id)?;
+        let known = self.accepted_route(&route, &self.session_path(session_id))?;
+        if require_bound && known.is_none() {
+            return Err(RegistryError::Denied("unbound_session"));
+        }
+        Ok(route.rel_id)
+    }
+
     pub(crate) fn owner_status(
         &self,
         instance: &Instance,
