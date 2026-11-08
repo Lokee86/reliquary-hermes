@@ -14,7 +14,8 @@
   function GraphView(props) {
     const React = getReact();
     const h = React.createElement;
-    const { nodes, edges, truncated } = props.graph;
+    const { nodes, edges, truncated, next_cursor } = props.graph;
+    const pageNote = next_cursor ? " · more pages" : truncated ? " · result limited" : "";
     const width = 760;
     const height = 420;
     const positioned = nodes.map((node, index) => {
@@ -41,7 +42,7 @@
     }
 
     return h("section", { className: "rly-graph-view", "aria-label": "Bounded Memory graph" },
-      h("p", { className: "rly-graph-summary" }, `${nodes.length} nodes · ${edges.length} edges${truncated ? " · more results available" : ""}`),
+      h("p", { className: "rly-graph-summary" }, `${nodes.length} nodes · ${edges.length} edges${pageNote}`),
       nodes.length > 0
         ? h("div", { className: "rly-graph-canvas" },
           h("svg", { viewBox: `0 0 ${width} ${height}`, role: "group", "aria-label": "Graph connections. Focus a node and use arrow keys to move between nodes." },

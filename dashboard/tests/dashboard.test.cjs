@@ -64,6 +64,8 @@ test("history and provenance preserve exact revisions and unavailable bodies", a
   assert.equal(detail.body.content, null);
   assert.equal(result(await client.read("ui.provenance", scope, args, signal)).revision, pruned.revision);
   assert.equal((await client.read("ui.memory_detail", scope, { ...args, revision: "999" }, signal)).status, "unavailable");
+  assert.equal((await client.read("ui.memory_detail", scope, { ...args, revision: "bad" }, signal)).status, "invalid");
+  assert.equal((await client.read("ui.provenance", scope, { ...args, memory_id: "bad id" }, signal)).status, "invalid");
 });
 
 test("graph expansion and community membership respect stable IDs, limits and cut", async () => {
@@ -77,12 +79,17 @@ test("graph expansion and community membership respect stable IDs, limits and cu
   assert.ok(ids.has(seed));
   assert.ok(expanded.nodes.some((node) => !first.nodes.some((previous) => previous.node_id === node.node_id)));
   assert.ok(expanded.edges.every((edge) => edge.cut === general.cut && ids.has(edge.source_id) && ids.has(edge.target_id)));
+  const edgeLimited = result(await client.read("ui.graph_page", scope, { ...graph, seed_ids: [seed], node_limit: 6, edge_limit: 1 }, signal));
+  assert.equal(edgeLimited.edges.length, 1);
+  assert.equal(edgeLimited.truncated, true);
+  assert.equal(edgeLimited.next_cursor, null);
   const communities = result(await client.read("ui.community_list", scope, { cursor: null, limit: 3 }, signal));
   const community = communities.communities.items[0];
   const args = { community_id: community.community_id, expected_generation: community.generation, limit: 3, cursor: null };
   const members = result(await client.read("ui.community_members", scope, args, signal));
   assert.ok(members.members.items.includes("fixture-rel-memory"));
   assert.notEqual((await client.read("ui.community_members", scope, { ...args, expected_generation: "999" }, signal)).status, "ok");
+  assert.equal((await client.read("ui.community_members", scope, { ...args, expected_generation: "01" }, signal)).status, "invalid");
 });
 
 test("wire arguments remain exact and typed server errors survive correlation", async () => {

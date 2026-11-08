@@ -29,6 +29,11 @@
     return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(id) && !/[\r\n]/.test(id);
   }
 
+  /** @param {string} value */
+  function validDecimal(value) {
+    return /^(0|[1-9][0-9]{0,38})$/.test(value) && !/[\r\n]/.test(value);
+  }
+
   /** @param {number} value @param {number} max */
   function within(value, max) {
     return Number.isInteger(value) && value > 0 && value <= max;
@@ -38,6 +43,10 @@
   function invalidArguments(request) {
     const args = request.arguments;
     if ("limit" in args && !within(args.limit, 128)) return "invalid_limit";
+    if ("memory_id" in args && !validId(args.memory_id)) return "invalid_memory_id";
+    if ("revision" in args && args.revision !== null && !validDecimal(args.revision)) return "invalid_revision";
+    if (request.operation === "ui.community_members" &&
+        (!validId(request.arguments.community_id) || !validDecimal(request.arguments.expected_generation))) return "invalid_community_scope";
     if (request.operation === "ui.memory_list") {
       const { query, category, memory_type, community_id } = request.arguments.filters;
       if ([category, memory_type, community_id].some((id) => id !== null && !validId(id))) return "invalid_filter_id";
