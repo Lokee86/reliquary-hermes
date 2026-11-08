@@ -13,7 +13,10 @@
   "files": [
     "types.d.ts",
     "src/state.js",
-    "src/mock.js",
+    "src/client.js",
+    "src/fixtures.js",
+    "src/views.js",
+    "src/graph.js",
     "src/index.js"
   ]
 }

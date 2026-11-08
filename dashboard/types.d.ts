@@ -163,23 +163,164 @@ export interface OperationalStatus {
 }
 
 export type OperationalStatusResponse = ScopedResponse<"ui.operational_status", OperationalStatus>;
-export type ScopedDashboardResponse = MemoryListResponse | GraphPageResponse | MemoryDetailResponse | ProvenanceResponse | OperationalStatusResponse;
-export type DashboardResponse = OwnerSessionsResponse | ScopedDashboardResponse;
+export interface HistoryRevision {
+  revision: string;
+  body_id: string;
+  availability: "available" | "missing" | "unauthorized" | "pruned" | "corrupt";
+  created_at_ms: string;
+  content_digest: string | null;
+}
 
-export interface DashboardState {
+export interface Community {
+  community_id: string;
+  generation: string;
+  member_count: string;
+  name: string | null;
+  name_origin: "user" | "derived" | "unnamed";
+  cursor: string | null;
+}
+
+export type MemoryHistoryResponse = ScopedResponse<"ui.memory_history", { memory_id: string; revisions: Page<HistoryRevision> }>;
+export type CommunityListResponse = ScopedResponse<"ui.community_list", { metadata_state: "available"; communities: Page<Community> }>;
+export type CommunityMembersResponse = ScopedResponse<"ui.community_members", { community_id: string; generation: string; members: Page<string> }>;
+export type ScopedDashboardResponse = MemoryListResponse | GraphPageResponse | MemoryDetailResponse | ProvenanceResponse
+  | OperationalStatusResponse | MemoryHistoryResponse | CommunityListResponse | CommunityMembersResponse;
+
+export interface PageArgs {
+  cursor: string | null;
+  limit: number;
+}
+
+export interface MemoryFilters {
+  query: string;
+  category: string | null;
+  memory_type: string | null;
+  lifecycle: MemorySummary["lifecycle"] | null;
+  community_id: string | null;
+}
+
+export interface ReadArgs {
+  "ui.owner_sessions": PageArgs;
+  "ui.memory_list": PageArgs & { filters: MemoryFilters };
+  "ui.memory_detail": { memory_id: string; revision: string | null };
+  "ui.memory_history": PageArgs & { memory_id: string };
+  "ui.provenance": { memory_id: string; revision: string };
+  "ui.graph_page": { seed_ids: string[]; community_id: string | null; depth: number; node_limit: number; edge_limit: number; cursor: string | null };
+  "ui.community_list": PageArgs;
+  "ui.community_members": PageArgs & { community_id: string; expected_generation: string };
+  "ui.operational_status": Record<string, never>;
+}
+
+export type ReadOperation = keyof ReadArgs;
+export type ReadResults = {
+  [Response in ScopedDashboardResponse | OwnerSessionsResponse as Response["operation"]]: Response["result"];
+};
+
+export interface ReadScope {
   owner: OwnerBinding | null;
-  mode: ViewMode;
-  listPage: Page<MemorySummary> | null;
-  graphPage: GraphPageResponse["result"] | null;
-  selectedMemoryId: string | null;
-  detail: MemoryDetail | null;
-  provenance: ProvenanceResponse["result"] | null;
-  operationalStatus: OperationalStatus | null;
-  pendingRequests: Record<string, string>;
+  sessionId: string | null;
+}
+
+export type ReadErrorStatus = "denied" | "unavailable" | "stale_cursor" | "conflict" | "invalid" | "unsupported" | "error";
+export interface ReadFailure {
+  status: ReadErrorStatus;
+  code: string;
+  retryable: boolean;
+}
+export type ReadOutcome<T> = { status: "ok"; value: T } | ReadFailure;
+export type ReadState<T> = { status: "idle" } | { status: "loading" } | ReadOutcome<T>;
+
+export interface ReadHandle<T> {
+  state: ReadState<T>;
+  retry(): void;
+}
+
+export interface CursorState {
+  current: string | null;
+  next(cursor: string): void;
+  previous(): void;
+  reset(): void;
+}
+
+export interface DashboardRequest<K extends ReadOperation = ReadOperation> {
+  protocol_version: 1;
+  request_id: string;
+  operation: K;
+  profile_id: string;
+  principal_id: string;
+  session_id: string | null;
+  owner_id: string | null;
+  generation: string | null;
+  cut: string | null;
+  expected_revision: null;
+  idempotency_key: null;
+  arguments: ReadArgs[K];
+}
+
+export interface DashboardErrorResponse {
+  protocol_version: 1;
+  request_id: string;
+  operation: ReadOperation;
+  status: Exclude<ReadErrorStatus, "error">;
+  binding: null;
+  result: { code: string; retryable: boolean };
+}
+
+export type DashboardResponse = ScopedDashboardResponse | OwnerSessionsResponse | DashboardErrorResponse;
+export type DashboardWireRequest = { [K in ReadOperation]: DashboardRequest<K> }[ReadOperation];
+export type DashboardTransport = (request: DashboardWireRequest, signal: AbortSignal) => Promise<DashboardResponse>;
+
+export interface SessionChoice {
+  sessionId: string;
+  relId: string;
+}
+
+export interface PhyChoice {
+  phyId: string;
+  label: string;
+}
+
+export interface DashboardClient {
+  sessions(): SessionChoice[];
+  phys(): PhyChoice[];
+  invalidate(): void;
+  read<K extends ReadOperation>(operation: K, scope: ReadScope, args: ReadArgs[K], signal: AbortSignal): Promise<ReadOutcome<ReadResults[K]>>;
+}
+
+export interface DashboardFixture {
+  owner_sessions: Record<string, OwnerSessionsResponse[]>;
+  memory_lists: Record<string, MemoryListResponse>;
+  graph_pages: Record<string, GraphPageResponse>;
+  memory_details: Record<string, MemoryDetailResponse[]>;
+  memory_histories: Record<string, MemoryHistoryResponse[]>;
+  provenance: Record<string, ProvenanceResponse[]>;
+  operational_statuses: Record<string, OperationalStatusResponse>;
+  community_lists: Record<string, CommunityListResponse>;
+  community_members: Record<string, CommunityMembersResponse[]>;
+}
+
+export type GraphSelection = { kind: "node" | "edge"; id: string };
+
+export interface GraphViewProps {
+  graph: GraphPageResponse["result"];
+  selected: GraphSelection | null;
+  onSelect(selection: GraphSelection): void;
+  onExpand(nodeId: string): void;
+}
+
+export interface CommunityViewProps {
+  communities: Page<Community>;
+  selected: Community | null;
+  members: Page<string> | null;
+  onCommunity(community: Community): void;
+  onMemory(memoryId: string): void;
+  onNextCommunities(cursor: string): void;
+  onNextMembers(cursor: string): void;
 }
 
 export interface HostReact {
-  createElement(type: string | ((props: Record<string, unknown>) => unknown), props?: Record<string, unknown> | null, ...children: unknown[]): unknown;
+  createElement(type: string, props?: Record<string, unknown> | null, ...children: unknown[]): unknown;
+  createElement<P>(type: (props: P) => unknown, props: P & { key?: string }, ...children: unknown[]): unknown;
 }
 
 export interface HermesDashboardSDK {
@@ -187,6 +328,8 @@ export interface HermesDashboardSDK {
   React: HostReact;
   hooks: {
     useState<T>(initial: T | (() => T)): [T, (next: T | ((current: T) => T)) => void];
+    useEffect(effect: () => void | (() => void), dependencies: readonly unknown[]): void;
+    useRef<T>(initial: T): { current: T };
   };
 }
 
@@ -199,28 +342,28 @@ declare global {
     __HERMES_PLUGIN_SDK__?: HermesDashboardSDK;
     __HERMES_PLUGINS__?: HermesPluginRegistry;
   }
+  var ReliquaryDashboardClient: {
+    createClient(transport: DashboardTransport, sessions?: SessionChoice[], phys?: PhyChoice[], resetTransport?: () => void): DashboardClient;
+  };
+  var ReliquaryDashboardFixtures: {
+    createFixtureClient(fixture?: DashboardFixture, activePhyId?: string | null): DashboardClient;
+  };
+  var ReliquaryDashboardGraph: {
+    GraphView(props: GraphViewProps): unknown;
+    CommunityView(props: CommunityViewProps): unknown;
+  };
   var ReliquaryDashboardState: {
-    createState(owner: OwnerBinding | null): DashboardState;
-    changeOwner(state: DashboardState, owner: OwnerBinding | null): DashboardState;
-    beginRequest(state: DashboardState, operation: string, requestId: string): DashboardState;
-    selectMemory(state: DashboardState, memoryId: string | null): DashboardState;
-    setMode(state: DashboardState, mode: ViewMode): DashboardState;
-    applyResponse(state: DashboardState, response: DashboardResponse): DashboardState;
-    acceptsResponse(state: DashboardState, response: DashboardResponse): boolean;
+    useRead<K extends ReadOperation>(client: DashboardClient, operation: K, scope: ReadScope, args: ReadArgs[K] | null): ReadHandle<ReadResults[K]>;
+    useCursor(): CursorState;
   };
-  var ReliquaryDashboardMock: {
-    getOwners(): OwnerBinding[];
-    getDefaultOwner(): OwnerBinding | null;
-    getActivePhy(): OwnerBinding | null;
-    hydrate(state: DashboardState, owner: OwnerBinding | null): DashboardState;
-    select(state: DashboardState, memoryId: string): DashboardState;
+  var ReliquaryDashboardViews: {
+    meta(label: string, value: string): unknown;
+    readContent<T>(label: string, read: ReadHandle<T>, render: (value: T) => unknown, resync?: () => void): unknown;
+    pager(label: string, cursor: CursorState, next: string | null): unknown;
+    select(label: string, value: string, options: { value: string; label: string }[], onChange: (value: string) => void): unknown;
+    MemoryList(props: { items: MemorySummary[]; selected: string | null; onSelect: (memoryId: string) => void }): unknown;
+    Inspector(props: { client: DashboardClient; scope: ReadScope; memoryId: string }): unknown;
+    Status(props: { client: DashboardClient; scope: ReadScope }): unknown;
   };
-  var ReliquaryDashboardFixture: {
-    owner_sessions: OwnerSessionsResponse;
-    memory_lists: Record<string, MemoryListResponse>;
-    graph_pages: Record<string, GraphPageResponse>;
-    memory_details: Record<string, MemoryDetailResponse>;
-    provenance: Record<string, ProvenanceResponse>;
-    operational_statuses: Record<string, OperationalStatusResponse>;
-  };
+  var ReliquaryDashboardFixture: DashboardFixture;
 }

@@ -60,22 +60,94 @@ try {
     assert.equal(new URL(page.url()).pathname, "/reliquary");
     assert.equal(await page.locator(".rly-dashboard").evaluate((element) => getComputedStyle(element).display), "flex");
     assert.match(await page.locator(".rly-live-notice").innerText(), /Synthetic fixture only/);
-    const owner = page.getByRole("combobox", { name: "Select REL or PHY to browse" });
+    const rel = page.getByRole("combobox", { name: "REL", exact: true });
+    const session = page.getByRole("combobox", { name: "Session", exact: true });
+    const activePhy = page.getByRole("combobox", { name: "Active PHY", exact: true });
+    const browse = page.getByRole("combobox", { name: "Browse owner", exact: true });
     const inspector = page.locator(".rly-inspector");
-    const phy = page.getByText("Reliquary user ID", { exact: true }).locator("xpath=following-sibling::dd");
-    assert.equal(await owner.inputValue(), "fixture-rel");
-    assert.equal(await phy.innerText(), "fixture-phy");
-    await page.locator(".rly-graph-node").first().click();
-    await page.getByRole("button", { name: "List page", exact: true }).click();
-    assert.equal(await page.locator('.rly-memory-button[aria-current="true"]').count(), 1);
-    assert.match(await inspector.innerText(), /fixture-rel-memory/);
+    const graphNodes = page.locator(".rly-graph-node");
+    const memoryButtons = page.locator(".rly-memory-button");
+    const listMode = page.getByRole("button", { name: "List page", exact: true });
+    const graphMode = page.getByRole("button", { name: "Graph page", exact: true });
+    await rel.waitFor();
+    assert.equal(await rel.inputValue(), "fixture-rel");
+    assert.equal(await session.inputValue(), "fixture-session");
+    assert.equal(await activePhy.inputValue(), "fixture-phy");
 
-    await owner.selectOption("fixture-project-rel");
+    await activePhy.selectOption("fixture-alt-phy");
+    await page.getByText("fixture-alt-phy", { exact: true }).waitFor();
+    assert.equal(await rel.inputValue(), "fixture-rel");
+    await browse.selectOption("PHY");
+    await page.getByText("No graph nodes on this page.", { exact: true }).waitFor();
+    await listMode.click();
+    await page.getByText("No Memories match this page.", { exact: true }).waitFor();
+    await browse.selectOption("REL");
+    await activePhy.selectOption("");
+    await page.getByText("Reliquary user ID", { exact: true }).waitFor();
+    assert.equal(await browse.locator('option[value="PHY"]').count(), 0);
+    await activePhy.selectOption("fixture-phy");
+    await page.getByText("fixture-phy", { exact: true }).waitFor();
+
+    await graphNodes.first().focus();
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("Enter");
+    await inspector.getByText("fixture-rel-memory-2", { exact: true }).waitFor();
+
+    await listMode.click();
+    const selected = page.locator('.rly-memory-button[aria-current="true"]');
+    await selected.waitFor();
+    assert.match(await selected.innerText(), /Synthetic related memory 2/);
+    await selected.focus();
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("Enter");
+    await inspector.getByText("fixture-rel-memory", { exact: true }).waitFor();
+
+    await page.getByRole("button", { name: /Revision 1.*pruned/ }).click();
+    await inspector.getByText("Body availability is pruned.", { exact: true }).waitFor();
+    await inspector.getByRole("button", { name: "Show current revision" }).click();
+    await inspector.getByText("Hermes source / copied snapshot", { exact: true }).waitFor();
+
+    await page.getByRole("button", { name: "Next Memory page", exact: true }).click();
+    await memoryButtons.filter({ hasText: "Synthetic related memory 5" }).waitFor();
+    assert.equal(await memoryButtons.count(), 2);
+    await page.getByRole("button", { name: "Previous Memory page", exact: true }).click();
+    await memoryButtons.filter({ hasText: "Synthetic session memory" }).waitFor();
+
+    const search = page.getByRole("searchbox", { name: "Search Memories", exact: true });
+    await search.fill("no fixture matches");
+    await page.getByText("No Memories match this page.", { exact: true }).waitFor();
+    await search.clear();
+    await memoryButtons.first().waitFor();
+    await page.getByText("Filters", { exact: true }).click();
+    const category = page.getByRole("textbox", { name: "Category", exact: true });
+    await category.fill("bad id");
+    await page.getByText(/Could not load Memory list/).waitFor();
+    await category.clear();
+    await memoryButtons.first().waitFor();
+
+    await graphMode.click();
+    const edge = page.locator(".rly-graph-edge-hit").first();
+    await edge.focus();
+    await page.keyboard.press("Enter");
+    await page.getByRole("complementary", { name: "Selected graph item" }).getByText("From / to", { exact: true }).waitFor();
+    await graphNodes.first().focus();
+    await page.keyboard.press("e");
+    await page.getByText("6 nodes · 5 edges", { exact: false }).waitFor();
+    await page.getByRole("button", { name: "Reset graph", exact: true }).click();
+
+    await page.getByRole("button", { name: /Synthetic cluster/ }).click();
+    await page.locator(".rly-community-members").getByRole("button", { name: "fixture-rel-memory", exact: true }).click();
+    await inspector.getByText("fixture-rel-memory", { exact: true }).waitFor();
+
+    await session.selectOption("fixture-project-session");
     await page.getByText("Tombstoned source", { exact: true }).waitFor();
-    assert.equal(await phy.innerText(), "fixture-phy");
-    assert.equal(await page.locator('.rly-memory-button[aria-current="true"]').count(), 0);
+    assert.equal(await rel.inputValue(), "fixture-project-rel");
+    assert.equal(await activePhy.inputValue(), "fixture-phy");
     assert.doesNotMatch(await inspector.innerText(), /fixture-rel-memory/);
-    await page.locator(".rly-memory-button").first().click();
+
+    await listMode.click();
+    await memoryButtons.first().click();
+    await inspector.getByText("Source unavailable", { exact: true }).waitFor();
     const detail = await inspector.innerText();
     assert.match(detail, /Lifecycle\s+active/);
     assert.match(detail, /Source unavailable.*deleted/s);
@@ -83,11 +155,13 @@ try {
     assert.equal(await inspector.locator("img, script").count(), 0);
     assert.equal(await page.evaluate(() => window.hu01Alerts), 0);
 
-    await owner.selectOption("fixture-phy");
-    assert.equal(await phy.innerText(), "fixture-phy");
-    assert.match(await inspector.innerText(), /PHY · Private PHY/);
+    await rel.selectOption("fixture-rel");
+    await page.getByText("Mapped REL", { exact: true }).waitFor();
+    assert.equal(await session.inputValue(), "fixture-session");
+    assert.equal(await activePhy.inputValue(), "fixture-phy");
+    assert.doesNotMatch(await inspector.innerText(), /fixture-project-rel-memory/);
     assert.deepEqual(errors, []);
-    console.log(`Reliquary fixture tab passed with Hermes SDK 1.1.0 and host React ${sdk.react}.`);
+    console.log(`Reliquary HU02 fixture tab passed with Hermes SDK 1.1.0 and host React ${sdk.react}.`);
   }
 } finally {
   await browser.close();

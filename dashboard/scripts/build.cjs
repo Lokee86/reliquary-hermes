@@ -7,7 +7,7 @@ if (!outputDir.startsWith(root + path.sep)) throw new Error("Refusing output out
 
 const fixturePath = path.resolve(root, "fixtures", "mock-responses.json");
 const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
-const sources = ["src/state.js", "src/mock.js", "src/index.js"];
+const sources = ["src/client.js", "src/fixtures.js", "src/state.js", "src/views.js", "src/graph.js", "src/index.js"];
 const sourceText = sources.map((name) => {
   const file = path.resolve(root, name);
   if (!file.startsWith(root + path.sep)) throw new Error(`Refusing source outside dashboard package: ${name}`);
@@ -17,7 +17,7 @@ const forbidden = /@tauri-apps|@hermes\/plugin-sdk|\binvoke\s*\(|__HERMES_SESSIO
 if (forbidden.test(sourceText.join("\n"))) throw new Error("Dashboard source includes a forbidden native, direct invoke, or credential surface.");
 
 const fixtureScript = `(function (root) { root.ReliquaryDashboardFixture = ${JSON.stringify(fixture)}; })(globalThis);`;
-const bundle = ["/* Generated from src/ with synthetic fixture data. Rebuild with node scripts/build.cjs. */", sourceText[0], fixtureScript, sourceText[1], sourceText[2]].join("\n\n");
+const bundle = ["/* Generated from src/ with synthetic fixture data. Rebuild with node scripts/build.cjs. */", fixtureScript, ...sourceText].join("\n\n");
 fs.mkdirSync(outputDir, { recursive: true });
 fs.writeFileSync(path.join(outputDir, "index.js"), bundle, "utf8");
 fs.copyFileSync(path.resolve(root, "styles.css"), path.join(outputDir, "style.css"));

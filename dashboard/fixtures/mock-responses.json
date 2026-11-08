@@ -1,89 +1,458 @@
 {
   "owner_sessions": {
-    "protocol_version": 1,
-    "request_id": "hu01-owner-sessions",
-    "operation": "ui.owner_sessions",
-    "status": "ok",
-    "binding": null,
-    "result": {
-      "owners": {
-        "items": [
-          {
-            "owner_id": "fixture-rel",
-            "owner_kind": "REL",
-            "display_label": "General REL",
-            "generation": "1",
-            "cut": "fixture-rel-v1",
-            "capabilities": {
-              "view": true,
-              "manage": false,
-              "history": true,
-              "provenance": true,
-              "graph": true,
-              "community": false,
-              "status": true,
-              "memory_create": false,
-              "memory_edit": false,
-              "memory_retire": false,
-              "relation_edit": false,
-              "community_rename": false
-            }
+    "fixture-session": [
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-owner-sessions-default-fixture-session",
+        "operation": "ui.owner_sessions",
+        "status": "ok",
+        "binding": null,
+        "result": {
+          "owners": {
+            "items": [
+              {
+                "owner_id": "fixture-rel",
+                "owner_kind": "REL",
+                "display_label": "General REL",
+                "generation": "1",
+                "cut": "fixture-rel-v1",
+                "capabilities": {
+                  "view": true,
+                  "manage": false,
+                  "history": true,
+                  "provenance": true,
+                  "graph": true,
+                  "community": true,
+                  "status": true,
+                  "memory_create": false,
+                  "memory_edit": false,
+                  "memory_retire": false,
+                  "relation_edit": false,
+                  "community_rename": false
+                }
+              },
+              {
+                "owner_id": "fixture-project-rel",
+                "owner_kind": "REL",
+                "display_label": "Project REL",
+                "generation": "1",
+                "cut": "fixture-project-rel-v1",
+                "capabilities": {
+                  "view": true,
+                  "manage": false,
+                  "history": true,
+                  "provenance": true,
+                  "graph": true,
+                  "community": true,
+                  "status": true,
+                  "memory_create": false,
+                  "memory_edit": false,
+                  "memory_retire": false,
+                  "relation_edit": false,
+                  "community_rename": false
+                }
+              },
+              {
+                "owner_id": "fixture-phy",
+                "owner_kind": "PHY",
+                "display_label": "Private PHY",
+                "generation": "1",
+                "cut": "fixture-phy-v1",
+                "capabilities": {
+                  "view": true,
+                  "manage": false,
+                  "history": true,
+                  "provenance": true,
+                  "graph": true,
+                  "community": true,
+                  "status": true,
+                  "memory_create": false,
+                  "memory_edit": false,
+                  "memory_retire": false,
+                  "relation_edit": false,
+                  "community_rename": false
+                }
+              }
+            ],
+            "next_cursor": null,
+            "truncated": false
           },
-          {
-            "owner_id": "fixture-project-rel",
-            "owner_kind": "REL",
-            "display_label": "Project REL",
-            "generation": "1",
-            "cut": "fixture-project-rel-v1",
-            "capabilities": {
-              "view": true,
-              "manage": false,
-              "history": true,
-              "provenance": true,
-              "graph": true,
-              "community": false,
-              "status": true,
-              "memory_create": false,
-              "memory_edit": false,
-              "memory_retire": false,
-              "relation_edit": false,
-              "community_rename": false
-            }
-          },
-          {
-            "owner_id": "fixture-phy",
-            "owner_kind": "PHY",
-            "display_label": "Private PHY",
-            "generation": "1",
-            "cut": "fixture-phy-v1",
-            "capabilities": {
-              "view": true,
-              "manage": false,
-              "history": true,
-              "provenance": true,
-              "graph": true,
-              "community": false,
-              "status": true,
-              "memory_create": false,
-              "memory_edit": false,
-              "memory_retire": false,
-              "relation_edit": false,
-              "community_rename": false
-            }
-          }
-        ],
-        "next_cursor": null,
-        "truncated": false
+          "active_session_id": "fixture-session",
+          "session_owner_id": "fixture-rel",
+          "active_phy_id": "fixture-phy"
+        }
       },
-      "active_session_id": "fixture-session",
-      "session_owner_id": "fixture-rel",
-      "active_phy_id": "fixture-phy"
-    }
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-owner-sessions-alt-fixture-session",
+        "operation": "ui.owner_sessions",
+        "status": "ok",
+        "binding": null,
+        "result": {
+          "owners": {
+            "items": [
+              {
+                "owner_id": "fixture-rel",
+                "owner_kind": "REL",
+                "display_label": "General REL",
+                "generation": "1",
+                "cut": "fixture-rel-v1",
+                "capabilities": {
+                  "view": true,
+                  "manage": false,
+                  "history": true,
+                  "provenance": true,
+                  "graph": true,
+                  "community": true,
+                  "status": true,
+                  "memory_create": false,
+                  "memory_edit": false,
+                  "memory_retire": false,
+                  "relation_edit": false,
+                  "community_rename": false
+                }
+              },
+              {
+                "owner_id": "fixture-project-rel",
+                "owner_kind": "REL",
+                "display_label": "Project REL",
+                "generation": "1",
+                "cut": "fixture-project-rel-v1",
+                "capabilities": {
+                  "view": true,
+                  "manage": false,
+                  "history": true,
+                  "provenance": true,
+                  "graph": true,
+                  "community": true,
+                  "status": true,
+                  "memory_create": false,
+                  "memory_edit": false,
+                  "memory_retire": false,
+                  "relation_edit": false,
+                  "community_rename": false
+                }
+              },
+              {
+                "owner_id": "fixture-alt-phy",
+                "owner_kind": "PHY",
+                "display_label": "Alternate Private PHY",
+                "generation": "1",
+                "cut": "fixture-alt-phy-v1",
+                "capabilities": {
+                  "view": true,
+                  "manage": false,
+                  "history": true,
+                  "provenance": true,
+                  "graph": true,
+                  "community": true,
+                  "status": true,
+                  "memory_create": false,
+                  "memory_edit": false,
+                  "memory_retire": false,
+                  "relation_edit": false,
+                  "community_rename": false
+                }
+              }
+            ],
+            "next_cursor": null,
+            "truncated": false
+          },
+          "active_session_id": "fixture-session",
+          "session_owner_id": "fixture-rel",
+          "active_phy_id": "fixture-alt-phy"
+        }
+      },
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-owner-sessions-none-fixture-session",
+        "operation": "ui.owner_sessions",
+        "status": "ok",
+        "binding": null,
+        "result": {
+          "owners": {
+            "items": [
+              {
+                "owner_id": "fixture-rel",
+                "owner_kind": "REL",
+                "display_label": "General REL",
+                "generation": "1",
+                "cut": "fixture-rel-v1",
+                "capabilities": {
+                  "view": true,
+                  "manage": false,
+                  "history": true,
+                  "provenance": true,
+                  "graph": true,
+                  "community": true,
+                  "status": true,
+                  "memory_create": false,
+                  "memory_edit": false,
+                  "memory_retire": false,
+                  "relation_edit": false,
+                  "community_rename": false
+                }
+              },
+              {
+                "owner_id": "fixture-project-rel",
+                "owner_kind": "REL",
+                "display_label": "Project REL",
+                "generation": "1",
+                "cut": "fixture-project-rel-v1",
+                "capabilities": {
+                  "view": true,
+                  "manage": false,
+                  "history": true,
+                  "provenance": true,
+                  "graph": true,
+                  "community": true,
+                  "status": true,
+                  "memory_create": false,
+                  "memory_edit": false,
+                  "memory_retire": false,
+                  "relation_edit": false,
+                  "community_rename": false
+                }
+              }
+            ],
+            "next_cursor": null,
+            "truncated": false
+          },
+          "active_session_id": "fixture-session",
+          "session_owner_id": "fixture-rel",
+          "active_phy_id": null
+        }
+      }
+    ],
+    "fixture-project-session": [
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-owner-sessions-default-fixture-project-session",
+        "operation": "ui.owner_sessions",
+        "status": "ok",
+        "binding": null,
+        "result": {
+          "owners": {
+            "items": [
+              {
+                "owner_id": "fixture-rel",
+                "owner_kind": "REL",
+                "display_label": "General REL",
+                "generation": "1",
+                "cut": "fixture-rel-v1",
+                "capabilities": {
+                  "view": true,
+                  "manage": false,
+                  "history": true,
+                  "provenance": true,
+                  "graph": true,
+                  "community": true,
+                  "status": true,
+                  "memory_create": false,
+                  "memory_edit": false,
+                  "memory_retire": false,
+                  "relation_edit": false,
+                  "community_rename": false
+                }
+              },
+              {
+                "owner_id": "fixture-project-rel",
+                "owner_kind": "REL",
+                "display_label": "Project REL",
+                "generation": "1",
+                "cut": "fixture-project-rel-v1",
+                "capabilities": {
+                  "view": true,
+                  "manage": false,
+                  "history": true,
+                  "provenance": true,
+                  "graph": true,
+                  "community": true,
+                  "status": true,
+                  "memory_create": false,
+                  "memory_edit": false,
+                  "memory_retire": false,
+                  "relation_edit": false,
+                  "community_rename": false
+                }
+              },
+              {
+                "owner_id": "fixture-phy",
+                "owner_kind": "PHY",
+                "display_label": "Private PHY",
+                "generation": "1",
+                "cut": "fixture-phy-v1",
+                "capabilities": {
+                  "view": true,
+                  "manage": false,
+                  "history": true,
+                  "provenance": true,
+                  "graph": true,
+                  "community": true,
+                  "status": true,
+                  "memory_create": false,
+                  "memory_edit": false,
+                  "memory_retire": false,
+                  "relation_edit": false,
+                  "community_rename": false
+                }
+              }
+            ],
+            "next_cursor": null,
+            "truncated": false
+          },
+          "active_session_id": "fixture-project-session",
+          "session_owner_id": "fixture-project-rel",
+          "active_phy_id": "fixture-phy"
+        }
+      },
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-owner-sessions-alt-fixture-project-session",
+        "operation": "ui.owner_sessions",
+        "status": "ok",
+        "binding": null,
+        "result": {
+          "owners": {
+            "items": [
+              {
+                "owner_id": "fixture-rel",
+                "owner_kind": "REL",
+                "display_label": "General REL",
+                "generation": "1",
+                "cut": "fixture-rel-v1",
+                "capabilities": {
+                  "view": true,
+                  "manage": false,
+                  "history": true,
+                  "provenance": true,
+                  "graph": true,
+                  "community": true,
+                  "status": true,
+                  "memory_create": false,
+                  "memory_edit": false,
+                  "memory_retire": false,
+                  "relation_edit": false,
+                  "community_rename": false
+                }
+              },
+              {
+                "owner_id": "fixture-project-rel",
+                "owner_kind": "REL",
+                "display_label": "Project REL",
+                "generation": "1",
+                "cut": "fixture-project-rel-v1",
+                "capabilities": {
+                  "view": true,
+                  "manage": false,
+                  "history": true,
+                  "provenance": true,
+                  "graph": true,
+                  "community": true,
+                  "status": true,
+                  "memory_create": false,
+                  "memory_edit": false,
+                  "memory_retire": false,
+                  "relation_edit": false,
+                  "community_rename": false
+                }
+              },
+              {
+                "owner_id": "fixture-alt-phy",
+                "owner_kind": "PHY",
+                "display_label": "Alternate Private PHY",
+                "generation": "1",
+                "cut": "fixture-alt-phy-v1",
+                "capabilities": {
+                  "view": true,
+                  "manage": false,
+                  "history": true,
+                  "provenance": true,
+                  "graph": true,
+                  "community": true,
+                  "status": true,
+                  "memory_create": false,
+                  "memory_edit": false,
+                  "memory_retire": false,
+                  "relation_edit": false,
+                  "community_rename": false
+                }
+              }
+            ],
+            "next_cursor": null,
+            "truncated": false
+          },
+          "active_session_id": "fixture-project-session",
+          "session_owner_id": "fixture-project-rel",
+          "active_phy_id": "fixture-alt-phy"
+        }
+      },
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-owner-sessions-none-fixture-project-session",
+        "operation": "ui.owner_sessions",
+        "status": "ok",
+        "binding": null,
+        "result": {
+          "owners": {
+            "items": [
+              {
+                "owner_id": "fixture-rel",
+                "owner_kind": "REL",
+                "display_label": "General REL",
+                "generation": "1",
+                "cut": "fixture-rel-v1",
+                "capabilities": {
+                  "view": true,
+                  "manage": false,
+                  "history": true,
+                  "provenance": true,
+                  "graph": true,
+                  "community": true,
+                  "status": true,
+                  "memory_create": false,
+                  "memory_edit": false,
+                  "memory_retire": false,
+                  "relation_edit": false,
+                  "community_rename": false
+                }
+              },
+              {
+                "owner_id": "fixture-project-rel",
+                "owner_kind": "REL",
+                "display_label": "Project REL",
+                "generation": "1",
+                "cut": "fixture-project-rel-v1",
+                "capabilities": {
+                  "view": true,
+                  "manage": false,
+                  "history": true,
+                  "provenance": true,
+                  "graph": true,
+                  "community": true,
+                  "status": true,
+                  "memory_create": false,
+                  "memory_edit": false,
+                  "memory_retire": false,
+                  "relation_edit": false,
+                  "community_rename": false
+                }
+              }
+            ],
+            "next_cursor": null,
+            "truncated": false
+          },
+          "active_session_id": "fixture-project-session",
+          "session_owner_id": "fixture-project-rel",
+          "active_phy_id": null
+        }
+      }
+    ]
   },
   "memory_lists": {
     "fixture-rel": {
       "protocol_version": 1,
-      "request_id": "hu01-list-rel",
+      "request_id": "hu02-list-fixture-rel",
       "operation": "ui.memory_list",
       "status": "ok",
       "binding": {
@@ -98,7 +467,7 @@
           "history": true,
           "provenance": true,
           "graph": true,
-          "community": false,
+          "community": true,
           "status": true,
           "memory_create": false,
           "memory_edit": false,
@@ -111,10 +480,62 @@
         "items": [
           {
             "memory_id": "fixture-rel-memory",
-            "revision": "1",
-            "body_id": "fixture-rel-body-1",
+            "revision": "2",
+            "body_id": "fixture-rel-memory-body-2",
             "title": "Synthetic session memory",
-            "excerpt": "A short synthetic example owned by the selected REL.",
+            "excerpt": "A deterministic fixture memory.",
+            "category": "fact",
+            "memory_type": "semantic",
+            "lifecycle": "active",
+            "canonical_status": "canonical",
+            "freshness": null,
+            "community_id": "fixture-community"
+          },
+          {
+            "memory_id": "fixture-rel-memory-2",
+            "revision": "1",
+            "body_id": "fixture-rel-memory-2-body-1",
+            "title": "Synthetic related memory 2",
+            "excerpt": "A deterministic fixture memory.",
+            "category": "fact",
+            "memory_type": "semantic",
+            "lifecycle": "active",
+            "canonical_status": "canonical",
+            "freshness": null,
+            "community_id": "fixture-community"
+          },
+          {
+            "memory_id": "fixture-rel-memory-3",
+            "revision": "1",
+            "body_id": "fixture-rel-memory-3-body-1",
+            "title": "Synthetic related memory 3",
+            "excerpt": "A deterministic fixture memory.",
+            "category": "fact",
+            "memory_type": "semantic",
+            "lifecycle": "active",
+            "canonical_status": "canonical",
+            "freshness": null,
+            "community_id": "fixture-community"
+          },
+          {
+            "memory_id": "fixture-rel-memory-4",
+            "revision": "1",
+            "body_id": "fixture-rel-memory-4-body-1",
+            "title": "Synthetic related memory 4",
+            "excerpt": "A deterministic fixture memory.",
+            "category": "fact",
+            "memory_type": "semantic",
+            "lifecycle": "active",
+            "canonical_status": "canonical",
+            "freshness": null,
+            "community_id": "fixture-community"
+          },
+          {
+            "memory_id": "fixture-rel-memory-5",
+            "revision": "1",
+            "body_id": "fixture-rel-memory-5-body-1",
+            "title": "Synthetic related memory 5",
+            "excerpt": "A deterministic fixture memory.",
             "category": "fact",
             "memory_type": "semantic",
             "lifecycle": "active",
@@ -129,7 +550,7 @@
     },
     "fixture-project-rel": {
       "protocol_version": 1,
-      "request_id": "hu01-list-rel-project",
+      "request_id": "hu02-list-fixture-project-rel",
       "operation": "ui.memory_list",
       "status": "ok",
       "binding": {
@@ -144,7 +565,7 @@
           "history": true,
           "provenance": true,
           "graph": true,
-          "community": false,
+          "community": true,
           "status": true,
           "memory_create": false,
           "memory_edit": false,
@@ -175,7 +596,7 @@
     },
     "fixture-phy": {
       "protocol_version": 1,
-      "request_id": "hu01-list-phy",
+      "request_id": "hu02-list-fixture-phy",
       "operation": "ui.memory_list",
       "status": "ok",
       "binding": {
@@ -190,7 +611,7 @@
           "history": true,
           "provenance": true,
           "graph": true,
-          "community": false,
+          "community": true,
           "status": true,
           "memory_create": false,
           "memory_edit": false,
@@ -218,12 +639,44 @@
         "next_cursor": null,
         "truncated": false
       }
+    },
+    "fixture-alt-phy": {
+      "protocol_version": 1,
+      "request_id": "hu02-list-fixture-alt-phy",
+      "operation": "ui.memory_list",
+      "status": "ok",
+      "binding": {
+        "owner_id": "fixture-alt-phy",
+        "owner_kind": "PHY",
+        "display_label": "Alternate Private PHY",
+        "generation": "1",
+        "cut": "fixture-alt-phy-v1",
+        "capabilities": {
+          "view": true,
+          "manage": false,
+          "history": true,
+          "provenance": true,
+          "graph": true,
+          "community": true,
+          "status": true,
+          "memory_create": false,
+          "memory_edit": false,
+          "memory_retire": false,
+          "relation_edit": false,
+          "community_rename": false
+        }
+      },
+      "result": {
+        "items": [],
+        "next_cursor": null,
+        "truncated": false
+      }
     }
   },
   "graph_pages": {
     "fixture-rel": {
       "protocol_version": 1,
-      "request_id": "hu01-graph-rel",
+      "request_id": "hu02-graph-fixture-rel",
       "operation": "ui.graph_page",
       "status": "ok",
       "binding": {
@@ -238,7 +691,7 @@
           "history": true,
           "provenance": true,
           "graph": true,
-          "community": false,
+          "community": true,
           "status": true,
           "memory_create": false,
           "memory_edit": false,
@@ -251,24 +704,135 @@
         "routing_state": "available",
         "nodes": [
           {
-            "node_id": "fixture-rel-node",
+            "node_id": "fixture-rel-node-1",
             "kind": "memory",
             "memory_id": "fixture-rel-memory",
             "community_id": null,
             "label": "Synthetic session memory",
             "origin": "source",
+            "revision": "2",
+            "cut": "fixture-rel-v1"
+          },
+          {
+            "node_id": "fixture-rel-node-2",
+            "kind": "memory",
+            "memory_id": "fixture-rel-memory-2",
+            "community_id": null,
+            "label": "Synthetic related memory 2",
+            "origin": "source",
+            "revision": "1",
+            "cut": "fixture-rel-v1"
+          },
+          {
+            "node_id": "fixture-rel-node-3",
+            "kind": "memory",
+            "memory_id": "fixture-rel-memory-3",
+            "community_id": null,
+            "label": "Synthetic related memory 3",
+            "origin": "source",
+            "revision": "1",
+            "cut": "fixture-rel-v1"
+          },
+          {
+            "node_id": "fixture-rel-node-4",
+            "kind": "memory",
+            "memory_id": "fixture-rel-memory-4",
+            "community_id": null,
+            "label": "Synthetic related memory 4",
+            "origin": "source",
+            "revision": "1",
+            "cut": "fixture-rel-v1"
+          },
+          {
+            "node_id": "fixture-rel-node-5",
+            "kind": "memory",
+            "memory_id": "fixture-rel-memory-5",
+            "community_id": null,
+            "label": "Synthetic related memory 5",
+            "origin": "source",
+            "revision": "1",
+            "cut": "fixture-rel-v1"
+          },
+          {
+            "node_id": "fixture-community-node",
+            "kind": "community",
+            "memory_id": null,
+            "community_id": "fixture-community",
+            "label": "Synthetic cluster",
+            "origin": "source",
+            "revision": "1",
+            "cut": "fixture-rel-v1"
+          },
+          {
+            "node_id": "fixture-community-neighbor",
+            "kind": "community",
+            "memory_id": null,
+            "community_id": "fixture-community-related",
+            "label": "Related synthetic cluster",
+            "origin": "source",
             "revision": "1",
             "cut": "fixture-rel-v1"
           }
         ],
-        "edges": [],
+        "edges": [
+          {
+            "edge_id": "fixture-rel-edge-1",
+            "kind": "association",
+            "origin": "source",
+            "source_id": "fixture-rel-node-1",
+            "target_id": "fixture-rel-node-2",
+            "revision": "1",
+            "cut": "fixture-rel-v1",
+            "active": true
+          },
+          {
+            "edge_id": "fixture-rel-edge-2",
+            "kind": "association",
+            "origin": "source",
+            "source_id": "fixture-rel-node-1",
+            "target_id": "fixture-rel-node-3",
+            "revision": "1",
+            "cut": "fixture-rel-v1",
+            "active": true
+          },
+          {
+            "edge_id": "fixture-rel-edge-3",
+            "kind": "association",
+            "origin": "source",
+            "source_id": "fixture-rel-node-1",
+            "target_id": "fixture-rel-node-4",
+            "revision": "1",
+            "cut": "fixture-rel-v1",
+            "active": true
+          },
+          {
+            "edge_id": "fixture-rel-edge-4",
+            "kind": "association",
+            "origin": "source",
+            "source_id": "fixture-rel-node-1",
+            "target_id": "fixture-rel-node-5",
+            "revision": "1",
+            "cut": "fixture-rel-v1",
+            "active": true
+          },
+          {
+            "edge_id": "fixture-rel-edge-5",
+            "kind": "association",
+            "origin": "source",
+            "source_id": "fixture-rel-node-1",
+            "target_id": "fixture-community-node",
+            "revision": "1",
+            "cut": "fixture-rel-v1",
+            "active": true
+          }
+        ],
         "next_cursor": null,
         "truncated": false
       }
     },
     "fixture-project-rel": {
       "protocol_version": 1,
-      "request_id": "hu01-graph-rel-project",
+      "request_id": "hu02-graph-fixture-project-rel",
       "operation": "ui.graph_page",
       "status": "ok",
       "binding": {
@@ -283,7 +847,7 @@
           "history": true,
           "provenance": true,
           "graph": true,
-          "community": false,
+          "community": true,
           "status": true,
           "memory_create": false,
           "memory_edit": false,
@@ -313,7 +877,7 @@
     },
     "fixture-phy": {
       "protocol_version": 1,
-      "request_id": "hu01-graph-phy",
+      "request_id": "hu02-graph-fixture-phy",
       "operation": "ui.graph_page",
       "status": "ok",
       "binding": {
@@ -328,7 +892,7 @@
           "history": true,
           "provenance": true,
           "graph": true,
-          "community": false,
+          "community": true,
           "status": true,
           "memory_create": false,
           "memory_edit": false,
@@ -355,336 +919,966 @@
         "next_cursor": null,
         "truncated": false
       }
+    },
+    "fixture-alt-phy": {
+      "protocol_version": 1,
+      "request_id": "hu02-graph-fixture-alt-phy",
+      "operation": "ui.graph_page",
+      "status": "ok",
+      "binding": {
+        "owner_id": "fixture-alt-phy",
+        "owner_kind": "PHY",
+        "display_label": "Alternate Private PHY",
+        "generation": "1",
+        "cut": "fixture-alt-phy-v1",
+        "capabilities": {
+          "view": true,
+          "manage": false,
+          "history": true,
+          "provenance": true,
+          "graph": true,
+          "community": true,
+          "status": true,
+          "memory_create": false,
+          "memory_edit": false,
+          "memory_retire": false,
+          "relation_edit": false,
+          "community_rename": false
+        }
+      },
+      "result": {
+        "routing_state": "available",
+        "nodes": [],
+        "edges": [],
+        "next_cursor": null,
+        "truncated": false
+      }
     }
   },
   "memory_details": {
-    "fixture-rel": {
-      "protocol_version": 1,
-      "request_id": "hu01-detail-rel",
-      "operation": "ui.memory_detail",
-      "status": "ok",
-      "binding": {
-        "owner_id": "fixture-rel",
-        "owner_kind": "REL",
-        "display_label": "General REL",
-        "generation": "1",
-        "cut": "fixture-rel-v1",
-        "capabilities": {
-          "view": true,
-          "manage": false,
-          "history": true,
-          "provenance": true,
-          "graph": true,
-          "community": false,
-          "status": true,
-          "memory_create": false,
-          "memory_edit": false,
-          "memory_retire": false,
-          "relation_edit": false,
-          "community_rename": false
-        }
-      },
-      "result": {
-        "memory": {
-          "memory_id": "fixture-rel-memory",
-          "revision": "1",
-          "body_id": "fixture-rel-body-1",
-          "title": "Synthetic session memory",
-          "excerpt": "A short synthetic example owned by the selected REL.",
-          "category": "fact",
-          "memory_type": "semantic",
-          "lifecycle": "active",
-          "canonical_status": "canonical",
-          "freshness": null,
-          "community_id": null
+    "fixture-rel": [
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-detail-fixture-rel-memory",
+        "operation": "ui.memory_detail",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
         },
-        "body": {
-          "revision": "1",
-          "body_id": "fixture-rel-body-1",
-          "availability": "available",
-          "content": "One synthetic session-memory line.\nAnother safe fixture line."
-        },
-        "retained_revisions": [
-          "1"
-        ],
-        "superseded_by": null,
-        "tombstone": false,
-        "provenance": [
-          {
-            "kind": "hermes_snapshot",
-            "label": "Hermes source / copied snapshot",
-            "profile_namespace": "fixture-profile",
-            "session_id": "fixture-session",
-            "message_uid": "fixture-message",
-            "branch_id": null,
-            "source_revision": null,
-            "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "range": {
-              "start_byte": "0",
-              "end_byte": "17",
-              "text": "safe demo excerpt"
-            }
+        "result": {
+          "memory": {
+            "memory_id": "fixture-rel-memory",
+            "revision": "2",
+            "body_id": "fixture-rel-memory-body-2",
+            "title": "Synthetic session memory",
+            "excerpt": "A deterministic fixture memory.",
+            "category": "fact",
+            "memory_type": "semantic",
+            "lifecycle": "active",
+            "canonical_status": "canonical",
+            "freshness": null,
+            "community_id": "fixture-community"
           },
-          {
-            "kind": "source_unavailable",
-            "reason": "stale"
-          }
-        ]
-      }
-    },
-    "fixture-project-rel": {
-      "protocol_version": 1,
-      "request_id": "hu01-detail-rel-project",
-      "operation": "ui.memory_detail",
-      "status": "ok",
-      "binding": {
-        "owner_id": "fixture-project-rel",
-        "owner_kind": "REL",
-        "display_label": "Project REL",
-        "generation": "1",
-        "cut": "fixture-project-rel-v1",
-        "capabilities": {
-          "view": true,
-          "manage": false,
-          "history": true,
-          "provenance": true,
-          "graph": true,
-          "community": false,
-          "status": true,
-          "memory_create": false,
-          "memory_edit": false,
-          "memory_retire": false,
-          "relation_edit": false,
-          "community_rename": false
+          "body": {
+            "revision": "2",
+            "body_id": "fixture-rel-memory-body-2",
+            "availability": "available",
+            "content": "Safe deterministic content for fixture-rel-memory."
+          },
+          "retained_revisions": [
+            "1",
+            "2"
+          ],
+          "superseded_by": null,
+          "tombstone": false,
+          "provenance": [
+            {
+              "kind": "hermes_snapshot",
+              "label": "Hermes source / copied snapshot",
+              "profile_namespace": "fixture-profile",
+              "session_id": "fixture-session",
+              "message_uid": "fixture-message-fixture-rel-memory",
+              "branch_id": null,
+              "source_revision": null,
+              "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "range": {
+                "start_byte": "0",
+                "end_byte": "12",
+                "text": "fixture text"
+              }
+            }
+          ]
         }
       },
-      "result": {
-        "memory": {
-          "memory_id": "fixture-project-rel-memory",
-          "revision": "1",
-          "body_id": "fixture-project-rel-body-1",
-          "title": "Synthetic project memory",
-          "excerpt": "A Memory whose copied Hermes source has been tombstoned.",
-          "category": "fact",
-          "memory_type": "semantic",
-          "lifecycle": "active",
-          "canonical_status": "canonical",
-          "freshness": null,
-          "community_id": null
-        },
-        "body": {
-          "revision": "1",
-          "body_id": "fixture-project-rel-body-1",
-          "availability": "available",
-          "content": "This synthetic Memory remains available after its source conversation was removed. Example text: <img src=x onerror=alert(1)>."
-        },
-        "retained_revisions": [
-          "1"
-        ],
-        "superseded_by": null,
-        "tombstone": false,
-        "provenance": [
-          {
-            "kind": "source_unavailable",
-            "reason": "deleted"
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-detail-fixture-rel-memory-2",
+        "operation": "ui.memory_detail",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
           }
-        ]
-      }
-    },
-    "fixture-phy": {
-      "protocol_version": 1,
-      "request_id": "hu01-detail-phy",
-      "operation": "ui.memory_detail",
-      "status": "ok",
-      "binding": {
-        "owner_id": "fixture-phy",
-        "owner_kind": "PHY",
-        "display_label": "Private PHY",
-        "generation": "1",
-        "cut": "fixture-phy-v1",
-        "capabilities": {
-          "view": true,
-          "manage": false,
-          "history": true,
-          "provenance": true,
-          "graph": true,
-          "community": false,
-          "status": true,
-          "memory_create": false,
-          "memory_edit": false,
-          "memory_retire": false,
-          "relation_edit": false,
-          "community_rename": false
+        },
+        "result": {
+          "memory": {
+            "memory_id": "fixture-rel-memory-2",
+            "revision": "1",
+            "body_id": "fixture-rel-memory-2-body-1",
+            "title": "Synthetic related memory 2",
+            "excerpt": "A deterministic fixture memory.",
+            "category": "fact",
+            "memory_type": "semantic",
+            "lifecycle": "active",
+            "canonical_status": "canonical",
+            "freshness": null,
+            "community_id": "fixture-community"
+          },
+          "body": {
+            "revision": "1",
+            "body_id": "fixture-rel-memory-2-body-1",
+            "availability": "available",
+            "content": "Safe deterministic content for fixture-rel-memory-2."
+          },
+          "retained_revisions": [
+            "1"
+          ],
+          "superseded_by": null,
+          "tombstone": false,
+          "provenance": [
+            {
+              "kind": "hermes_snapshot",
+              "label": "Hermes source / copied snapshot",
+              "profile_namespace": "fixture-profile",
+              "session_id": "fixture-session",
+              "message_uid": "fixture-message-fixture-rel-memory-2",
+              "branch_id": null,
+              "source_revision": null,
+              "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "range": {
+                "start_byte": "0",
+                "end_byte": "12",
+                "text": "fixture text"
+              }
+            }
+          ]
         }
       },
-      "result": {
-        "memory": {
-          "memory_id": "fixture-phy-memory",
-          "revision": "1",
-          "body_id": "fixture-phy-body-1",
-          "title": "Synthetic private memory",
-          "excerpt": "A private-owner fixture that stays within the selected PHY.",
-          "category": "preference",
-          "memory_type": "semantic",
-          "lifecycle": "active",
-          "canonical_status": "canonical",
-          "freshness": null,
-          "community_id": null
-        },
-        "body": {
-          "revision": "1",
-          "body_id": "fixture-phy-body-1",
-          "availability": "available",
-          "content": "This is a synthetic owner-scoped example."
-        },
-        "retained_revisions": [
-          "1"
-        ],
-        "superseded_by": null,
-        "tombstone": false,
-        "provenance": [
-          {
-            "kind": "user_origin",
-            "principal_id": "fixture-principal",
-            "created_at_ms": "1794000000000"
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-detail-fixture-rel-memory-3",
+        "operation": "ui.memory_detail",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
           }
-        ]
+        },
+        "result": {
+          "memory": {
+            "memory_id": "fixture-rel-memory-3",
+            "revision": "1",
+            "body_id": "fixture-rel-memory-3-body-1",
+            "title": "Synthetic related memory 3",
+            "excerpt": "A deterministic fixture memory.",
+            "category": "fact",
+            "memory_type": "semantic",
+            "lifecycle": "active",
+            "canonical_status": "canonical",
+            "freshness": null,
+            "community_id": "fixture-community"
+          },
+          "body": {
+            "revision": "1",
+            "body_id": "fixture-rel-memory-3-body-1",
+            "availability": "available",
+            "content": "Safe deterministic content for fixture-rel-memory-3."
+          },
+          "retained_revisions": [
+            "1"
+          ],
+          "superseded_by": null,
+          "tombstone": false,
+          "provenance": [
+            {
+              "kind": "hermes_snapshot",
+              "label": "Hermes source / copied snapshot",
+              "profile_namespace": "fixture-profile",
+              "session_id": "fixture-session",
+              "message_uid": "fixture-message-fixture-rel-memory-3",
+              "branch_id": null,
+              "source_revision": null,
+              "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "range": {
+                "start_byte": "0",
+                "end_byte": "12",
+                "text": "fixture text"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-detail-fixture-rel-memory-4",
+        "operation": "ui.memory_detail",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory": {
+            "memory_id": "fixture-rel-memory-4",
+            "revision": "1",
+            "body_id": "fixture-rel-memory-4-body-1",
+            "title": "Synthetic related memory 4",
+            "excerpt": "A deterministic fixture memory.",
+            "category": "fact",
+            "memory_type": "semantic",
+            "lifecycle": "active",
+            "canonical_status": "canonical",
+            "freshness": null,
+            "community_id": "fixture-community"
+          },
+          "body": {
+            "revision": "1",
+            "body_id": "fixture-rel-memory-4-body-1",
+            "availability": "available",
+            "content": "Safe deterministic content for fixture-rel-memory-4."
+          },
+          "retained_revisions": [
+            "1"
+          ],
+          "superseded_by": null,
+          "tombstone": false,
+          "provenance": [
+            {
+              "kind": "hermes_snapshot",
+              "label": "Hermes source / copied snapshot",
+              "profile_namespace": "fixture-profile",
+              "session_id": "fixture-session",
+              "message_uid": "fixture-message-fixture-rel-memory-4",
+              "branch_id": null,
+              "source_revision": null,
+              "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "range": {
+                "start_byte": "0",
+                "end_byte": "12",
+                "text": "fixture text"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-detail-fixture-rel-memory-5",
+        "operation": "ui.memory_detail",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory": {
+            "memory_id": "fixture-rel-memory-5",
+            "revision": "1",
+            "body_id": "fixture-rel-memory-5-body-1",
+            "title": "Synthetic related memory 5",
+            "excerpt": "A deterministic fixture memory.",
+            "category": "fact",
+            "memory_type": "semantic",
+            "lifecycle": "active",
+            "canonical_status": "canonical",
+            "freshness": null,
+            "community_id": null
+          },
+          "body": {
+            "revision": "1",
+            "body_id": "fixture-rel-memory-5-body-1",
+            "availability": "available",
+            "content": "Safe deterministic content for fixture-rel-memory-5."
+          },
+          "retained_revisions": [
+            "1"
+          ],
+          "superseded_by": null,
+          "tombstone": false,
+          "provenance": [
+            {
+              "kind": "hermes_snapshot",
+              "label": "Hermes source / copied snapshot",
+              "profile_namespace": "fixture-profile",
+              "session_id": "fixture-session",
+              "message_uid": "fixture-message-fixture-rel-memory-5",
+              "branch_id": null,
+              "source_revision": null,
+              "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "range": {
+                "start_byte": "0",
+                "end_byte": "12",
+                "text": "fixture text"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-detail-fixture-rel-memory-pruned",
+        "operation": "ui.memory_detail",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory": {
+            "memory_id": "fixture-rel-memory",
+            "revision": "1",
+            "body_id": "fixture-rel-memory-body-1",
+            "title": null,
+            "excerpt": "",
+            "category": "fact",
+            "memory_type": "semantic",
+            "lifecycle": "unavailable",
+            "canonical_status": "canonical",
+            "freshness": null,
+            "community_id": "fixture-community"
+          },
+          "body": {
+            "revision": "1",
+            "body_id": "fixture-rel-memory-body-1",
+            "availability": "pruned",
+            "content": null
+          },
+          "retained_revisions": [
+            "1",
+            "2"
+          ],
+          "superseded_by": null,
+          "tombstone": false,
+          "provenance": [
+            {
+              "kind": "source_unavailable",
+              "reason": "pruned"
+            }
+          ]
+        }
       }
-    }
+    ],
+    "fixture-project-rel": [
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-detail-fixture-project-rel-memory",
+        "operation": "ui.memory_detail",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-project-rel",
+          "owner_kind": "REL",
+          "display_label": "Project REL",
+          "generation": "1",
+          "cut": "fixture-project-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory": {
+            "memory_id": "fixture-project-rel-memory",
+            "revision": "1",
+            "body_id": "fixture-project-rel-body-1",
+            "title": "Synthetic project memory",
+            "excerpt": "A Memory whose copied Hermes source has been tombstoned.",
+            "category": "fact",
+            "memory_type": "semantic",
+            "lifecycle": "active",
+            "canonical_status": "canonical",
+            "freshness": null,
+            "community_id": null
+          },
+          "body": {
+            "revision": "1",
+            "body_id": "fixture-project-rel-body-1",
+            "availability": "available",
+            "content": "This synthetic Memory remains available after its source conversation was removed. Example text: <img src=x onerror=alert(1)>."
+          },
+          "retained_revisions": [
+            "1"
+          ],
+          "superseded_by": null,
+          "tombstone": false,
+          "provenance": [
+            {
+              "kind": "source_unavailable",
+              "reason": "deleted"
+            }
+          ]
+        }
+      }
+    ],
+    "fixture-phy": [
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-detail-fixture-phy-memory",
+        "operation": "ui.memory_detail",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-phy",
+          "owner_kind": "PHY",
+          "display_label": "Private PHY",
+          "generation": "1",
+          "cut": "fixture-phy-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory": {
+            "memory_id": "fixture-phy-memory",
+            "revision": "1",
+            "body_id": "fixture-phy-body-1",
+            "title": "Synthetic private memory",
+            "excerpt": "A private-owner fixture that stays within the selected PHY.",
+            "category": "preference",
+            "memory_type": "semantic",
+            "lifecycle": "active",
+            "canonical_status": "canonical",
+            "freshness": null,
+            "community_id": null
+          },
+          "body": {
+            "revision": "1",
+            "body_id": "fixture-phy-body-1",
+            "availability": "available",
+            "content": "Safe deterministic content for fixture-phy-memory."
+          },
+          "retained_revisions": [
+            "1"
+          ],
+          "superseded_by": null,
+          "tombstone": false,
+          "provenance": [
+            {
+              "kind": "hermes_snapshot",
+              "label": "Hermes source / copied snapshot",
+              "profile_namespace": "fixture-profile",
+              "session_id": "fixture-session",
+              "message_uid": "fixture-message-fixture-phy-memory",
+              "branch_id": null,
+              "source_revision": null,
+              "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "range": {
+                "start_byte": "0",
+                "end_byte": "12",
+                "text": "fixture text"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "fixture-alt-phy": []
   },
   "provenance": {
-    "fixture-rel": {
-      "protocol_version": 1,
-      "request_id": "hu01-provenance-rel",
-      "operation": "ui.provenance",
-      "status": "ok",
-      "binding": {
-        "owner_id": "fixture-rel",
-        "owner_kind": "REL",
-        "display_label": "General REL",
-        "generation": "1",
-        "cut": "fixture-rel-v1",
-        "capabilities": {
-          "view": true,
-          "manage": false,
-          "history": true,
-          "provenance": true,
-          "graph": true,
-          "community": false,
-          "status": true,
-          "memory_create": false,
-          "memory_edit": false,
-          "memory_retire": false,
-          "relation_edit": false,
-          "community_rename": false
-        }
-      },
-      "result": {
-        "memory_id": "fixture-rel-memory",
-        "revision": "1",
-        "sources": [
-          {
-            "kind": "hermes_snapshot",
-            "label": "Hermes source / copied snapshot",
-            "profile_namespace": "fixture-profile",
-            "session_id": "fixture-session",
-            "message_uid": "fixture-message",
-            "branch_id": null,
-            "source_revision": null,
-            "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "range": {
-              "start_byte": "0",
-              "end_byte": "17",
-              "text": "safe demo excerpt"
+    "fixture-rel": [
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-provenance-fixture-rel-memory",
+        "operation": "ui.provenance",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory_id": "fixture-rel-memory",
+          "revision": "2",
+          "sources": [
+            {
+              "kind": "hermes_snapshot",
+              "label": "Hermes source / copied snapshot",
+              "profile_namespace": "fixture-profile",
+              "session_id": "fixture-session",
+              "message_uid": "fixture-message-fixture-rel-memory",
+              "branch_id": null,
+              "source_revision": null,
+              "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "range": {
+                "start_byte": "0",
+                "end_byte": "12",
+                "text": "fixture text"
+              }
             }
-          },
-          {
-            "kind": "source_unavailable",
-            "reason": "stale"
-          }
-        ]
-      }
-    },
-    "fixture-project-rel": {
-      "protocol_version": 1,
-      "request_id": "hu01-provenance-rel-project",
-      "operation": "ui.provenance",
-      "status": "ok",
-      "binding": {
-        "owner_id": "fixture-project-rel",
-        "owner_kind": "REL",
-        "display_label": "Project REL",
-        "generation": "1",
-        "cut": "fixture-project-rel-v1",
-        "capabilities": {
-          "view": true,
-          "manage": false,
-          "history": true,
-          "provenance": true,
-          "graph": true,
-          "community": false,
-          "status": true,
-          "memory_create": false,
-          "memory_edit": false,
-          "memory_retire": false,
-          "relation_edit": false,
-          "community_rename": false
+          ]
         }
       },
-      "result": {
-        "memory_id": "fixture-project-rel-memory",
-        "revision": "1",
-        "sources": [
-          {
-            "kind": "source_unavailable",
-            "reason": "deleted"
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-provenance-fixture-rel-memory-2",
+        "operation": "ui.provenance",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
           }
-        ]
-      }
-    },
-    "fixture-phy": {
-      "protocol_version": 1,
-      "request_id": "hu01-provenance-phy",
-      "operation": "ui.provenance",
-      "status": "ok",
-      "binding": {
-        "owner_id": "fixture-phy",
-        "owner_kind": "PHY",
-        "display_label": "Private PHY",
-        "generation": "1",
-        "cut": "fixture-phy-v1",
-        "capabilities": {
-          "view": true,
-          "manage": false,
-          "history": true,
-          "provenance": true,
-          "graph": true,
-          "community": false,
-          "status": true,
-          "memory_create": false,
-          "memory_edit": false,
-          "memory_retire": false,
-          "relation_edit": false,
-          "community_rename": false
+        },
+        "result": {
+          "memory_id": "fixture-rel-memory-2",
+          "revision": "1",
+          "sources": [
+            {
+              "kind": "hermes_snapshot",
+              "label": "Hermes source / copied snapshot",
+              "profile_namespace": "fixture-profile",
+              "session_id": "fixture-session",
+              "message_uid": "fixture-message-fixture-rel-memory-2",
+              "branch_id": null,
+              "source_revision": null,
+              "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "range": {
+                "start_byte": "0",
+                "end_byte": "12",
+                "text": "fixture text"
+              }
+            }
+          ]
         }
       },
-      "result": {
-        "memory_id": "fixture-phy-memory",
-        "revision": "1",
-        "sources": [
-          {
-            "kind": "user_origin",
-            "principal_id": "fixture-principal",
-            "created_at_ms": "1794000000000"
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-provenance-fixture-rel-memory-3",
+        "operation": "ui.provenance",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
           }
-        ]
+        },
+        "result": {
+          "memory_id": "fixture-rel-memory-3",
+          "revision": "1",
+          "sources": [
+            {
+              "kind": "hermes_snapshot",
+              "label": "Hermes source / copied snapshot",
+              "profile_namespace": "fixture-profile",
+              "session_id": "fixture-session",
+              "message_uid": "fixture-message-fixture-rel-memory-3",
+              "branch_id": null,
+              "source_revision": null,
+              "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "range": {
+                "start_byte": "0",
+                "end_byte": "12",
+                "text": "fixture text"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-provenance-fixture-rel-memory-4",
+        "operation": "ui.provenance",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory_id": "fixture-rel-memory-4",
+          "revision": "1",
+          "sources": [
+            {
+              "kind": "hermes_snapshot",
+              "label": "Hermes source / copied snapshot",
+              "profile_namespace": "fixture-profile",
+              "session_id": "fixture-session",
+              "message_uid": "fixture-message-fixture-rel-memory-4",
+              "branch_id": null,
+              "source_revision": null,
+              "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "range": {
+                "start_byte": "0",
+                "end_byte": "12",
+                "text": "fixture text"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-provenance-fixture-rel-memory-5",
+        "operation": "ui.provenance",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory_id": "fixture-rel-memory-5",
+          "revision": "1",
+          "sources": [
+            {
+              "kind": "hermes_snapshot",
+              "label": "Hermes source / copied snapshot",
+              "profile_namespace": "fixture-profile",
+              "session_id": "fixture-session",
+              "message_uid": "fixture-message-fixture-rel-memory-5",
+              "branch_id": null,
+              "source_revision": null,
+              "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "range": {
+                "start_byte": "0",
+                "end_byte": "12",
+                "text": "fixture text"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-provenance-fixture-rel-memory-pruned",
+        "operation": "ui.provenance",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory_id": "fixture-rel-memory",
+          "revision": "1",
+          "sources": [
+            {
+              "kind": "source_unavailable",
+              "reason": "pruned"
+            }
+          ]
+        }
       }
-    }
+    ],
+    "fixture-project-rel": [
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-provenance-fixture-project-rel-memory",
+        "operation": "ui.provenance",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-project-rel",
+          "owner_kind": "REL",
+          "display_label": "Project REL",
+          "generation": "1",
+          "cut": "fixture-project-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory_id": "fixture-project-rel-memory",
+          "revision": "1",
+          "sources": [
+            {
+              "kind": "source_unavailable",
+              "reason": "deleted"
+            }
+          ]
+        }
+      }
+    ],
+    "fixture-phy": [
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-provenance-fixture-phy-memory",
+        "operation": "ui.provenance",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-phy",
+          "owner_kind": "PHY",
+          "display_label": "Private PHY",
+          "generation": "1",
+          "cut": "fixture-phy-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory_id": "fixture-phy-memory",
+          "revision": "1",
+          "sources": [
+            {
+              "kind": "hermes_snapshot",
+              "label": "Hermes source / copied snapshot",
+              "profile_namespace": "fixture-profile",
+              "session_id": "fixture-session",
+              "message_uid": "fixture-message-fixture-phy-memory",
+              "branch_id": null,
+              "source_revision": null,
+              "content_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "range": {
+                "start_byte": "0",
+                "end_byte": "12",
+                "text": "fixture text"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "fixture-alt-phy": []
   },
   "operational_statuses": {
     "fixture-rel": {
       "protocol_version": 1,
-      "request_id": "hu01-status-rel",
+      "request_id": "hu02-status-fixture-rel",
       "operation": "ui.operational_status",
       "status": "ok",
       "binding": {
@@ -699,7 +1893,7 @@
           "history": true,
           "provenance": true,
           "graph": true,
-          "community": false,
+          "community": true,
           "status": true,
           "memory_create": false,
           "memory_edit": false,
@@ -735,7 +1929,7 @@
     },
     "fixture-project-rel": {
       "protocol_version": 1,
-      "request_id": "hu01-status-project-rel",
+      "request_id": "hu02-status-fixture-project-rel",
       "operation": "ui.operational_status",
       "status": "ok",
       "binding": {
@@ -750,7 +1944,7 @@
           "history": true,
           "provenance": true,
           "graph": true,
-          "community": false,
+          "community": true,
           "status": true,
           "memory_create": false,
           "memory_edit": false,
@@ -784,7 +1978,7 @@
     },
     "fixture-phy": {
       "protocol_version": 1,
-      "request_id": "hu01-status-phy",
+      "request_id": "hu02-status-fixture-phy",
       "operation": "ui.operational_status",
       "status": "ok",
       "binding": {
@@ -799,7 +1993,54 @@
           "history": true,
           "provenance": true,
           "graph": true,
-          "community": false,
+          "community": true,
+          "status": true,
+          "memory_create": false,
+          "memory_edit": false,
+          "memory_retire": false,
+          "relation_edit": false,
+          "community_rename": false
+        }
+      },
+      "result": {
+        "session_id": null,
+        "source_state": "none",
+        "accepted_source_cursor": null,
+        "last_completed_receipt": null,
+        "pending_count": "0",
+        "held_count": "0",
+        "error_count": "0",
+        "worker_state": "unavailable",
+        "latest_recall": {
+          "state": "candidate",
+          "search_id": "fixture-search-phy",
+          "delivery_id": null,
+          "candidate_ids": [
+            "fixture-phy-memory"
+          ],
+          "selected_ids": [],
+          "returned_ids": []
+        }
+      }
+    },
+    "fixture-alt-phy": {
+      "protocol_version": 1,
+      "request_id": "hu02-status-fixture-alt-phy",
+      "operation": "ui.operational_status",
+      "status": "ok",
+      "binding": {
+        "owner_id": "fixture-alt-phy",
+        "owner_kind": "PHY",
+        "display_label": "Alternate Private PHY",
+        "generation": "1",
+        "cut": "fixture-alt-phy-v1",
+        "capabilities": {
+          "view": true,
+          "manage": false,
+          "history": true,
+          "provenance": true,
+          "graph": true,
+          "community": true,
           "status": true,
           "memory_create": false,
           "memory_edit": false,
@@ -829,5 +2070,520 @@
         }
       }
     }
+  },
+  "memory_histories": {
+    "fixture-rel": [
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-history-fixture-rel-memory",
+        "operation": "ui.memory_history",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory_id": "fixture-rel-memory",
+          "revisions": {
+            "items": [
+              {
+                "revision": "2",
+                "body_id": "fixture-rel-memory-body-2",
+                "availability": "available",
+                "created_at_ms": "1000",
+                "content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              {
+                "revision": "1",
+                "body_id": "fixture-rel-memory-body-1",
+                "availability": "pruned",
+                "created_at_ms": "900",
+                "content_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+              }
+            ],
+            "next_cursor": null,
+            "truncated": false
+          }
+        }
+      },
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-history-fixture-rel-memory-2",
+        "operation": "ui.memory_history",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory_id": "fixture-rel-memory-2",
+          "revisions": {
+            "items": [
+              {
+                "revision": "1",
+                "body_id": "fixture-rel-memory-2-body-1",
+                "availability": "available",
+                "created_at_ms": "1000",
+                "content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              }
+            ],
+            "next_cursor": null,
+            "truncated": false
+          }
+        }
+      },
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-history-fixture-rel-memory-3",
+        "operation": "ui.memory_history",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory_id": "fixture-rel-memory-3",
+          "revisions": {
+            "items": [
+              {
+                "revision": "1",
+                "body_id": "fixture-rel-memory-3-body-1",
+                "availability": "available",
+                "created_at_ms": "1000",
+                "content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              }
+            ],
+            "next_cursor": null,
+            "truncated": false
+          }
+        }
+      },
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-history-fixture-rel-memory-4",
+        "operation": "ui.memory_history",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory_id": "fixture-rel-memory-4",
+          "revisions": {
+            "items": [
+              {
+                "revision": "1",
+                "body_id": "fixture-rel-memory-4-body-1",
+                "availability": "available",
+                "created_at_ms": "1000",
+                "content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              }
+            ],
+            "next_cursor": null,
+            "truncated": false
+          }
+        }
+      },
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-history-fixture-rel-memory-5",
+        "operation": "ui.memory_history",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory_id": "fixture-rel-memory-5",
+          "revisions": {
+            "items": [
+              {
+                "revision": "1",
+                "body_id": "fixture-rel-memory-5-body-1",
+                "availability": "available",
+                "created_at_ms": "1000",
+                "content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              }
+            ],
+            "next_cursor": null,
+            "truncated": false
+          }
+        }
+      }
+    ],
+    "fixture-project-rel": [
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-history-fixture-project-rel-memory",
+        "operation": "ui.memory_history",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-project-rel",
+          "owner_kind": "REL",
+          "display_label": "Project REL",
+          "generation": "1",
+          "cut": "fixture-project-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory_id": "fixture-project-rel-memory",
+          "revisions": {
+            "items": [
+              {
+                "revision": "1",
+                "body_id": "fixture-project-rel-body-1",
+                "availability": "available",
+                "created_at_ms": "1000",
+                "content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              }
+            ],
+            "next_cursor": null,
+            "truncated": false
+          }
+        }
+      }
+    ],
+    "fixture-phy": [
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-history-fixture-phy-memory",
+        "operation": "ui.memory_history",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-phy",
+          "owner_kind": "PHY",
+          "display_label": "Private PHY",
+          "generation": "1",
+          "cut": "fixture-phy-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "memory_id": "fixture-phy-memory",
+          "revisions": {
+            "items": [
+              {
+                "revision": "1",
+                "body_id": "fixture-phy-body-1",
+                "availability": "available",
+                "created_at_ms": "1000",
+                "content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              }
+            ],
+            "next_cursor": null,
+            "truncated": false
+          }
+        }
+      }
+    ],
+    "fixture-alt-phy": []
+  },
+  "community_lists": {
+    "fixture-rel": {
+      "protocol_version": 1,
+      "request_id": "hu02-community-list",
+      "operation": "ui.community_list",
+      "status": "ok",
+      "binding": {
+        "owner_id": "fixture-rel",
+        "owner_kind": "REL",
+        "display_label": "General REL",
+        "generation": "1",
+        "cut": "fixture-rel-v1",
+        "capabilities": {
+          "view": true,
+          "manage": false,
+          "history": true,
+          "provenance": true,
+          "graph": true,
+          "community": true,
+          "status": true,
+          "memory_create": false,
+          "memory_edit": false,
+          "memory_retire": false,
+          "relation_edit": false,
+          "community_rename": false
+        }
+      },
+      "result": {
+        "metadata_state": "available",
+        "communities": {
+          "items": [
+            {
+              "community_id": "fixture-community",
+              "generation": "1",
+              "member_count": "3",
+              "name": "Synthetic cluster",
+              "name_origin": "derived",
+              "cursor": null
+            }
+          ],
+          "next_cursor": null,
+          "truncated": false
+        }
+      }
+    },
+    "fixture-project-rel": {
+      "protocol_version": 1,
+      "request_id": "hu02-community-list-fixture-project-rel",
+      "operation": "ui.community_list",
+      "status": "ok",
+      "binding": {
+        "owner_id": "fixture-project-rel",
+        "owner_kind": "REL",
+        "display_label": "Project REL",
+        "generation": "1",
+        "cut": "fixture-project-rel-v1",
+        "capabilities": {
+          "view": true,
+          "manage": false,
+          "history": true,
+          "provenance": true,
+          "graph": true,
+          "community": true,
+          "status": true,
+          "memory_create": false,
+          "memory_edit": false,
+          "memory_retire": false,
+          "relation_edit": false,
+          "community_rename": false
+        }
+      },
+      "result": {
+        "metadata_state": "available",
+        "communities": {
+          "items": [],
+          "next_cursor": null,
+          "truncated": false
+        }
+      }
+    },
+    "fixture-phy": {
+      "protocol_version": 1,
+      "request_id": "hu02-community-list-fixture-phy",
+      "operation": "ui.community_list",
+      "status": "ok",
+      "binding": {
+        "owner_id": "fixture-phy",
+        "owner_kind": "PHY",
+        "display_label": "Private PHY",
+        "generation": "1",
+        "cut": "fixture-phy-v1",
+        "capabilities": {
+          "view": true,
+          "manage": false,
+          "history": true,
+          "provenance": true,
+          "graph": true,
+          "community": true,
+          "status": true,
+          "memory_create": false,
+          "memory_edit": false,
+          "memory_retire": false,
+          "relation_edit": false,
+          "community_rename": false
+        }
+      },
+      "result": {
+        "metadata_state": "available",
+        "communities": {
+          "items": [],
+          "next_cursor": null,
+          "truncated": false
+        }
+      }
+    },
+    "fixture-alt-phy": {
+      "protocol_version": 1,
+      "request_id": "hu02-community-list-fixture-alt-phy",
+      "operation": "ui.community_list",
+      "status": "ok",
+      "binding": {
+        "owner_id": "fixture-alt-phy",
+        "owner_kind": "PHY",
+        "display_label": "Alternate Private PHY",
+        "generation": "1",
+        "cut": "fixture-alt-phy-v1",
+        "capabilities": {
+          "view": true,
+          "manage": false,
+          "history": true,
+          "provenance": true,
+          "graph": true,
+          "community": true,
+          "status": true,
+          "memory_create": false,
+          "memory_edit": false,
+          "memory_retire": false,
+          "relation_edit": false,
+          "community_rename": false
+        }
+      },
+      "result": {
+        "metadata_state": "available",
+        "communities": {
+          "items": [],
+          "next_cursor": null,
+          "truncated": false
+        }
+      }
+    }
+  },
+  "community_members": {
+    "fixture-rel": [
+      {
+        "protocol_version": 1,
+        "request_id": "hu02-community-members",
+        "operation": "ui.community_members",
+        "status": "ok",
+        "binding": {
+          "owner_id": "fixture-rel",
+          "owner_kind": "REL",
+          "display_label": "General REL",
+          "generation": "1",
+          "cut": "fixture-rel-v1",
+          "capabilities": {
+            "view": true,
+            "manage": false,
+            "history": true,
+            "provenance": true,
+            "graph": true,
+            "community": true,
+            "status": true,
+            "memory_create": false,
+            "memory_edit": false,
+            "memory_retire": false,
+            "relation_edit": false,
+            "community_rename": false
+          }
+        },
+        "result": {
+          "community_id": "fixture-community",
+          "generation": "1",
+          "members": {
+            "items": [
+              "fixture-rel-memory",
+              "fixture-rel-memory-2",
+              "fixture-rel-memory-3"
+            ],
+            "next_cursor": null,
+            "truncated": false
+          }
+        }
+      }
+    ],
+    "fixture-project-rel": [],
+    "fixture-phy": [],
+    "fixture-alt-phy": []
   }
 }

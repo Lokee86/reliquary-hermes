@@ -1,18 +1,18 @@
-# Hermes dashboard fixture shell
+# Hermes dashboard read-only fixture
 
 ## Purpose
 
-HU01-R1 reuses the Reliquary tab shell against the current `dashboard-v1` contract. The manifest registers `/reliquary` through the Hermes web dashboard SDK 1.1.0. The classic script uses the host's React and hooks.
+The Reliquary tab uses the current `dashboard-v1` contract. The manifest registers `/reliquary` through the Hermes web dashboard SDK 1.1.0. The classic script uses the host's React and hooks.
 
 ## Overview
 
-The synthetic fixture covers a general REL, a project child REL and a separately bound active PHY. Browsing an owner leaves the active PHY and its stable Reliquary user ID intact. The inspector displays unavailable provenance separately from the copied-source tombstone and the Memory lifecycle. Fixture recall status shows candidate, selected and returned stages.
+The typed fixture client serves a general REL, a project child REL and independently selected PHY scenarios. The tab provides paged search and filters, a bounded graph with keyboard selection and expansion, Memory detail and revision history, provenance, community membership, and operational status. Recall status distinguishes candidate, selected and returned Memory sets.
 
 Build and check from the repository root:
 
 ```powershell
 node dashboard/scripts/build.cjs
-node --test dashboard/tests/hu01.test.cjs
+node --test dashboard/tests/dashboard.test.cjs
 tsc --noEmit -p dashboard/tsconfig.json
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1"
 $env:PYTHONDONTWRITEBYTECODE = "1"
@@ -29,4 +29,4 @@ The JSDoc type check uses a local TypeScript compiler. The Python check validate
 
 ## Notes
 
-The component tests use an SDK stub. The HU01-R1 browser smoke test also passed on Hermes v0.23.0 with SDK 1.1.0 and the host React runtime. [Host acceptance and reproduction steps](../docs/verification.md#hu01-r1-dashboard-host-acceptance)
+The HU02 browser smoke passed on Hermes v0.23.0 with SDK 1.1.0 and the host React runtime. [Acceptance and reproduction steps](../docs/verification.md#hu02-read-only-dashboard-acceptance)

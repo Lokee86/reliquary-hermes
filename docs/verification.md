@@ -179,6 +179,16 @@ Use the announced loopback URL in a second terminal with a local Chrome installa
 node dashboard/tests/hermes-host-smoke.mjs $dashboardUrl $playwrightModule
 ```
 
+## HU02 read-only dashboard acceptance
+
+The browser reads the current dashboard DTOs through a typed client. Deterministic fixture scenarios cover the general and project REL sessions and an independently selected PHY. Each scenario exposes only its active PHY. Requests carry an abort signal, and the client rejects results from an old request, owner binding, generation, cut, or selected revision.
+
+The tab supports paged and filtered Memory lists, keyboard graph and list navigation, bounded graph expansion and edge inspection, exact detail and revision history, copied-source provenance, communities and members, and operational status. The pruned revision fixture retains its historical body identity and returns no body content. The project fixture shows a tombstoned source with an active Memory.
+
+The dashboard build and TypeScript check passed. Eight Node tests exercised the client, cursor scope and expiry, bounded graph pages, fixture selection, cancellation, and plugin registration. The full Python suite passed 383 tests with the pinned host probes and process binaries enabled, including 46 fixture response checks against the exported schema and canonical DTO correlation rules.
+
+The [Hermes browser smoke commands](#hu01-r1-dashboard-host-acceptance) also exercise HU02 on the exact v0.23.0 dashboard. The enabled Chrome run covers independent REL, session and PHY controls, empty and invalid-filter states, keyboard selection, list paging, pruned history, graph expansion, edge inspection, community navigation and the copied-source tombstone. The disabled run verifies that Hermes withholds the tab and assets. Live transport and owner authorization remain HU03 scope.
+
 ## Remaining gates
 - HP04 catch-up requires an authorized source export and lifecycle replay interface for events that never reached the outbox.
 - HP05 wires real query/refine/traverse and prefetch. The acceptance test must distinguish candidate inspection from returned results and prove retrieval is recorded once.
