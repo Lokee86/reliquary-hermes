@@ -48,6 +48,9 @@ impl SourceStore {
         {
             return Err("source_state_unavailable");
         }
+        // tempfile passes the paths directly to MoveFileExW. Use the canonical
+        // extended path so the atomic receipt rename also works past MAX_PATH.
+        let directory = fs::canonicalize(directory).map_err(|_| "source_state_unavailable")?;
         Ok(Self(directory))
     }
 
@@ -144,5 +147,28 @@ impl SourceStore {
             .and_then(|directory| directory.sync_all())
             .map_err(|_| UNAVAILABLE)?;
         Ok(())
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomically_writes_receipt_under_a_long_profile_path() {
+        let scratch = tempfile::tempdir().unwrap();
+        let store = SourceStore::open(&scratch.path().join("profile".repeat(20))).unwrap();
+        let path = store.path("session");
+        let key = "a".repeat(64);
+        assert!(
+            path.with_extension(format!("{key}.receipt"))
+                .as_os_str()
+                .len()
+                > 260
+        );
+
+        let receipt = [1; 32];
+        store.write_receipt(&path, &key, receipt).unwrap();
+        assert_eq!(store.read_receipt(&path, &key).unwrap(), Some(receipt));
     }
 }
