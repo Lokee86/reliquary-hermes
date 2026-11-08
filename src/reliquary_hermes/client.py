@@ -1,0 +1,224 @@
+"""Authenticated, bounded loopback transport for the profile-scoped Rust host."""
+
+from dataclasses import asdict, dataclass
+import hmac
+import os
+from pathlib import Path
+import secrets
+import socket
+import stat
+import subprocess
+import time
+from urllib.parse import urlsplit
+
+from .authority import Discovery
+from .protocol import Request, Response
+from .validation import (ContractError, MAX_WIRE_BYTES, canonical, decode,
+                         identifier, obj, require)
+
+
+_DISCOVERY_FIELDS = set(Discovery.__dataclass_fields__)
+_MAX_HEADER = 8192
+_REQUEST_SECONDS = 1.5
+_STARTUP_SECONDS = 3.0
+
+
+class HostUnavailable(RuntimeError):
+    """A fixed diagnostic that never includes credentials or wire content."""
+
+
+class _ConnectionRefused(HostUnavailable):
+    pass
+
+
+@dataclass(frozen=True)
+class SessionBinding:
+    session_id: str
+    rel_id: str
+    user_id: str
+
+
+def _remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise HostUnavailable("host_timeout")
+    return remaining
+
+
+def _receive(connection: socket.socket, count: int, deadline: float) -> bytes:
+    connection.settimeout(_remaining(deadline))
+    chunk = connection.recv(count)
+    if not chunk:
+        raise HostUnavailable("host_incomplete_response")
+    return chunk
+
+
+def _response(connection: socket.socket, deadline: float) -> tuple[int, dict[str, str], bytes]:
+    wire = bytearray()
+    while b"\r\n\r\n" not in wire:
+        if len(wire) == _MAX_HEADER:
+            raise HostUnavailable("host_header_limit")
+        wire.extend(_receive(connection, min(4096, _MAX_HEADER - len(wire)), deadline))
+    header, body = wire.split(b"\r\n\r\n", 1)
+    lines = header.decode("ascii").split("\r\n")
+    version, status, _ = lines[0].split(" ", 2)
+    require(version == "HTTP/1.1" and len(status) == 3 and status.isdecimal(), "invalid_http")
+    fields = {}
+    for line in lines[1:]:
+        key, separator, value = line.partition(":")
+        name = key.lower()
+        require(separator == ":" and name and name not in fields, "invalid_http")
+        fields[name] = value.strip()
+    length = fields.get("content-length", "")
+    require(length.isdecimal() and len(length) <= 6 and "transfer-encoding" not in fields and
+            fields.get("content-type") == "application/json", "invalid_http")
+    expected = int(length)
+    require(len(body) <= expected <= MAX_WIRE_BYTES, "wire_limit")
+    while len(body) < expected:
+        body.extend(_receive(connection, min(8192, expected - len(body)), deadline))
+    return int(status), fields, bytes(body)
+
+
+def _sign(key: bytes, *parts: bytes) -> str:
+    return hmac.digest(key, b"\0".join(parts), "sha256").hex()
+
+
+class HostClient:
+    def __init__(self, state_dir: Path, profile_id: str, principal_id: str, token: str,
+                 *, binary: Path | None = None):
+        self._state_dir = Path(state_dir)
+        self._binary = None if binary is None else Path(binary)
+        self._profile_id = identifier(profile_id)
+        self._principal_id = identifier(principal_id)
+        require(self._state_dir.is_absolute(), "invalid_state_dir")
+        require(type(token) is str and 32 <= len(token) <= 512 and
+                all(33 <= ord(char) <= 126 for char in token), "invalid_credential")
+        self._token = token
+        self._attached: tuple[Discovery, SessionBinding] | None = None
+        self._process: subprocess.Popen | None = None
+
+    def _read_discovery(self) -> Discovery | None:
+        path = self._state_dir / "discovery.json"
+        try:
+            if not stat.S_ISREG(path.lstat().st_mode):
+                raise HostUnavailable("invalid_discovery")
+            with path.open("rb") as file:
+                raw = file.read(_MAX_HEADER + 1)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            raise HostUnavailable("invalid_discovery") from None
+        try:
+            require(len(raw) <= _MAX_HEADER, "discovery_limit")
+            discovery = Discovery(**obj(decode(raw), _DISCOVERY_FIELDS))
+            discovery.validate(expected_profile=self._profile_id, expected_instance=discovery.instance_id,
+                               expected_lease=discovery.lease_id)
+            return discovery
+        except ContractError:
+            raise HostUnavailable("invalid_discovery") from None
+
+    def _exchange(self, discovery: Discovery, path: str, body: bytes, deadline: float) -> bytes:
+        url = urlsplit(discovery.endpoint)
+        nonce = secrets.token_hex(16)
+        nonce_bytes = nonce.encode("ascii")
+        key = bytes.fromhex(_sign(self._token.encode("ascii"), b"reliquary-hermes-transport-v1",
+                                  discovery.instance_id.encode("ascii"), discovery.lease_id.encode("ascii")))
+        signature = _sign(key, b"request", path.encode("ascii"), nonce_bytes, body)
+        host = f"[{url.hostname}]" if url.hostname == "::1" else url.hostname
+        authority = f"{host}:{url.port}"
+        header = (f"POST {path} HTTP/1.1\r\nHost: {authority}\r\n"
+                  f"Authorization: Reliquary {signature}\r\nX-Reliquary-Nonce: {nonce}\r\n"
+                  f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n"
+                  "Connection: close\r\n\r\n").encode("ascii")
+        try:
+            try:
+                connection = socket.create_connection((url.hostname, url.port), _remaining(deadline))
+            except ConnectionRefusedError:
+                raise _ConnectionRefused("host_connection_refused") from None
+            with connection:
+                connection.settimeout(_remaining(deadline))
+                connection.sendall(header + body)
+                status, fields, reply = _response(connection, deadline)
+            proof = fields.get("x-reliquary-proof", "")
+            expected = _sign(key, b"response", nonce_bytes, str(status).encode("ascii"), reply)
+            if not hmac.compare_digest(proof, expected):
+                raise HostUnavailable("host_authentication")
+        except TimeoutError:
+            raise HostUnavailable("host_timeout") from None
+        except (OSError, ValueError):
+            raise HostUnavailable("invalid_host_response") from None
+        if status != 200:
+            raise HostUnavailable("host_conflict" if status == 409 else "host_denied")
+        return reply
+
+    def _launch(self) -> None:
+        if self._process is not None and self._process.poll() is None:
+            return
+        if self._binary is None or not self._binary.is_absolute() or not self._binary.is_file():
+            raise HostUnavailable("host_not_configured")
+        environment = {name: os.environ[name] for name in ("SystemRoot", "WINDIR") if name in os.environ}
+        environment.update({name: str(self._state_dir) for name in ("TEMP", "TMP", "TMPDIR")})
+        platform = ({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt"
+                    else {"start_new_session": True})
+        try:
+            self._process = subprocess.Popen(
+                [str(self._binary), "--state-dir", str(self._state_dir)],
+                cwd=self._state_dir, env=environment, stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **platform,
+            )
+            with self._process.stdin as stream:
+                stream.write(canonical({"token": self._token}))
+        except OSError:
+            raise HostUnavailable("host_start_failed") from None
+
+    def _attach(self, discovery: Discovery, session_id: str, deadline: float) -> SessionBinding:
+        body = canonical({"discovery": asdict(discovery), "principal_id": self._principal_id,
+                          "session_id": session_id})
+        reply = self._exchange(discovery, "/v1/attach", body, deadline)
+        try:
+            result = obj(decode(reply), {"discovery", "session_id", "rel_id", "user_id"})
+            require(result["discovery"] == asdict(discovery) and result["session_id"] == session_id,
+                    "attach_scope_mismatch")
+            owners = [identifier(result[field]) for field in ("rel_id", "user_id")]
+            require(all(len(owner) == 32 and all(char in "0123456789abcdef" for char in owner)
+                        for owner in owners) and owners[0] != owners[1], "invalid_owner_id")
+        except ContractError:
+            raise HostUnavailable("invalid_attach_response") from None
+        binding = SessionBinding(session_id, *owners)
+        self._attached = discovery, binding
+        return binding
+
+    def attach(self, session_id: str) -> SessionBinding:
+        """Bind through the live service or start a candidate protected by its lease."""
+        identifier(session_id)
+        self._attached = None
+        previous = self._read_discovery()
+        if previous is not None:
+            try:
+                return self._attach(previous, session_id, time.monotonic() + _REQUEST_SECONDS)
+            except _ConnectionRefused:
+                pass
+        if self._binary is None:
+            raise HostUnavailable("host_unavailable")
+        self._launch()
+        deadline = time.monotonic() + _STARTUP_SECONDS
+        while True:
+            remaining = _remaining(deadline)
+            current = self._read_discovery()
+            if current is not None and current != previous:
+                return self._attach(current, session_id, deadline)
+            time.sleep(min(0.03, remaining))
+
+    def request(self, raw: bytes) -> Response:
+        """Send a frozen provider request for the currently attached session."""
+        request = Request.parse(raw)
+        attached = self._attached
+        if attached is None or (request.profile_id, request.principal_id, request.session_id) != (
+                self._profile_id, self._principal_id, attached[1].session_id):
+            raise HostUnavailable("host_not_attached")
+        discovery, _ = attached
+        reply = self._exchange(discovery, "/v1/request", raw, time.monotonic() + _REQUEST_SECONDS)
+        try:
+            return Response.parse(reply).for_request(request)
+        except ContractError:
+            raise HostUnavailable("invalid_provider_response") from None
