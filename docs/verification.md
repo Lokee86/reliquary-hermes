@@ -148,6 +148,37 @@ The run covered real provider delivery, completed native append, idempotent repl
 
 The stable-host compatibility gate is green for delivered source work. HP04 final acceptance remains provisional because stable Hermes supplies neither a provider-equivalent history export nor a durable lifecycle cursor for missed callbacks.
 
+## HU01-R1 dashboard host acceptance
+
+HU01-R1 passed in headless Chrome against Hermes `v0.23.0` at `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19`. The frontend came from that revision's source and npm lockfile, built with Node 26.0.0 and npm 11.17.0 in scratch under the dashboard worktree. The Python server came from the detached checkout.
+
+The enabled profile discovered the Reliquary manifest, served the exact bundle and stylesheet, and opened `/reliquary` using SDK 1.1.0 and the host React instance. The smoke test exercised graph/list selection, project REL switching with an unchanged active PHY, the copied-source tombstone, and safe body text. The disabled profile withheld the tab and its assets. The fixture manifest has no API and an authenticated probe received 404. The 22 upstream Hermes checks above cover host plugin API auth and profile routing using Hermes test plugins. Reliquary owner authorization belongs to HU03.
+
+The dashboard build and TypeScript check passed, along with all 5 Node component tests and 353 Python tests with the exact Hermes checkout and the HP01-R1 host and product CLI binaries. The Python count includes the 16 dashboard fixture validations.
+
+To repeat the browser smoke test, prepare the pinned frontend from the locked dependencies in a scratch mirror with the upstream web build script. Point `HERMES_WEB_DIST` at that build's output directory. From the dashboard worktree, stage the manifest and compiled assets in a fresh isolated Hermes home:
+
+```powershell
+$run = Join-Path (Get-Location) 'host\.test-tmp\hu01-smoke-enabled'
+$env:HERMES_HOME = Join-Path $run 'hermes-home'
+$env:TEMP = $run
+$env:TMP = $run
+$env:TMPDIR = $run
+$env:PYTHONPATH = $env:HP01_HERMES_CHECKOUT
+$env:PYTHONDONTWRITEBYTECODE = '1'
+$plugin = Join-Path $env:HERMES_HOME 'plugins\reliquary-hermes\dashboard'
+New-Item -ItemType Directory -Force -Path $plugin | Out-Null
+Copy-Item -LiteralPath 'dashboard/manifest.json', 'dashboard/dist' -Destination $plugin -Recurse
+@('plugins:', '  enabled: [reliquary-hermes]') | Set-Content -LiteralPath (Join-Path $env:HERMES_HOME 'config.yaml')
+python -B -c 'from hermes_cli.web_server import start_server; start_server(host="127.0.0.1", port=0, open_browser=False, isolated=True)'
+```
+
+Use the announced loopback URL in a second terminal with a local Chrome installation and the path to Playwright's `index.mjs`. Set that terminal's `TEMP` and `TMP` to the same worktree scratch directory. Repeat in a fresh Hermes home with `plugins.disabled` and append `--disabled` to the test command.
+
+```powershell
+node dashboard/tests/hermes-host-smoke.mjs $dashboardUrl $playwrightModule
+```
+
 ## Remaining gates
 - HP04 catch-up requires an authorized source export and lifecycle replay interface for events that never reached the outbox.
 - HP05 wires real query/refine/traverse and prefetch. The acceptance test must distinguish candidate inspection from returned results and prove retrieval is recorded once.

@@ -29,4 +29,4 @@ The JSDoc type check uses a local TypeScript compiler. The Python check validate
 
 ## Notes
 
-The current shell uses deterministic data and an SDK stub for component tests. U2 introduces the typed client boundary. U3 owns the independent REL and PHY selectors. U7 verifies the bundle in the stable Hermes host.
+The component tests use an SDK stub. The HU01-R1 browser smoke test also passed on Hermes v0.23.0 with SDK 1.1.0 and the host React runtime. [Host acceptance and reproduction steps](../docs/verification.md#hu01-r1-dashboard-host-acceptance)
