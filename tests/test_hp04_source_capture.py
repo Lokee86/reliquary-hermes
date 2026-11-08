@@ -38,6 +38,7 @@ def test_capture_preserves_source_identity_and_drops_unproven_attribution():
     [message(timestamp=10**20)], [message(content=[{"type": "text", "text": "multimodal"}])],
     [message(content="data:image/png;base64,AQID")], [message(), message()],
     [message(f"row-{i}", content="a" * 32768) for i in range(8)],
+    [message(f"row-{i}", content=chr(92) * 32768) for i in range(3)],
 ])
 def test_unsupported_or_unbound_source_bytes_fail_closed(rows):
     with pytest.raises(ContractError):
