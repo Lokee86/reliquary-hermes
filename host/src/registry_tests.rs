@@ -189,8 +189,14 @@ fn malformed_and_missing_durable_state_fail_closed() {
         registry.is_bound("general-session").unwrap_err().code(),
         "state_corrupt"
     );
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert_eq!(
+        registry.is_bound("general-session").unwrap_err().code(),
+        "state_corrupt"
+    );
     drop(registry);
-    std::fs::remove_file(path).unwrap();
+    std::fs::remove_dir(path).unwrap();
     std::fs::remove_dir(fixture.state.join("sessions-v1")).unwrap();
     assert_eq!(
         Registry::open(fixture.config(), &fixture.state, TOKEN)

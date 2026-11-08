@@ -21,11 +21,13 @@ pub(super) fn read<T: DeserializeOwned>(
     path: &Path,
     maximum: usize,
 ) -> Result<Option<T>, RegistryError> {
-    let file = match File::open(path) {
-        Ok(file) => file,
+    match path.symlink_metadata() {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => return Err(CORRUPT),
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(UNAVAILABLE),
-    };
+    }
+    let file = File::open(path).map_err(|_| UNAVAILABLE)?;
     let mut raw = Vec::new();
     file.take(maximum as u64 + 1)
         .read_to_end(&mut raw)
@@ -37,14 +39,20 @@ pub(super) fn read<T: DeserializeOwned>(
 }
 
 pub(super) fn sessions_dir(path: &Path, accepted_topology: bool) -> Result<(), RegistryError> {
-    if accepted_topology {
-        return if path.is_dir() { Ok(()) } else { Err(CORRUPT) };
+    if !accepted_topology {
+        fs::create_dir_all(path).map_err(|_| UNAVAILABLE)?;
     }
-    fs::create_dir_all(path).map_err(|_| UNAVAILABLE)?;
-    if fs::read_dir(path)
-        .map_err(|_| UNAVAILABLE)?
-        .next()
-        .is_some()
+    if !path
+        .symlink_metadata()
+        .is_ok_and(|metadata| metadata.is_dir())
+    {
+        return Err(CORRUPT);
+    }
+    if !accepted_topology
+        && fs::read_dir(path)
+            .map_err(|_| UNAVAILABLE)?
+            .next()
+            .is_some()
     {
         return Err(CORRUPT);
     }

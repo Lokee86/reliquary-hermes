@@ -8,6 +8,7 @@ import pytest
 from reliquary_hermes.client import HostClient, HostUnavailable
 from reliquary_hermes.validation import canonical, decode
 from test_host_client import TOKEN, status_request
+from test_hp03_provider import pinned_provider
 
 
 @pytest.fixture(scope="module")
@@ -132,3 +133,52 @@ def test_two_profiles_can_explicitly_select_the_same_read_only_phy(tmp_path, bin
                     cleanup.callback(stop, client._process)
         assert bindings[0].rel_id != bindings[1].rel_id
         assert bindings[0].user_id == bindings[1].user_id == user_id
+
+
+def test_pinned_setup_provider_attaches_and_recovers_real_process(tmp_path, binaries, pinned_provider, monkeypatch):
+    from hermes_cli.memory_setup import _post_setup_hook
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    binary, cli = binaries
+    home = tmp_path / "hermes-profile"
+    home.mkdir()
+    main_rel, active_phy = tmp_path / "main.rel", tmp_path / "active.phy"
+    rel_id = owner(cli, "rel", main_rel, "unspecified")
+    user_id = owner(cli, "phy", active_phy)
+    initial_rel = main_rel.read_bytes()
+    provider = pinned_provider.ReliquaryMemoryProvider()
+    values = iter(("profile-a", "principal-a", str(main_rel), str(active_phy), str(binary)))
+    monkeypatch.setattr("builtins.input", lambda _: next(values))
+
+    def settled():
+        from time import monotonic, sleep
+
+        deadline = monotonic() + 8
+        while provider.lifecycle_status == "connecting" and monotonic() < deadline:
+            sleep(0.01)
+        assert provider.lifecycle_status == "attached"
+
+    scope = set_hermes_home_override(home)
+    try:
+        assert _post_setup_hook(provider, {})
+        assert provider.is_available()
+        provider.initialize("session-a", hermes_home=str(home), agent_identity="ignored-bot")
+        try:
+            settled()
+            initial = provider.binding
+            assert (initial.rel_id, initial.user_id) == (rel_id, user_id)
+            provider.sync_turn("synthetic user", "synthetic assistant", session_id="session-a")
+            assert provider.sync_status == "source_ingestion_unavailable"
+            original = provider._client._process
+            stop(original)
+            provider.on_turn_start(2, "synthetic follow-up")
+            settled()
+            assert provider._client._process is not original
+            assert provider.binding == initial
+        finally:
+            if provider._client is not None and provider._client._process is not None:
+                stop(provider._client._process)
+            provider.shutdown()
+    finally:
+        reset_hermes_home_override(scope)
+    assert main_rel.read_bytes() == initial_rel

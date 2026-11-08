@@ -371,13 +371,20 @@ fn open_rel(path: &Path) -> Result<Rel, RegistryError> {
 }
 
 fn acquire_service_lease(state_dir: &Path) -> Result<File, RegistryError> {
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(state_dir.join("service.lock"))
-        .map_err(|_| store::UNAVAILABLE)?;
+    let path = state_dir.join("service.lock");
+    match path.symlink_metadata() {
+        Ok(metadata) if metadata.is_file() => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        _ => return Err(store::UNAVAILABLE),
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path).map_err(|_| store::UNAVAILABLE)?;
     match file.try_lock() {
         Ok(()) => Ok(file),
         Err(TryLockError::WouldBlock) => Err(RegistryError::Conflict("service_lease_conflict")),

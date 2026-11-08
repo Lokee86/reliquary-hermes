@@ -19,6 +19,8 @@ from .validation import (ContractError, MAX_WIRE_BYTES, canonical, decode,
 
 _DISCOVERY_FIELDS = set(Discovery.__dataclass_fields__)
 _MAX_HEADER = 8192
+# Winsock can take two seconds to report refusal on an unused loopback port.
+_CONNECT_SECONDS = 3.0
 _REQUEST_SECONDS = 1.5
 _STARTUP_SECONDS = 3.0
 
@@ -132,10 +134,12 @@ class HostClient:
                   "Connection: close\r\n\r\n").encode("ascii")
         try:
             try:
-                connection = socket.create_connection((url.hostname, url.port), _remaining(deadline))
+                connection = socket.create_connection((url.hostname, url.port),
+                                                      min(_CONNECT_SECONDS, _remaining(deadline)))
             except ConnectionRefusedError:
                 raise _ConnectionRefused("host_connection_refused") from None
             with connection:
+                deadline = min(deadline, time.monotonic() + _REQUEST_SECONDS)
                 connection.settimeout(_remaining(deadline))
                 connection.sendall(header + body)
                 status, fields, reply = _response(connection, deadline)
@@ -148,7 +152,8 @@ class HostClient:
         except (OSError, ValueError):
             raise HostUnavailable("invalid_host_response") from None
         if status != 200:
-            raise HostUnavailable("host_conflict" if status == 409 else "host_denied")
+            code = {403: "host_denied", 409: "host_conflict", 503: "host_unavailable"}.get(status)
+            raise HostUnavailable(code or "invalid_host_response")
         return reply
 
     def _launch(self) -> None:
@@ -195,7 +200,7 @@ class HostClient:
         previous = self._read_discovery()
         if previous is not None:
             try:
-                return self._attach(previous, session_id, time.monotonic() + _REQUEST_SECONDS)
+                return self._attach(previous, session_id, time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS)
             except _ConnectionRefused:
                 pass
         if self._binary is None:
@@ -217,7 +222,7 @@ class HostClient:
                 self._profile_id, self._principal_id, attached[1].session_id):
             raise HostUnavailable("host_not_attached")
         discovery, _ = attached
-        reply = self._exchange(discovery, "/v1/request", raw, time.monotonic() + _REQUEST_SECONDS)
+        reply = self._exchange(discovery, "/v1/request", raw, time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS)
         try:
             return Response.parse(reply).for_request(request)
         except ContractError:
