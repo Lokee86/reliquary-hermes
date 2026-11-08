@@ -2,11 +2,11 @@
 
 ## Purpose
 
-Keep HP01's current executable fixture behavior, audited host facts, proposed interfaces and later production work distinct and reproducible.
+Keep the Python contract, pinned Hermes source evidence and executable Rust host behavior reproducible.
 
 ## Overview
 
-The Reliquary integration maintainers maintain this standalone repository for HP01. The shared engineering standard explicitly permits its `minimal` profile for fixtures and narrow utilities. This repository currently ships only deterministic contract values/tests, not a library release, plugin installation, durable service or UI. `docs-standard.json` therefore selects `minimal` plus the protocol capability. Reevaluate the profile before HP03 introduces a real service or HP06 a distributable provider.
+The Reliquary integration maintainers own this standalone repository. The shared engineering standard permits its `minimal` profile for fixtures and narrow utilities. The HP02 selected-return bridge is a detached library component. Reevaluate the profile when HP03 introduces a service or HP06 packages the provider.
 
 There is no baseline and no blanket document or source exemption. The root index links every document, substantive documents retain Purpose/Overview/Related docs/Notes, and code/test paths map to canonical owners:
 
@@ -14,14 +14,15 @@ There is no baseline and no blanket document or source exemption. The root index
 - `authority.py`, `source.py`: [protocol](protocol.md) and [host audit](host-audit.md).
 - `__init__.py` and the pinned source probes are owned by [host audit](host-audit.md) and [verification](verification.md).
 - `ui_schema.py`, `ui_contract.py` and exported `contracts/dashboard-v1.schema.json`: [web-dashboard DTO contract](ui-contract.md).
-- Tests and test configuration: [verification](verification.md).
+- Tests and test configuration are owned by [verification](verification.md).
+- The detached Rust host crate is covered by [protocol](protocol.md) and [verification](verification.md).
 - Planning, limitations and behavioral evidence remain in the verification owner's later-gates sections. A separate maintainer map/coverage/roadmap/limits hierarchy is unnecessary for this small contract fixture; these explicit owners satisfy the narrow fixture scope, rather than pretending a production profile is complete.
 
 ## Change procedure
 
-1. Confirm the requested change belongs to the standalone contract. Do not alter Hermes, product source, private stores, caches or credentials as a documentation side effect.
+1. Confirm the requested change belongs to the standalone integration. Do not alter Hermes, product source, private stores, caches or credentials as a documentation side effect.
 2. Update the canonical owner with changed current behavior and separately labeled proposed behavior or remaining gaps. Keep source revision/API facts source-backed.
-3. Update the matching behavioral tests and run the frozen command in [verification](verification.md).
+3. Update the matching behavioral tests and run the applicable checks in [verification](verification.md).
 4. Run the shared checker from the existing sibling checkout without copying or mutating it:
 
 ```powershell

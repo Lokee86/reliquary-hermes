@@ -6,7 +6,7 @@ Freeze the bounded HP01 transport, copied-source and server-owned authority DTOs
 
 ## Overview
 
-Status: frozen contract DTOs and in-memory behavioral fixtures. There is no listening service, credential store, durable import implementation or Root bridge yet.
+The Python DTOs and behavioral fixtures define the provider boundary. The detached Rust host implements the selected-return step below. Later tickets own the listening service, credential store and durable Hermes import.
 
 ## Transport and authentication
 
@@ -93,7 +93,15 @@ DTO validation does not prove a server actually committed a mutation. Durable re
 
 ## HP02 mapping requirement
 
-Map named operations to supported public Root, Gateway and Application methods backed by existing owner workflows. The provider forwards selected results. Candidate preview and dashboard inspection are non-reinforcing. The temporary Rust-host `HACK` supplies the existing Gateway gate's exact delivery ID and manifest digest at the selected-result return boundary. It must preserve idempotency so the existing retrieval and Freshness path runs once. Remove the shim and its compatibility tests when Reliquary records retrieval directly at that boundary. The [dashboard contract](ui-contract.md) freezes the separate inspection and mutation vocabulary. HP02 conformance tests must prove the mappings through public APIs.
+Map named operations to public Root, Gateway and Application methods backed by existing owner workflows. The [dashboard contract](ui-contract.md) defines the separate inspection and mutation vocabulary.
+
+### Selected retrieval return
+
+The Rust host's `SelectedReturn` uses the authorized Root preview of one opaque prepared delivery. Candidate and dashboard reads use the existing non-reinforcing Root paths. The return method uses `Instance::deliver_retrieval` with a private, single-delivery adapter restricted to the MemoryDelivery capability.
+
+The temporary `HACK` checks the stable delivery ID and SHA-256 of the exact operation provided by the Gateway. A second operation with different evidence fails. Root owns the durable accepted-use receipt and updates Freshness. The host releases the selection only after Root reports the first durable write. A duplicate returns `AlreadyRecorded` without a second content release. A truncated Root projection fails before the receipt gate so the bridge only credits exact selected content. After a projection rejection, the caller can cancel the pending Root retrieval or discard its turn.
+
+Retain the return object for an in-process retry. The adapter retains the exact operation in memory and rechecks the current cut before retrying a pending write. A new process can deduplicate an exact re-preparation through Root's durable receipt. An uncommitted operation has no separately durable adapter state. Remove this module and its compatibility tests when Reliquary records retrieval directly at the selected-result return boundary.
 
 ## Related docs
 

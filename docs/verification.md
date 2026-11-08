@@ -1,4 +1,4 @@
-# HP01 verification and remaining gates
+# Hermes integration verification and remaining gates
 
 ## Purpose
 
@@ -6,7 +6,7 @@ Record reproducible checks for the standalone provider and dashboard contracts.
 
 ## Overview
 
-HP01 verifies the pinned Hermes interfaces and the Python fixtures for provider transport, owner routing and copied-source lifecycle. The Rust host, real product receipts, UI service and model demonstration have separate acceptance gates.
+HP01 verifies the pinned Hermes interfaces and the Python provider, owner routing and copied-source fixtures. The first HP02 slice verifies the selected-return bridge against the real Root API and its durable REL receipt.
 
 ## Standalone checks
 
@@ -33,9 +33,27 @@ The checkout must be at the exact SHA in [host audit](host-audit.md). Without `H
 
 The integrated HP01 suite passed all 290 tests with the upstream pin enabled. The shared minimal-profile documentation check and Git whitespace check passed.
 
+## HP02 selected-return verification
+
+Use the sibling `Reliquary` checkout at `2c13a06478f89205cab176495276517a4e32e663` and a Rust toolchain with the offline dependency cache available. From this repository in PowerShell:
+
+```powershell
+$hostScratch = Join-Path (Get-Location) 'host\.test-tmp'
+New-Item -ItemType Directory -Force -Path $hostScratch | Out-Null
+$env:TEMP = $hostScratch
+$env:TMP = $hostScratch
+cargo fmt --manifest-path host/Cargo.toml --check
+cargo test --manifest-path host/Cargo.toml --locked --offline -j 1
+python -B ../Reliquary/scripts/check_architecture.py
+```
+
+The external consumer seeds a Freshness-enrolled Memory through public Root import and processing. A deterministic loopback decision endpoint chooses the selection. The proof observes the REL before inspection and after the first return. Two concurrent calls share one return object. Exact replay through a newly opened Gateway preserves the resulting REL byte for byte. The negative cases cover a revoked credential, a truncated projection and mismatched delivery evidence. It verifies that the bridge returns the exact selected Memory set and records its durable receipt once.
+
+All four host tests passed on the pinned product checkout. The architecture guard reported 23 packages and 76 production edges.
+
 ## Remaining gates
 
-- HP02 maps provider/dashboard operations to public Root/Gateway/Application workflows and adds the isolated exact-once Rust-host retrieval HACK. G4/GM/P01 and external-consumer conformance belong to that gate.
+- Remaining HP02 work maps the provider and dashboard operations to public Root workflows and runs the full G4/GM/P01 gate. The selected-return proof covers this bridge.
 - HP03 implements the authenticated loopback service and provider setup, persistent general/project session mappings, active PHY binding, single-writer lease and restart behavior.
 - HP04 implements supported source recovery, durable copied imports, post-commit lifecycle handling, retry reconciliation and tombstone persistence. Hermes stays the history and resume authority. Reliquary maintenance owns pruning.
 - HP05 wires real query/refine/traverse and prefetch. The acceptance test must distinguish candidate inspection from returned results and prove retrieval is recorded once.

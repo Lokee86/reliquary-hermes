@@ -1,0 +1,19 @@
+[package]
+name = "reliquary-hermes-host"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+resolver = "3"
+
+[dependencies]
+reliquary-memory = { path = "../../Reliquary" }
+sha2 = "0.10"
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"
+
+[patch.crates-io]
+quinn-proto = { path = "../../Reliquary/vendor/quinn-proto" }

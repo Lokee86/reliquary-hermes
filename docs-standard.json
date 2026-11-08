@@ -76,6 +76,15 @@
         "docs/ui-contract.md",
         "docs/verification.md"
       ]
+    },
+    {
+      "paths": [
+        "host/**"
+      ],
+      "docs": [
+        "docs/protocol.md",
+        "docs/verification.md"
+      ]
     }
   ],
   "change_rules": [
@@ -106,6 +115,15 @@
       ],
       "docs": [
         "docs/ui-contract.md",
+        "docs/verification.md"
+      ]
+    },
+    {
+      "paths": [
+        "host/**"
+      ],
+      "docs": [
+        "docs/protocol.md",
         "docs/verification.md"
       ]
     }
