@@ -1,0 +1,207 @@
+use super::*;
+
+const TOKEN: &str = "registry-test-profile-credential-value";
+const NEW_TOKEN: &str = "registry-test-replacement-credential-value";
+
+struct Fixture {
+    _directory: tempfile::TempDir,
+    state: PathBuf,
+    main: PathBuf,
+    project: PathBuf,
+    phy: PathBuf,
+    main_id: OwnerId,
+    project_id: OwnerId,
+    phy_id: OwnerId,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join(".test-tmp");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let directory = tempfile::tempdir_in(&scratch).unwrap();
+        let state = directory.path().join("state");
+        std::fs::create_dir(&state).unwrap();
+        let main = directory.path().join("main.rel");
+        let main_id = Rel::create(&main, OwnerScope::Unspecified)
+            .unwrap()
+            .owner_id();
+        let project = directory.path().join("project.rel");
+        let project_id = Rel::create(&project, OwnerScope::Project)
+            .unwrap()
+            .owner_id();
+        let phy = directory.path().join("human.phy");
+        let phy_id = Phylactery::create(&phy).unwrap().owner_id();
+        Self {
+            _directory: directory,
+            state,
+            main,
+            project,
+            phy,
+            main_id,
+            project_id,
+            phy_id,
+        }
+    }
+
+    fn config(&self) -> OwnerConfig {
+        OwnerConfig {
+            profile_id: "profile-one".into(),
+            principal_id: "principal-one".into(),
+            main_rel: self.main.clone(),
+            projects: BTreeMap::from([("demo".into(), self.project.clone())]),
+            active_phy: self.phy.clone(),
+            session_projects: BTreeMap::from([("project-session".into(), "demo".into())]),
+        }
+    }
+}
+
+#[test]
+fn routes_persist_across_restart_and_keep_the_active_phy_independent() {
+    let fixture = Fixture::new();
+    let (general, project) = {
+        let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
+        assert_eq!(registry.profile_id(), "profile-one");
+        assert_eq!(registry.principal_id(), "principal-one");
+        assert_eq!(
+            registry.authenticate(NEW_TOKEN).err().unwrap().code(),
+            "denied"
+        );
+        let client = registry.authenticate(TOKEN).unwrap();
+        assert_eq!(client.principal(), "principal-one");
+        assert!(!registry.is_bound("general-session").unwrap());
+        assert_eq!(
+            registry
+                .owner_status(&client, "general-session")
+                .unwrap_err()
+                .code(),
+            "unbound_session"
+        );
+        let general = registry.bind_session("general-session").unwrap();
+        let project = registry.bind_session("project-session").unwrap();
+        assert_eq!(general.rel_id, fixture.main_id.to_string());
+        assert_eq!(project.rel_id, fixture.project_id.to_string());
+        assert_eq!(general.user_id, fixture.phy_id.to_string());
+        assert_eq!(project.user_id, general.user_id);
+        assert_eq!(registry.bind_session("project-session").unwrap(), project);
+        let status = registry.owner_status(&client, "project-session").unwrap();
+        assert_eq!(
+            serde_json::to_value(status).unwrap(),
+            serde_json::json!({"worker_state": "complete", "pending_jobs": 0})
+        );
+        let topology: Topology = store::read(
+            &fixture.state.join("topology-v1.json"),
+            store::MAX_TOPOLOGY_BYTES,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(topology.projects["demo"].parent_id, fixture.main_id);
+        (general, project)
+    };
+    let mut reopened = Registry::open(fixture.config(), &fixture.state, NEW_TOKEN).unwrap();
+    assert!(reopened.is_bound("general-session").unwrap());
+    assert!(reopened.is_bound("project-session").unwrap());
+    assert_eq!(reopened.bind_session("general-session").unwrap(), general);
+    assert_eq!(reopened.bind_session("project-session").unwrap(), project);
+    assert!(reopened.authenticate(TOKEN).is_err());
+    assert!(reopened.authenticate(NEW_TOKEN).is_ok());
+}
+
+#[test]
+fn separate_profiles_can_share_the_phy_but_cannot_share_the_rel_writer() {
+    let fixture = Fixture::new();
+    let mut first = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
+    assert_eq!(
+        Registry::open(fixture.config(), &fixture.state, TOKEN)
+            .err()
+            .unwrap()
+            .code(),
+        "service_lease_conflict"
+    );
+    let second_state = fixture.state.with_file_name("second");
+    std::fs::create_dir(&second_state).unwrap();
+    assert_eq!(
+        Registry::open(fixture.config(), &second_state, TOKEN)
+            .err()
+            .unwrap()
+            .code(),
+        "owner_writer_conflict"
+    );
+    assert!(!second_state.join("topology-v1.json").exists());
+
+    let second_rel = fixture.main.with_file_name("second.rel");
+    Rel::create(&second_rel, OwnerScope::Unspecified).unwrap();
+    let mut config = fixture.config();
+    config.profile_id = "profile-two".into();
+    config.principal_id = "principal-two".into();
+    config.main_rel = second_rel;
+    config.projects.clear();
+    config.session_projects.clear();
+    let mut second = Registry::open(config, &second_state, NEW_TOKEN).unwrap();
+    let first_binding = first.bind_session("same-session").unwrap();
+    let second_binding = second.bind_session("same-session").unwrap();
+    assert_ne!(first_binding.rel_id, second_binding.rel_id);
+    assert_eq!(first_binding.user_id, second_binding.user_id);
+}
+
+#[test]
+fn invalid_owner_and_changed_route_do_not_create_fallback_bindings() {
+    let fixture = Fixture::new();
+    let mut config = fixture.config();
+    config.active_phy = fixture.main.clone();
+    assert_eq!(
+        Registry::open(config, &fixture.state, TOKEN)
+            .err()
+            .unwrap()
+            .code(),
+        "invalid_owner"
+    );
+    assert!(!fixture.state.join("topology-v1.json").exists());
+    let original = Registry::open(fixture.config(), &fixture.state, TOKEN)
+        .unwrap()
+        .bind_session("general-session")
+        .unwrap();
+    let mut config = fixture.config();
+    config
+        .session_projects
+        .insert("general-session".into(), "demo".into());
+    let mut registry = Registry::open(config, &fixture.state, TOKEN).unwrap();
+    assert_eq!(
+        registry.bind_session("general-session").unwrap_err().code(),
+        "session_binding_changed"
+    );
+    assert_eq!(
+        registry.bind_session("../foreign").unwrap_err().code(),
+        "invalid_session"
+    );
+    drop(registry);
+    let mut reopened = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
+    assert_eq!(reopened.bind_session("general-session").unwrap(), original);
+}
+
+#[test]
+fn malformed_and_missing_durable_state_fail_closed() {
+    let fixture = Fixture::new();
+    let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
+    registry.bind_session("general-session").unwrap();
+    let path = registry.session_path("general-session");
+    std::fs::write(&path, b"truncated").unwrap();
+    assert_eq!(
+        registry.is_bound("general-session").unwrap_err().code(),
+        "state_corrupt"
+    );
+    drop(registry);
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_dir(fixture.state.join("sessions-v1")).unwrap();
+    assert_eq!(
+        Registry::open(fixture.config(), &fixture.state, TOKEN)
+            .err()
+            .unwrap()
+            .code(),
+        "state_corrupt"
+    );
+    let duplicate_keys = r#"{
+        "profile_id":"profile-one","principal_id":"principal-one","main_rel":"main.rel",
+        "projects":{"demo":"first.rel","demo":"second.rel"},"active_phy":"human.phy"
+    }"#;
+    assert!(serde_json::from_str::<OwnerConfig>(duplicate_keys).is_err());
+}
