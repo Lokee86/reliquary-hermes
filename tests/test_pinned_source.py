@@ -139,9 +139,10 @@ def _archive_delete_probe():
     # built-in and installed plugin discovery suppressed in this child.
     manager._discovered = True
     seen = []
-    with SessionDB(profile / "state.db") as db:
+    db_path = profile / "state.db"
+    with SessionDB(db_path) as db, SessionDB(db_path, read_only=True) as reader:
         def observe(session_id, reason, profile, **kwargs):
-            row = db.get_session(session_id)
+            row = reader.get_session(session_id)
             seen.append((session_id, reason, profile, None if row is None else row["archived"]))
 
         _ProviderCollector("hp01-probe").collect(lambda ctx: ctx.register_hook("on_session_delete", observe))
