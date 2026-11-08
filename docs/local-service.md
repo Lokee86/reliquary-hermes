@@ -54,7 +54,7 @@ Setup enables the ordinary `reliquary-source-observer` companion unless the prof
 
 To enable native processing, create a private `<hermes_home>/reliquary/processing.json` containing `config_path` set to the absolute path of an existing Reliquary binary configuration. Configure the required processing routes through Reliquary. The host uses those routes for REL-only work. A profile without processing configuration can stage a copy, and its import may remain open.
 
-Recovery replays work that reached the outbox. The audited Hermes export redacts differently from the provider egress and can include rows without a completed text-only callback. Missing callbacks and terminal notifications therefore remain unavailable for catch-up. The pinned Gateway's canonical single-session dashboard DELETE bypasses the observer. Same-session rewind and edited or ambiguous overlaps remain fenced pending authoritative reconciliation.
+Recovery replays work that reached the outbox. The audited Hermes export redacts differently from the provider egress and can include rows without a completed text-only callback. Missing callbacks and terminal notifications therefore remain unavailable for catch-up. The pinned Gateway and dashboard deliberate delete paths reach the post-commit observer. Dispatch can fail open, so a delivered notification is the boundary of automatic recovery. Same-session rewind and edited or ambiguous overlaps remain fenced pending authoritative reconciliation.
 
 ## Limits
 

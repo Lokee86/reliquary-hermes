@@ -2,9 +2,9 @@
 
 Reliquary Hermes is the standalone memory provider and loopback host for the pinned Hermes revision. HP03 attaches Hermes sessions to existing Reliquary owners and keeps their routing durable across host restarts. The Rust host uses public Root APIs. The Reliquary integration maintainers own the service and contracts.
 
-Hermes remains canonical history. The product facade accepts an initial privacy-filtered, source-ID-preserving snapshot and its exact replay. Hermes resumes from its own history. HP04 owns the continuous copy and recovery service.
+Hermes remains the authority for history and resume. HP04 queues privacy-filtered source copies with their original IDs and timestamps, replays durable receipts, and fences deliberate archive and delete. Recovery of missed Hermes events remains an open gate.
 
-Use the local service guide to configure existing owners and activate the provider through `hermes memory setup`. HP04 owns live source copying. HP05 owns recall and model tools. HP06 owns distribution and installation acceptance. [Local service guide](docs/local-service.md)
+Use the local service guide to configure existing owners and activate the provider through `hermes memory setup`. HP05 owns recall and model tools. HP06 owns distribution and installation acceptance. [Local service guide](docs/local-service.md)
 
 ## Contract and evidence
 

@@ -101,7 +101,7 @@ python -B -m pytest -q --basetemp .pytest_tmp
 python -B ../Reliquary/scripts/check_architecture.py
 ```
 
-The process tests create native owners with the product CLI. They exercise startup, authenticated attachment to a running host, invalid credentials, competing processes, cross-profile writer denial, outage and restart. A real pinned Hermes setup hook provisions an isolated profile and the provider attaches to the Rust process, recovers after its exit and leaves the REL unchanged during source callbacks. Separate profiles with distinct REL writers retain the same explicitly selected PHY identity. Unit tests cover stale attach completion, transport authentication and framing, durable registry conflicts and actual Root status.
+The process tests create native owners with the product CLI. They exercise startup, authenticated attachment to a running host, invalid credentials, competing processes, cross-profile writer denial, outage and restart. A real pinned Hermes setup hook provisions an isolated profile and the provider attaches to the Rust process and recovers after its exit. The HP03 test supplies no source rows and verifies that the REL stays unchanged. Separate profiles with distinct REL writers retain the same explicitly selected PHY identity. Unit tests cover stale attach completion, transport authentication and framing, durable registry conflicts and actual Root status.
 
 The original HP03 gate passed 16 Rust tests and 311 Python tests with the historical canary pin and real-process probes enabled. The architecture guard reported 23 production packages and 76 production dependency edges. All runs used synthetic owners under the local plugin worktree.
 
@@ -111,11 +111,11 @@ The detached Hermes checkout resolves `v0.23.0` to `2bd378ed1b8d6bf2192cb26e0a55
 
 Run the standalone and HP03 process commands above from the repin worktree. The current HP04 product checkpoint is `b31aaee577fc0e1caa3b9d7913c18f8155c4f972` in the sibling `Reliquary` checkout. It descends from the earlier HP02 and HP03 proof base and supplies the copied-source public Root APIs for the stable rerun.
 
-The repin run on standalone integration base `c8aa2a3` passed 333 Python tests with zero skips, including real HP03 setup, attach, revision and credential rejection, duplicate writer and lease checks, profile and owner routing, and restart recovery. The locked offline Rust host suite passed 16 tests, including exact-once selected returns and copied-source replay after reopen. Rust formatting and the product architecture guard passed. The latter reported 23 production packages and 76 dependency edges.
+The integrated run with HP04 checkpoint `074d49b` passed 337 Python tests with zero skips. HP03 proved real setup and attachment, stable revision acceptance, historical revision and wrong credential rejection, duplicate writer and lease behavior, profile and owner routing, and restart recovery. The locked offline Rust host suite passed 18 tests, including exact-once selected returns and copied-source replay after reopen. Rust formatting and the product architecture guard passed. The latter reported 23 production packages and 76 dependency edges.
 
-The pinned source probes reverified stable completed-turn identity, timestamps and copy redaction, cold observer discovery, committed archive and delete, affected IDs, and profile rebinding. The completed HP04 capture and outbox tests passed in this run. The cross-process HP04 gate is tracked separately below.
+The pinned source probes reverified stable completed-turn identity, timestamps and copy redaction, cold observer discovery, committed archive and delete, affected IDs, and profile rebinding. The real HP04 process run reproduced a Windows long-path error after Root had staged a copy. The host now canonicalizes the receipt directory before the atomic rename. The same process test and a Windows regression for long receipt paths passed on rerun.
 
-From the repin worktree, the bounded upstream dashboard suite passed 11 tests. It exercised manifest discovery, authenticated plugin routes, secondary-profile asset selection and the real route's profile secret scope. The SDK version and globals were checked in stable source.
+From the repin worktree, the bounded upstream dashboard checks passed 22 tests across two runs. They exercised manifest discovery, authenticated plugin routes, secondary-profile assets and secrets, the plugin WebSocket Host and Origin gate, and token-page CORS. The SDK version and globals were checked in stable source. The separate canonical archive and delete observer test also passed.
 
 ```powershell
 $hermes = $env:HP01_HERMES_CHECKOUT
@@ -133,18 +133,23 @@ python -B -m pytest -q -rs -p no:cacheprovider -c "$hermes/pyproject.toml" --bas
   "$hermes/tests/hermes_cli/test_web_server.py::TestDashboardPluginManifestExtensions" `
   "$hermes/tests/hermes_cli/test_web_server_plugin_secret_scope.py" `
   "$hermes/tests/hermes_cli/test_plugin_secondary_profile_host.py::test_browser_assets_follow_the_selected_profile"
+python -B -m pytest -q -rs -p no:cacheprovider -c "$hermes/pyproject.toml" --basetemp .pytest_tmp `
+  "$hermes/tests/hermes_cli/test_web_server_host_header.py::test_plugin_websockets_run_the_core_host_origin_gate" `
+  "$hermes/tests/hermes_cli/test_web_server_host_header.py::test_token_page_and_route_map_are_not_cors_readable_from_another_local_port"
+python -B -m pytest -q -rs -p no:cacheprovider -c "$hermes/pyproject.toml" --basetemp .pytest_tmp `
+  "$hermes/tests/hermes_state/test_session_delete_hook.py::test_every_delete_and_archive_path_fires_once_after_commit"
 ```
 
-## HP04 provisional local verification
+## HP04 stable host rerun
 
-The current implementation was exercised against the same audited Hermes pin used for HP03 and the sibling Reliquary commit `b31aaee577fc0e1caa3b9d7913c18f8155c4f972`. Use the HP03 local build and Python commands above to enable the HP04 process probes. Run `cargo test --manifest-path ../Reliquary/tests/external-consumer/Cargo.toml --locked --offline --test operational_processing` for the independent Root extension proof. Tests use synthetic owner files and deterministic loopback endpoints.
+HP04's implemented behavior was reverified against v0.23.0 with the HP03 build and Python commands above. The run included all three process tests in `tests/test_hp04_host.py`, plus the pinned egress and observer probes and durable outbox tests. Tests use synthetic owner files and deterministic loopback endpoints.
 
-The probes cover the pinned privacy projection, stable logical IDs and timestamps, real provider delivery, completed native append, exact older receipt replay, restart before acknowledgment, a late same-session rewind callback, the cold archive/delete observer and native terminal replay. The product workspace passed all 668 tests. The three detached Root processing tests passed, including completed append and divergent maintenance replay. The architecture guard still reports 23 production packages and 76 production edges.
+The run covered real provider delivery, completed native append, idempotent replay after restart before acknowledgment, late same-session rewind callbacks, committed archive and delete, bulk and lineage affected IDs, and rejection of stale work after a terminal fence. Prior HP04 product evidence includes 668 workspace tests and three detached Root processing tests for completed append and divergent maintenance replay. The independent Root extension proof uses `cargo test --manifest-path ../Reliquary/tests/external-consumer/Cargo.toml --locked --offline --test operational_processing`.
 
-A replay of the private outbox covers delivered callback data. Provider-equivalent history export and a durable lifecycle replay interface are still needed for events that never reached it. HP04 acceptance remains provisional on this pin.
+The stable-host compatibility gate is green for delivered source work. HP04 final acceptance remains provisional because stable Hermes supplies neither a provider-equivalent history export nor a durable lifecycle cursor for missed callbacks.
 
 ## Remaining gates
-- HP04 final acceptance requires the stable-host integration run of the coherent HP04 checkpoint. Recovery of already queued work is covered separately from catch-up for turns and lifecycle notifications Hermes never delivered. The stable provider API has no supported catch-up export or durable lifecycle cursor.
+- HP04 catch-up requires an authorized source export and lifecycle replay interface for events that never reached the outbox.
 - HP05 wires real query/refine/traverse and prefetch. The acceptance test must distinguish candidate inspection from returned results and prove retrieval is recorded once.
 - HP06 packages and validates the standalone plugin against an isolated Hermes profile. HP07 and HU04 require real-service evidence. HP07 additionally requires an authorized real model run.
 
