@@ -2,15 +2,15 @@
 
 ## Purpose
 
-Record the actual pinned Hermes lifecycle, identity, privacy and request-handoff surfaces without claiming unavailable capabilities.
+Record the pinned Hermes lifecycle, source identity, privacy and plugin surfaces used by the Reliquary integration.
 
 ## Overview
 
-Status: source audit and deterministic contract fixtures, dated 2026-11-07. No Hermes core changes or deployable plugin are included.
+The 2026-11-08 audit repins the HP01 contract to a Hermes revision with the generic archive/delete observer. Focused source probes exercise the pinned persistence, provider egress and lifecycle dispatch paths against synthetic history in an isolated profile.
 
 ## Pin and source authority
 
-Audited checkout: `hermes-agent` at `11c1f1bbe65fca1cf8bcaa005443473a67915712`, clean before work. Standalone repository baseline: `c54c4298aa8996ca631d07534c97f202f619abb6`, branch `hp01/freeze-hermes-contract`. Planning authority is the native 2.1 implementation spec linked by the README, not historical 2.0 corpus or an assumed compatible reader.
+The audited Hermes revision is upstream `cf4f3a7396814ffcaef69d9af09f7cfdade3ddbe` in the detached `hermes-agent-reliquary-hp01-pin` worktree. The standalone contract started at `428f297604afc4fe43765001e9d4939bae617861` on `hp01/freeze-hermes-contract`. The native 2.1 implementation spec linked by the README governs this audit.
 
 The source observations below apply to this SHA only. `Discovery.validate` rejects another host SHA or protocol version; upgrade requires a new audit and contract test run. It does not attempt compatibility fallback.
 
@@ -21,33 +21,35 @@ The source observations below apply to this SHA only. `Discovery.validate` rejec
 - Required `name`, `is_available`, `initialize(session_id, **kwargs)` and `get_tool_schemas`. `is_available` is configuration/dependency-only, with no network.
 - `initialize` gets profile-scoped `hermes_home`, platform, and possibly `agent_context`, agent identity/workspace, parent session and user IDs. No default-home fallback is permitted.
 - `prefetch(query, *, session_id='')` returns formatted context. `queue_prefetch` queues background recall. `recall_status` describes only the latest actual prefetch.
-- `sync_turn(user_content, assistant_content, *, session_id='', messages=None, turn_author=None)` receives OpenAI-style messages and per-turn author `{id, name, is_bot}`. It has **no explicit source revision or branch argument**, no durable import receipt, and no model acceptance acknowledgment.
+- `sync_turn(user_content, assistant_content, *, session_id='', messages=None, turn_author=None)` receives OpenAI-style messages and per-turn author `{id, name, is_bot}`. The callback supplies no explicit branch ID, source revision or durable Reliquary import receipt.
 - Optional `on_turn_start`, `on_session_end`, `on_session_switch(new_session_id, *, parent_session_id='', reset=False, rewound=False, **kwargs)`, pre-compression and parent-side delegation hooks. A switch/rewind notification is not itself an authoritative source export.
 - `get_config_schema`/`save_config` support provider setup. The generic setup path is `hermes memory setup` and supported `post_setup`, not a parallel Reliquary command.
 
-`agent/memory_manager.py::initialize_all` injects `hermes_home`. `sync_all` redacts provider egress, including transcript/tool content, and forwards `messages`/`turn_author` only to accepting signatures. It serializes background writes. A plugin must not bypass that privacy boundary by rereading unredacted data.
+`agent/memory_manager.py::initialize_all` injects `hermes_home` and binds the manager to that profile. `agent/memory_caller_scope.py::caller_scope` fences tool/lifecycle calls to the owning home and refuses unresolved callers in multiplexed processes. `sync_all` serializes background writes and forwards redacted transcript/tool content and supported `turn_author` metadata. The integration copies only the authorized provider egress.
 
 `agent/memory_provider.py::ctx_bound` and `spawn_context_thread` propagate caller contextvars. The manager uses these for worker/prefetch work. The test suite imports these real helpers from the pinned, dependency-free ABC module and verifies isolation across worker threads. No full Hermes application import is performed.
 
-Non-primary `subagent`, `cron` and `flush` contexts do not duplicate primary ingestion. Delegation is observed only through the parent-authorized path. Group participants are resolved every turn; startup user identity does not make every participant the operator.
+The primary context owns ingestion. A delegation result enters through its parent-authorized path. Per-turn author and group metadata describe the source actor. The explicitly active PHY supplies the stable Reliquary `user_id`. Content without trusted attribution to that user stays REL-only, including unknown or unmapped participants.
 
 ## Source identity and copy limitations
 
 `agent/message_metadata.py:27-35` defines `message_uid` as the durable logical message ID, retained through host copies, rotation, compaction and rewrite, and restored unconditionally. `_row_id` is a physical row ID, reissued per copy and optionally exposed. A content hash is a revision witness, not a replacement message ID. Identical text can belong to different logical messages.
 
-`hermes_state_messages.py` persists IDs at insertion and exposes `get_messages`/`get_messages_as_conversation`. These are audited source facts, **not permission for the plugin to open Hermes SQL or private stores**. HP04 must choose a supported authorized source-export/reader path that preserves the same IDs, timestamps and privacy-filtered view. The callback does not guarantee all original per-message author metadata or a complete durable canonical transcript. Missing UID, timestamp, trustworthy actor attribution, revision or branch cannot be repaired by guessing.
+`agent/turn_finalizer.py::finalize_turn` persists the normal completed turn before passing the live `messages` list to `run_agent.py::_sync_external_memory_for_turn`. The batch persistence path mints each new `message_uid` and sets the stored timestamp in `hermes_state_messages.py::_insert_message_rows`. After commit, `agent/session_persistence.py::_db_flush_write` calls `agent/transcript_repair.py::sync_flushed_message_markers` to copy both fields onto the live messages. The turn-sync adapter forwards the list to `MemoryManager.sync_all`, whose egress scrubbing preserves these fields. `tests/test_pinned_source.py` verifies that the stored rows, live messages and provider callback agree on both IDs and timestamps and that the provider receives redacted content. The probe executes the source-defined adapter and real persistence and manager code without starting a model turn.
 
-Version-one copied snapshots explicitly carry nullable `branch_id` and `source_revision`. Null means unavailable in the current callback, not a fabricated default branch/revision. `snapshot_digest` covers the exact permitted copied view with profile/session namespace and original roles/times. It is not a canonical unredacted-source revision. Restart must reproduce the same authorized view and verify IDs/digest before publication. Additional branch/revision guarantees need a supported export capability and tests.
+The live callback supplies a permitted view of the current turn. HP04 must establish an authorized restart/catch-up interface that preserves IDs, original times and the privacy-filtered view. The state-store reader code is audit evidence. The plugin uses supported provider and source-export interfaces for all reads. Messages missing required UID/time fail copy validation. Unverified actor attribution stays REL-only. Missing branch and revision remain null, and the snapshot digest covers only the permitted copied view with its profile/session namespace, IDs, roles and times.
 
-A callback job is merely queued, not a durable checkpoint. Until supported normalization/import and a durable receipt exist, no real ingestion or strict compaction checkpoint is claimed.
+A queued callback is an input to the import workflow. The durable checkpoint is the accepted product import receipt.
 
-## Model-request hooks: observed gap
+## Archive and delete observer
 
-`agent/turn_api_request.py::_fire_pre_api_request_hook` runs before dispatch, after several request transforms. Its `request` field calls `agent/api_request_hooks.py::_api_request_payload_for_hook`. The sanitizer redacts sensitive keys and caps string, sequence, depth and total payload size. Some request messages are shallow observability copies. The pinned memory-provider guide also documents optional prefetch spilling to a head/tail preview plus private file path; returning the original context is not evidence that all of it reached the model. Later transport/backend transforms may still differ. This is not a proof of successful accepted model payload.
+Hermes exposes `on_session_delete` as a generic plugin observer. A standalone provider can register it alongside `register_memory_provider` through the provider collector's `register_hook` support in `plugins/memory/__init__.py`. The host emits committed deliberate archive and hard delete through the same observer with `reason="archive"` or `reason="delete"`. The payload includes `session_id`, `reason`, the store's profile, optional `deleted_ids` for a lineage or bulk operation and optional `sessions_dir`. It carries no transcript content.
 
-`agent/turn_response_intake.py::_fire_post_api_request_hook` carries response/usage/assistant fields and request identifiers, but **no exact request body/content manifest**. `api_request_error` carries sanitized request/error observability, not positive acceptance proof. Correlating pre and post events or guessing from response text does not close the gap.
+`hermes_state_sessions.py::set_session_archived` and the canonical runtime sidebar mutation emit after the archive commits. The single/bulk delete, runtime delete and retention paths share the emitter in `hermes_state_common.py`. It binds observer dispatch to the affected store's profile. The local probe exercises real archive/delete transitions through the real provider registration and hook dispatch. It reads the synthetic session from within the observer to prove post-commit delivery. The pinned upstream suite `tests/hermes_state/test_session_delete_hook.py` also covers lineage, bulk, sweeps, runtime mutations, repeated archive and observer failure isolation.
 
-No audited generic callback supplies the exact successfully accepted final model content and terminal failed/cancelled/uncertain outcomes. `PINNED_HANDOFF_API_VERSION` is therefore `None`. Current-host retrieval is non-reinforcing even when a fixture fabricates an accepted-looking event. The proposed generic handoff-v1 requirement is in [handoff-contract.md](handoff-contract.md), not an implemented Hermes API.
+The Reliquary effect for a deliberate archive and a delete is the same copied-source tombstone. HP04 owns durable delivery, profile and source binding, catch-up after missed events, and the fence that prevents older queued copies from reviving a source. The pinned observer runs in-process and can fail open. A host notification alone supplies no durable Reliquary checkpoint.
+
+Hermes' reversible idle auto-archive and unarchive are silent in the pinned observer. If idle auto-archive is included in the integration's archive policy, the minimal generic host addition is to publish the IDs changed by `_auto_archive_lineage` through the same profile-scoped post-commit observer. It must preserve the idle-archive provenance and emit only for the actual transition. The plugin has no state-store polling path.
 
 ## Plugin discovery and actual commands
 
@@ -62,7 +64,7 @@ hermes plugins validate /path/to/your-plugin --install-deps
 
 These commands are reserved for HP06 against an actual packaged plugin in an isolated profile. HP01 has no manifest/registration/dependencies to validate and does not run either command or provision an environment. `--install-deps` would mutate an environment and is not part of this bounded task.
 
-The actual Hermes suite runner is `scripts/run_tests.sh`, not bare pytest. Relevant existing suites include `tests/agent/test_memory_provider.py`, `test_memory_session_switch.py`, `test_memory_sync_redaction.py`, `tests/plugins/memory/test_discovery_sources.py` and `test_provider_threads_inherit_profile.py`. No Hermes tests or caches were modified/run. The standalone HP01 pytest command is separate and frozen in [verification.md](verification.md).
+The Hermes suite runner is `scripts/run_tests.sh`. Relevant suites include `tests/agent/test_memory_provider.py`, `test_memory_session_switch.py`, `test_memory_sync_redaction.py`, `tests/plugins/memory/test_discovery_sources.py`, `test_provider_threads_inherit_profile.py` and `tests/hermes_state/test_session_delete_hook.py`. The standalone HP01 tests use the pinned Hermes checkout and the installed host runtime dependencies for the source probes. Their child profiles and synthetic databases live under the plugin test temp directory. See [verification.md](verification.md) for the standalone command.
 
 ## Pinned web-dashboard loader, SDK and auth
 
@@ -76,7 +78,7 @@ These existing host gates are necessary but not Reliquary owner authorization. T
 
 ## Product boundary audit
 
-Accepted product target `Reliquary-rebuild/src/lib.rs` exposes opaque owner handles, trusted host admission, management/maintenance and selected queue/host types. It is not a complete plugin retrieval/worker/edit/confirmed-consumption facade. HP02 must expose narrow existing workflows through public Root/Gateway/Application operations. The future host may depend on public `reliquary-memory` only for domain work, not lower mutable stores. This contract adds no Rust package or production dependency edge.
+The accepted G4 product exposes opaque owner handles, trusted host admission, management/maintenance and selected queue/host types. HP02 must expose narrow existing workflows through public Root/Gateway/Application operations. The temporary `HACK` receipt bridge belongs inside the Rust host at the selected-Memory result-return boundary. The standalone Python provider transport carries retrieval and source operations. The Rust host depends on public `reliquary-memory` for domain work.
 
 ## Related docs
 
