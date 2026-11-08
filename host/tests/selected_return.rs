@@ -10,11 +10,13 @@ fn selected_return_commits_once_and_reopen_suppresses_duplicate_return() {
     let fixture = Fixture::new();
     let mounted = fixture.mount();
     fixture.seed(&mounted);
+    drop(mounted);
     let unchanged = fixture.rel_len();
     let initial_proof = Rel::open(&fixture.rel_path)
         .unwrap()
         .current_historical_proof()
         .unwrap();
+    let mounted = fixture.mount();
 
     let search = mounted
         .instance
@@ -164,7 +166,9 @@ fn unenrolled_selection_is_not_released_without_a_receipt() {
     let fixture = Fixture::new();
     let mounted = fixture.mount();
     fixture.seed(&mounted);
+    drop(mounted);
     let before = fs::read(&fixture.rel_path).unwrap();
+    let mounted = fixture.mount();
     let turn = mounted
         .instance
         .begin_retrieval(mounted.owner, "unenrolled-turn", RetrievalMode::Deliver)
@@ -186,6 +190,9 @@ fn unenrolled_selection_is_not_released_without_a_receipt() {
         SelectedReturn::new(&mounted.admission, &mounted.instance, &turn, &prepared).unwrap();
     assert!(boundary.return_selected().is_err());
     assert!(boundary.return_selected().is_err());
+    drop(boundary);
+    drop(turn);
+    drop(mounted);
     assert_eq!(fs::read(&fixture.rel_path).unwrap(), before);
 }
 
