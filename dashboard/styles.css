@@ -1,0 +1,48 @@
+.rly-dashboard {
+  color: var(--color-foreground, #17212b);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin: 0 auto;
+  max-width: 1680px;
+  min-height: 75vh;
+  padding: 1.25rem;
+}
+.rly-header, .rly-toolbar, .rly-view-switch, .rly-memory-button, .rly-graph-node, .rly-fixture-pill {
+  align-items: center;
+  display: flex;
+}
+.rly-header, .rly-toolbar { justify-content: space-between; gap: 1rem; }
+.rly-header h1 { margin: 0; }
+.rly-eyebrow { color: var(--color-muted-foreground, #64748b); font-size: .7rem; letter-spacing: .12em; margin: 0 0 .35rem; }
+.rly-subtitle, .rly-muted, .rly-page-limit, .rly-footer { color: var(--color-muted-foreground, #64748b); }
+.rly-subtitle { margin: .3rem 0 0; }
+.rly-fixture-pill { background: var(--color-muted, #eef2f7); border-radius: 999px; font-size: .8rem; padding: .45rem .75rem; }
+.rly-live-notice { background: var(--color-muted, #eef2f7); border-left: 3px solid var(--color-primary, #168b83); border-radius: .25rem; padding: .7rem .9rem; }
+.rly-layout { display: grid; gap: 1rem; grid-template-columns: minmax(190px, 230px) minmax(280px, 1fr) minmax(250px, 340px); }
+.rly-sidebar, .rly-main, .rly-inspector, .rly-status-card { background: var(--color-card, #fff); border: 1px solid var(--color-border, #dbe2e8); border-radius: .5rem; min-width: 0; padding: 1rem; }
+.rly-sidebar h2, .rly-inspector h2 { font-size: 1rem; margin-top: 0; }
+.rly-sidebar label { display: block; font-size: .78rem; font-weight: 600; margin-bottom: .35rem; }
+.rly-sidebar select { background: var(--color-background, #fff); border: 1px solid var(--color-border, #dbe2e8); border-radius: .35rem; color: inherit; max-width: 100%; padding: .5rem; width: 100%; }
+.rly-owner-meta, .rly-detail-meta { display: grid; gap: .4rem; margin: 1rem 0; }
+.rly-meta-row { border-bottom: 1px solid var(--color-border, #dbe2e8); display: flex; font-size: .78rem; gap: .75rem; justify-content: space-between; padding: .35rem 0; }
+.rly-meta-row dt { color: var(--color-muted-foreground, #64748b); }
+.rly-meta-row dd { margin: 0; max-width: 65%; overflow-wrap: anywhere; text-align: right; }
+.rly-status-card { background: var(--color-muted, #eef2f7); display: grid; gap: .3rem; margin-top: 1rem; padding: .75rem; }
+.rly-status-card span, .rly-status-card small { color: var(--color-muted-foreground, #64748b); }
+.rly-view-switch { gap: .35rem; }
+.rly-view-switch button, .rly-memory-button, .rly-graph-node { background: transparent; border: 1px solid var(--color-border, #dbe2e8); border-radius: .35rem; color: inherit; cursor: pointer; padding: .5rem .7rem; }
+.rly-view-switch button[aria-pressed="true"], .rly-memory-button.is-selected, .rly-graph-node.is-selected { border-color: var(--color-primary, #168b83); outline: 2px solid color-mix(in srgb, var(--color-primary, #168b83) 22%, transparent); }
+.rly-page-label, .rly-page-limit { font-size: .78rem; }
+.rly-memory-list, .rly-graph-list, .rly-provenance-list { display: grid; gap: .6rem; list-style: none; margin: 0; padding: 0; }
+.rly-memory-button { align-items: flex-start; flex-direction: column; text-align: left; width: 100%; }
+.rly-memory-button span, .rly-memory-button small, .rly-provenance-list span { color: var(--color-muted-foreground, #64748b); }
+.rly-graph-node { justify-content: center; min-height: 3rem; min-width: 10rem; }
+.rly-empty { color: var(--color-muted-foreground, #64748b); padding: 2rem; text-align: center; }
+.rly-owner-label { font-size: .8rem; font-weight: 600; overflow-wrap: anywhere; }
+.rly-inspector h3 { font-size: .85rem; margin-bottom: .4rem; }
+.rly-body { line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.rly-provenance-list li { border-left: 2px solid var(--color-border, #dbe2e8); display: grid; gap: .3rem; overflow-wrap: anywhere; padding-left: .65rem; }
+.rly-provenance-list blockquote { border-left: 2px solid var(--color-primary, #168b83); margin: .2rem 0; padding-left: .6rem; white-space: pre-wrap; }
+.rly-footer { font-size: .75rem; }
+@media (max-width: 950px) { .rly-layout { grid-template-columns: minmax(0, 1fr); } }

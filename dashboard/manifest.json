@@ -1,0 +1,13 @@
+{
+  "name": "reliquary-hermes",
+  "label": "Reliquary",
+  "description": "Owner-scoped Reliquary dashboard contract shell",
+  "icon": "Database",
+  "version": "0.1.0",
+  "tab": {
+    "path": "/reliquary",
+    "position": "after:skills"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}
