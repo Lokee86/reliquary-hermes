@@ -59,4 +59,4 @@ Owner changes cancel requests and clear private selections/cache before new rend
 
 ## Notes
 
-Schema, grant, cursor and receipt tests are deterministic contract evidence. Actual Hermes authentication/profile derivation, loopback service, Root operations, source authorization, cursor registry, product receipts, dashboard bundle/manifest and React rendering are unimplemented. HU01 can use these typed fixtures; its real loader/donor/build/browser acceptance remains a separate ticket. HU04 still needs real authenticated service/provider behavior and all required actions.
+Schema, grant, cursor and receipt tests are deterministic contract evidence. HP02 verifies the named Root operations independently. HU01 can use the typed fixtures while building the dashboard bundle, manifest and React components. HU04 verifies the authenticated service, profile and source authorization, cursor registry, and end-to-end handling of product receipts.

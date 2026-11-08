@@ -6,7 +6,7 @@ Record reproducible checks for the standalone provider and dashboard contracts.
 
 ## Overview
 
-HP01 verifies the pinned Hermes interfaces and the Python provider, owner routing and copied-source fixtures. The first HP02 slice verifies the selected-return bridge against the real Root API and its durable REL receipt.
+HP01 verifies the pinned Hermes interfaces and the Python provider, owner routing and copied-source fixtures. HP02 verifies the selected-return bridge, copied-source import and dashboard product operations through the public Root API.
 
 ## Standalone checks
 
@@ -33,29 +33,53 @@ The checkout must be at the exact SHA in [host audit](host-audit.md). Without `H
 
 The integrated HP01 suite passed all 290 tests with the upstream pin enabled. The shared minimal-profile documentation check and Git whitespace check passed.
 
-The HP02 dashboard contract update passed all 297 Python tests with the same Hermes pin. It verifies correction through an immutable successor, terminal results without synthetic body IDs, mutation cut advancement within one history generation, and community member paging at an exact generation.
+The HP02 dashboard contract passed all 298 Python tests with the same Hermes pin. It verifies correction through an immutable successor, terminal results without synthetic body IDs, REL-only management authority, mutation cut advancement within one history generation, and community member paging at an exact generation.
 
 ## HP02 host and product facade verification
 
-Use the sibling `Reliquary` checkout at `9d2b333e2412b120bcd797c4c842b26781ea6c8d` and a Rust toolchain with the offline dependency cache available. From this repository in PowerShell:
+Use the sibling `Reliquary` checkout at `8363ec377f044c0e00a699266e14090284829477` and a Rust toolchain with the offline dependency cache available. From this repository in PowerShell:
 
 ```powershell
 $hostScratch = Join-Path (Get-Location) 'host\.test-tmp'
 New-Item -ItemType Directory -Force -Path $hostScratch | Out-Null
 $env:TEMP = $hostScratch
 $env:TMP = $hostScratch
+$env:TMPDIR = $hostScratch
 cargo fmt --manifest-path host/Cargo.toml --check
 cargo test --manifest-path host/Cargo.toml --locked --offline -j 1
 python -B ../Reliquary/scripts/check_architecture.py
 ```
 
-The external consumer seeds a Freshness-enrolled Memory through public Root import and processing. A deterministic loopback decision endpoint chooses the selection. The proof observes the REL before inspection and after the first return. Two concurrent calls share one return object. Exact replay through a newly opened Gateway preserves the resulting REL byte for byte. The negative cases cover a revoked credential, a truncated projection and mismatched delivery evidence. It verifies that the bridge returns the exact selected Memory set and records its durable receipt once.
+The host proof seeds a Freshness-enrolled Memory through public Root import and processing. A deterministic loopback decision endpoint chooses the selection. Candidate and inspection reads leave the REL unchanged. Two concurrent calls share one return object and produce one content return. The Root historical proof counts one additional retained record. Exact replay through a newly opened Gateway preserves that proof and the resulting REL byte for byte. The negative cases cover a revoked credential, a truncated projection, mismatched delivery evidence and a selected Memory without Freshness enrollment.
 
-Seven host tests passed on the pinned product checkout. The copied-source cases covered source identity, author and branch metadata, REL-only processing, foreign binding denial and terminal replay after reopen. Two detached Root-only checked-create tests passed. Four OC06 tests passed using the same offline dependency set and the tracked product test source. The product lock's Archive suite passed 25 tests. The architecture guard reported 23 packages and 76 production edges.
+The copied-source tests cover source identity, author and branch metadata, REL-only processing, foreign binding denial and terminal replay after reopen. The Root-only product tests cover checked creation, correction, retirement, association and community management. The mixed-write test reopens a single owner and replays four prior mutation receipts without changing its bytes. The maintenance regressions cover reference closure, pruning recovery and safe refusal when a rewrite or divergent merge cannot preserve write authority.
+
+The local suites passed 8 Rust host tests, 668 product workspace tests, 17 CLI tests and 14 detached Root consumer tests. The architecture guard reported 23 production packages and 76 production dependency edges. The composed G4 gate passed two matching semantic runs and the separate cohort-dependent Root consumer test. Fresh processes checked 48 authored turns and recorded 27 CLI observations with unchanged source bytes. The runner checks both supported PHY reads and rejection when a CLI command targets the wrong owner kind.
+
+The selected-return shim requires the exact preview and an accepted Freshness write for the whole selected set. A truncated projection or a selection containing an unenrolled Memory fails before content is released. Directly authored Memories, including correction successors, currently lack automatic Freshness enrollment. Community reads and rename require an accepted current partition. Exact source-turn bytes are available for authorized provenance, while extraction-quote offsets are unavailable. These acceptance runs used deterministic local endpoints.
+
+From the sibling product root, use the existing offline G4, GM and P01 checks. The composed G4 script creates two fresh deterministic cohorts and exercises the real CLI and Root-only consumer in separate processes. All generated owner files and logs stay in the local repository.
+
+```powershell
+$productScratch = Join-Path (Get-Location) '.test-tmp\hp02-final'
+New-Item -ItemType Directory -Force -Path $productScratch | Out-Null
+$env:TEMP = $productScratch
+$env:TMP = $productScratch
+$env:TMPDIR = $productScratch
+python -B scripts/check_architecture.py
+cargo fmt --all --check
+cargo fmt --manifest-path cli/Cargo.toml --check
+cargo fmt --manifest-path tests/external-consumer/Cargo.toml --check
+cargo check --workspace --locked --offline
+cargo test --workspace --locked --offline -- --test-threads=1
+cargo test --manifest-path cli/Cargo.toml --locked --offline -- --test-threads=1
+cargo check --manifest-path tests/external-consumer/Cargo.toml --locked --offline
+cargo test --manifest-path tests/external-consumer/Cargo.toml --locked --offline -- --test-threads=1
+& ./scripts/run_g4_acceptance.ps1
+```
 
 ## Remaining gates
 
-- HP02 now covers selected retrieval return, initial copied-source staging and tombstoning, checked manual creation, filtered Memory summaries and bounded graph neighborhoods. Memory correction requires an atomic successor workflow under ADR 0013 and a matching dashboard result contract. Broader retirement, association edits, persistent community names, and the full G4/GM/P01 gate remain open.
 - HP03 implements the authenticated loopback service and provider setup, persistent general/project session mappings, active PHY binding, single-writer lease and restart behavior.
 - HP04 implements supported source recovery, durable copied imports, post-commit lifecycle handling, retry reconciliation and tombstone persistence. Hermes stays the history and resume authority. Reliquary maintenance owns pruning.
 - HP05 wires real query/refine/traverse and prefetch. The acceptance test must distinguish candidate inspection from returned results and prove retrieval is recorded once.

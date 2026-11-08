@@ -91,9 +91,11 @@ DTO validation does not prove a server actually committed a mutation. Durable re
 - Credential supplied to the fixture: 32-512 ASCII characters. Actual host provisioning must use cryptographically random material and restrictive private storage.
 - Scope/caches bind profile + principal + session + turn + local invalidation epoch. Epoch is adapter cache state, never a fabricated Hermes branch or source revision. Resume/switch/branch/rewind increments it and invalidates old prefetch/delivery state. Profile changes clear bindings, credentials and caches.
 
-## HP02 mapping requirement
+## HP02 product mappings
 
-Map named operations to public Root, Gateway and Application methods backed by existing owner workflows. The [dashboard contract](ui-contract.md) defines the separate inspection and mutation vocabulary.
+The host uses `Instance::begin_retrieval`, `memory_query`, `refine_query` and `traverse_graph` for the existing retrieval workflow. `Instance::processing_status`, `live_stage_status` and `host_operation_status` expose owner work through the authenticated public API. The dashboard uses `WorkspaceManagement::inspect` for bounded, cut-bound reads. The [dashboard contract](ui-contract.md) defines its separate mutation vocabulary.
+
+The REL management facade exposes `create_memory_at_cut`, `correct_memory_at_cut`, `retire_memory_at_cut`, `change_memory_association` and `rename_community_at_cut`. The service will translate their durable receipts into the dashboard result DTOs. The community projection requires a current accepted partition and returns unavailable when one is absent.
 
 ### Copied-source product boundary
 

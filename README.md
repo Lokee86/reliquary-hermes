@@ -1,8 +1,8 @@
 # Reliquary Hermes
 
-This repository contains the frozen HP01 Python contracts and the first HP02 Rust host component. The Rust bridge records selected retrieval through Reliquary's public Root APIs. Provider installation and the loopback service belong to later tickets.
+This repository contains the HP01 Python contracts and the HP02 Rust host bridge. The bridge records selected retrieval through Reliquary's public Root APIs. HP02 also exposes the copied-source and dashboard workflows on the sibling product checkout. Provider installation and the loopback service belong to later tickets.
 
-Hermes remains canonical history. Reliquary receives privacy-filtered, source-ID-preserving copied snapshots through future supported import operations. A copied snapshot never becomes a Hermes resume source.
+Hermes remains canonical history. The product facade accepts an initial privacy-filtered, source-ID-preserving snapshot and its exact replay. Hermes resumes from its own history. HP04 owns the continuous copy and recovery service.
 
 The Reliquary integration maintainers own the contracts, the host bridge and the staged verification gates.
 
@@ -12,7 +12,7 @@ The Reliquary integration maintainers own the contracts, the host bridge and the
 - [Pinned host audit](docs/host-audit.md): actual APIs, source identity, profile/thread behavior and validation commands.
 - [Protocol and authority](docs/protocol.md): version-one DTOs, limits, actor grants and copied-snapshot rules.
 - [Web-dashboard DTOs](docs/ui-contract.md): standard typed schema for all required HU views and user actions.
-- [Verification and remaining gates](docs/verification.md): exact test commands, observed results and HP02+ gaps.
+- [Verification and remaining gates](docs/verification.md) records the test commands, observed results and remaining integration gates.
 
 Hermes is pinned to upstream `cf4f3a7396814ffcaef69d9af09f7cfdade3ddbe`. The canonical planning files are in the Reliquary Git repository at `bd1acf2c10ab3ffb2887928b8497608fcd5c21f7:docs/architecture/`, including `hermes-reliquary-plugin-implementation-spec-2026-11-06.md` and the post-G4 execution DAG. The accepted G4 product evidence is anchored at `a3c3a964`.
 
