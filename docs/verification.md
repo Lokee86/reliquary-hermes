@@ -33,6 +33,8 @@ The checkout must be at the exact SHA in [host audit](host-audit.md). Without `H
 
 The integrated HP01 suite passed all 290 tests with the upstream pin enabled. The shared minimal-profile documentation check and Git whitespace check passed.
 
+The HP02 dashboard contract update passed all 297 Python tests with the same Hermes pin. It verifies correction through an immutable successor, terminal results without synthetic body IDs, mutation cut advancement within one history generation, and community member paging at an exact generation.
+
 ## HP02 host and product facade verification
 
 Use the sibling `Reliquary` checkout at `9d2b333e2412b120bcd797c4c842b26781ea6c8d` and a Rust toolchain with the offline dependency cache available. From this repository in PowerShell:

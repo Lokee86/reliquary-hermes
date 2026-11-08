@@ -64,7 +64,9 @@ def arguments(op):
         "ui.memory_history": {"memory_id": "memory-1", "cursor": None, "limit": 20},
         "ui.provenance": {"memory_id": "memory-1", "revision": "1"},
         "ui.graph_page": {"seed_ids": ["memory-1"], "community_id": None, "depth": 1, "node_limit": 500, "edge_limit": 1000, "cursor": None},
-        "ui.community_list": {"cursor": None, "limit": 20}, "ui.operational_status": {},
+        "ui.community_list": {"cursor": None, "limit": 20},
+        "ui.community_members": {"community_id": "community-1", "expected_generation": "1", "cursor": None, "limit": 20},
+        "ui.operational_status": {},
         "ui.memory_create": {"title": "Memory title", "body": "Body", "category": "fact", "memory_type": "semantic"},
         "ui.memory_edit": {"memory_id": "memory-1", "title": "Memory title", "body": "Body"},
         "ui.memory_retire": {"memory_id": "memory-1", "effect": "retire"},
@@ -95,14 +97,21 @@ def response(op="ui.memory_list"):
         "ui.provenance": {"memory_id": "memory-1", "revision": "1", "sources": [source()]},
         "ui.graph_page": {"routing_state": "available", "nodes": [node(1), node(2)], "edges": [edge()], "next_cursor": None, "truncated": False},
         "ui.community_list": {"metadata_state": "available", "communities": page([community()])},
+        "ui.community_members": {"community_id": "community-1", "generation": "1", "members": page(["memory-1"])},
         "ui.operational_status": {"session_id": "session-1", "source_state": "active", "accepted_source_cursor": "source-cursor-1", "last_completed_receipt": "import-1",
                                   "pending_count": "3", "held_count": "2", "error_count": "1", "worker_state": "held", "latest_recall": recall()},
     }
     if op in MUTATIONS:
-        committed = {"ui.memory_create": detail("2"), "ui.memory_edit": detail("2"), "ui.memory_retire": detail("2", "retired"),
+        replacement = detail()
+        replacement["memory"]["memory_id"] = "memory-2"
+        committed = {"ui.memory_create": detail("2"),
+                     "ui.memory_edit": {"original_memory_id": "memory-1", "original_revision": "2", "replacement": replacement},
+                     "ui.memory_retire": {"memory_id": "memory-1", "revision": "2", "lifecycle": "tombstoned"},
                      "ui.relation_change": edge(), "ui.community_rename": community()}[op]
         if op == "ui.memory_create":
             committed["provenance"] = [{"kind": "user_origin", "principal_id": "principal-a", "created_at_ms": "1794000000000"}]
+        if op == "ui.memory_edit":
+            replacement["provenance"] = [{"kind": "user_origin", "principal_id": "principal-a", "created_at_ms": "1794000000000"}]
         if op == "ui.relation_change":
             committed["cut"] = "cut-2"
         if op == "ui.community_rename":
@@ -111,7 +120,7 @@ def response(op="ui.memory_list"):
     else:
         result = r[op]
     return {"protocol_version": 1, "request_id": "ui-request-1", "operation": op, "status": "ok",
-            "binding": None if op == "ui.owner_sessions" else owner(generation="9007199254740994", cut="cut-2") if op in MUTATIONS else owner(), "result": result}
+            "binding": None if op == "ui.owner_sessions" else owner(cut="cut-2") if op in MUTATIONS else owner(), "result": result}
 
 
 def parse_request(value):
@@ -127,7 +136,7 @@ def context(*, manage=True, authenticated=True, same_origin=True):
 
 
 OPS = ["ui.owner_sessions", "ui.memory_list", "ui.memory_detail", "ui.memory_history", "ui.provenance", "ui.graph_page",
-       "ui.community_list", "ui.operational_status", "ui.memory_create", "ui.memory_edit", "ui.memory_retire", "ui.relation_change", "ui.community_rename"]
+       "ui.community_list", "ui.community_members", "ui.operational_status", "ui.memory_create", "ui.memory_edit", "ui.memory_retire", "ui.relation_change", "ui.community_rename"]
 
 
 @pytest.mark.parametrize("op", OPS)
@@ -340,8 +349,49 @@ def test_manual_create_cannot_forge_hermes_provenance_or_private_actor_identity(
         parse_request(req)
 
 
+def test_memory_correction_returns_a_distinct_user_owned_successor():
+    req, resp = request("ui.memory_edit"), response("ui.memory_edit")
+    committed = resp["result"]["committed"]
+    assert check(req, resp).value["result"]["committed"] == committed
+    committed["replacement"]["memory"]["memory_id"] = "memory-1"
+    with pytest.raises(ContractError, match="ui_immutable_memory_id"):
+        check(req, resp)
+    committed["replacement"]["memory"]["memory_id"] = "memory-2"
+    committed["replacement"]["provenance"][0]["principal_id"] = "foreign-principal"
+    with pytest.raises(ContractError, match="forged_manual_provenance"):
+        check(req, resp)
+    committed["replacement"]["provenance"][0]["principal_id"] = "principal-a"
+    committed["original_revision"] = "1"
+    with pytest.raises(ContractError, match="ui_uncommitted_result"):
+        check(req, resp)
+
+
+def test_terminal_detail_needs_no_fabricated_body_or_title():
+    req, resp = request("ui.memory_detail"), response("ui.memory_detail")
+    req["arguments"]["revision"] = None
+    resp["result"]["memory"].update(lifecycle="tombstoned", title=None, excerpt="", body_id=None)
+    resp["result"]["body"].update(availability="terminal", content=None, body_id=None)
+    resp["result"]["tombstone"] = True
+    assert check(req, resp).value["result"]["body"]["availability"] == "terminal"
+    resp["result"]["memory"]["lifecycle"] = "active"
+    with pytest.raises(ContractError, match="invalid_terminal_memory"):
+        check(req, resp)
+
+
+def test_community_member_page_is_bound_to_exact_generation_and_ids():
+    req, resp = request("ui.community_members"), response("ui.community_members")
+    assert check(req, resp).value["result"]["members"]["items"] == ["memory-1"]
+    resp["result"]["generation"] = "2"
+    with pytest.raises(ContractError, match="ui_community_mismatch"):
+        check(req, resp)
+    resp["result"]["generation"] = "1"
+    resp["result"]["members"]["items"].append("memory-1")
+    with pytest.raises(ContractError, match="duplicate_ui_id"):
+        check(req, resp)
+
+
 @pytest.mark.parametrize("op", sorted(MUTATIONS))
-def test_user_mutations_require_exact_receipt_and_committed_generation(op):
+def test_user_mutations_require_exact_receipt_and_committed_cut(op):
     req, resp = request(op), response(op)
     resp["result"]["idempotency_key"] = "other"
     with pytest.raises(ContractError, match="ui_receipt_mismatch"):
@@ -349,6 +399,10 @@ def test_user_mutations_require_exact_receipt_and_committed_generation(op):
     resp = response(op)
     resp["binding"] = owner()
     with pytest.raises(ContractError, match="ui_uncommitted_result"):
+        check(req, resp)
+    resp = response(op)
+    resp["binding"]["generation"] = "9007199254740994"
+    with pytest.raises(ContractError, match="ui_stale_resync"):
         check(req, resp)
 
 
@@ -374,6 +428,16 @@ def test_unlink_is_user_origin_exact_edge_and_committed_inactive():
     resp["result"]["committed"]["active"] = False
     assert check(req, resp).value["result"]["committed"]["active"] is False
     resp["result"]["committed"]["active"] = True
+    with pytest.raises(ContractError, match="ui_uncommitted_result"):
+        check(req, resp)
+
+
+def test_relink_checks_the_existing_inactive_edge_revision():
+    req, resp = request("ui.relation_change"), response("ui.relation_change")
+    req["expected_revision"] = "1"
+    req["arguments"]["edge_id"] = "edge-1"
+    assert check(req, resp).value["result"]["committed"]["active"]
+    req["expected_revision"] = "2"
     with pytest.raises(ContractError, match="ui_uncommitted_result"):
         check(req, resp)
 

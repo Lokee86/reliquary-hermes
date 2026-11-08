@@ -36,11 +36,29 @@ def _sources(values):
             require(int(r["end_byte"]) - int(r["start_byte"]) == len(r["text"].encode("utf-8")), "source_range_mismatch")
 
 
+def _summary(memory):
+    if memory["body_id"] is None:
+        require(memory["lifecycle"] == "tombstoned" and memory["title"] is None, "invalid_terminal_memory")
+    if memory["title"] is None:
+        require(memory["lifecycle"] != "active" and memory["excerpt"] == "", "payload_availability_mismatch")
+
+
 def _detail(value):
     memory, body = value["memory"], value["body"]
+    _summary(memory)
     require((body["revision"], body["body_id"]) == (memory["revision"], memory["body_id"]), "body_revision_mismatch")
     require((body["availability"] == "available") == (type(body["content"]) is str), "payload_availability_mismatch")
+    require((body["availability"] == "terminal") == (body["body_id"] is None), "invalid_terminal_memory")
+    if body["availability"] == "terminal":
+        require(value["tombstone"], "invalid_terminal_memory")
     _sources(value["provenance"])
+
+
+def _user_body(detail, arguments, principal):
+    require(detail["memory"]["title"] == arguments["title"] and detail["body"]["content"] == arguments["body"],
+            "ui_committed_content_mismatch")
+    require(bool(detail["provenance"]) and all(source["kind"] == "user_origin" and source["principal_id"] == principal
+            for source in detail["provenance"]), "forged_manual_provenance")
 
 
 def _page(value, request):
@@ -68,8 +86,9 @@ class UIRequest:
             if op == "ui.memory_create":
                 require(v["expected_revision"] is None, "invalid_ui_revision")
             elif op == "ui.relation_change":
-                is_new = args["action"] == "link"
-                require((v["expected_revision"] is None) == is_new and (args["edge_id"] is None) == is_new, "invalid_ui_revision")
+                is_new = args["edge_id"] is None
+                require((v["expected_revision"] is None) == is_new and (not is_new or args["action"] == "link"),
+                        "invalid_ui_revision")
             else:
                 require(v["expected_revision"] is not None, "missing_ui_revision")
         else:
@@ -108,8 +127,10 @@ class UIResponse:
             op, r = v["operation"], v["result"]
             if op == "ui.memory_detail":
                 _detail(r)
-            elif op in {"ui.memory_create", "ui.memory_edit", "ui.memory_retire"}:
+            elif op == "ui.memory_create":
                 _detail(r["committed"])
+            elif op == "ui.memory_edit":
+                _detail(r["committed"]["replacement"])
             elif op == "ui.provenance":
                 _sources(r["sources"])
             elif op == "ui.operational_status":
@@ -154,13 +175,14 @@ class UIResponse:
         else:
             require(b["capabilities"]["manage"], "ui_capability_mismatch")
             require(r["request_id"] == q["request_id"] and r["idempotency_key"] == q["idempotency_key"], "ui_receipt_mismatch")
-            require(int(b["generation"]) >= int(q["generation"]), "ui_stale_resync")
+            require(b["generation"] == q["generation"], "ui_stale_resync")
             if r["changed"]:
-                require(int(b["generation"]) > int(q["generation"]) and b["cut"] != q["cut"], "ui_uncommitted_result")
+                require(b["cut"] != q["cut"], "ui_uncommitted_result")
         if op == "ui.memory_list":
             _page(r, request)
             _unique(r["items"], "memory_id")
             for item in r["items"]:
+                _summary(item)
                 if item["freshness"] is not None:
                     require(item["freshness"]["as_of_cut"] == b["cut"], "ui_stale_resync")
         elif op == "ui.memory_detail":
@@ -189,21 +211,28 @@ class UIResponse:
         elif op == "ui.community_list":
             _page(r["communities"], request)
             _unique(r["communities"]["items"], "community_id")
+        elif op == "ui.community_members":
+            require((r["community_id"], r["generation"]) == (a["community_id"], a["expected_generation"]), "ui_community_mismatch")
+            _page(r["members"], request)
+            members = r["members"]["items"]
+            require(len(set(members)) == len(members), "duplicate_ui_id")
         elif op == "ui.operational_status":
             require(r["session_id"] == q["session_id"], "ui_session_mismatch")
         elif op in MUTATIONS:
             committed = r["committed"]
-            if op in {"ui.memory_edit", "ui.memory_retire"}:
-                require(committed["memory"]["memory_id"] == a["memory_id"], "ui_target_mismatch")
-            if op in {"ui.memory_create", "ui.memory_edit"}:
-                require(committed["memory"]["title"] == a["title"] and committed["body"]["content"] == a["body"], "ui_committed_content_mismatch")
-            if op in {"ui.memory_edit", "ui.memory_retire"}:
-                revision = int(committed["memory"]["revision"])
-                require(revision > int(q["expected_revision"]) if r["changed"] else revision == int(q["expected_revision"]), "ui_uncommitted_result")
             if op == "ui.memory_create":
-                require(bool(committed["provenance"]) and all(s["kind"] == "user_origin" and s["principal_id"] == q["principal_id"] for s in committed["provenance"]), "forged_manual_provenance")
-            if op == "ui.memory_retire":
-                require(committed["memory"]["lifecycle"] == "retired", "ui_uncommitted_result")
+                _user_body(committed, a, q["principal_id"])
+            elif op == "ui.memory_edit":
+                replacement = committed["replacement"]
+                require(committed["original_memory_id"] == a["memory_id"], "ui_target_mismatch")
+                require(replacement["memory"]["memory_id"] != a["memory_id"], "ui_immutable_memory_id")
+                require(r["changed"] and int(committed["original_revision"]) > int(q["expected_revision"])
+                        and replacement["memory"]["lifecycle"] == "active" and not replacement["tombstone"],
+                        "ui_uncommitted_result")
+                _user_body(replacement, a, q["principal_id"])
+            elif op == "ui.memory_retire":
+                require(committed["memory_id"] == a["memory_id"], "ui_target_mismatch")
+                require(r["changed"] and int(committed["revision"]) > int(q["expected_revision"]), "ui_uncommitted_result")
             if op == "ui.relation_change":
                 require(committed["origin"] == "user" and committed["kind"] == "user_association" and
                         (committed["source_id"], committed["target_id"]) == (a["source_id"], a["target_id"]) and committed["cut"] == b["cut"], "ui_relation_mismatch")
