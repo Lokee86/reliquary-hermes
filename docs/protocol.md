@@ -20,7 +20,7 @@ The profile secret stays in Hermes secret storage and is passed to the local pro
 
 The server binds the profile and authenticated principal to configured RELs and one explicitly selected PHY. Authenticated attach persists the main or configured project route for a session. Provider requests require an existing session route. The active PHY's stable owner ID supplies `user_id` independently of the session's REL. Hermes home, profile and bot identity scope configuration and runtime state. Only the private server registry chooses owners.
 
-The provider channel denies user edits. Dashboard edits require a separately authenticated user channel. HP03 serves `owner_status` through Root. Source, inspection and retrieval requests return typed unavailable results until the corresponding live service wiring exists.
+The provider channel denies user edits. Dashboard edits require a separately authenticated user channel. The provider envelope serves `owner_status` and turn-scoped retrieval through Root. Source delivery uses the separate authenticated source channel. Dashboard inspection uses the Root management surface.
 
 An ambiguous discovery probe reports unavailable. A missing discovery file or literal connection refusal can start a candidate. The candidate must acquire the service lease before opening any writable Root owner. The host uses existing Root writer conflicts across separate service profiles.
 
@@ -124,6 +124,14 @@ The REL management facade exposes `create_memory_at_cut`, `correct_memory_at_cut
 ### Copied-source product boundary
 
 The trusted source adapter can normalize a text-only snapshot through `NativeImportPlan::from_hermes_copy` and the existing Root import workflow. The copied author remains provenance and the initial import runs REL-only. Root binds a terminal notice to the original principal, profile, session and accepted normalized copy digest. It retains the receipt and source identity after tombstoning, hides the source body, and rejects exact stale replay. HP04 owns continuous copying, rewrite reconciliation, and service-side invalidation while a source transition is pending.
+
+### HP05 turn-scoped retrieval
+
+The model tools send the existing provider envelope to `POST /v1/request`. The host binds the turn controller to the authenticated profile, principal, session and turn and uses the session's durable REL route. Refine uses the opaque search ID for the current controller. Traverse uses the opaque returned cut and Memory seeds from that controller. Root runs its one-hop traversal policy.
+
+The adapter can send the same `memory_query` envelope to `POST /v1/retrieval/prepare` ahead of actual prefetch. That response carries preparation status only. The host reuses a matching prepared request when the adapter asks for its result. Turn and source changes invalidate cached context. Selection checks occur before the durable selected return, including the result count, exact projection and live cut.
+
+For copied Hermes evidence, each selected Memory's source references resolve to a bound REL session and stable message ID in an accepted snapshot. The response supplies the matching accepted snapshot digest. A stale, unreconciled or terminal source fails the return before Freshness is recorded. Memories from other authorized Root sources can carry an empty copied-snapshot digest list.
 
 ### Selected retrieval return
 

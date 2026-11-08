@@ -56,9 +56,17 @@ To enable native processing, create a private `<hermes_home>/reliquary/processin
 
 Recovery replays work that reached the outbox. If Hermes disappears without a clean detach, the host records an unclean runtime and keeps running rather than claiming the copied source is current. On reconnect, the affected source remains reconciliation-required until a supported provider-authoritative transcript snapshot proves continuity; the next normal `sync_turn(..., messages=...)` can provide that snapshot and is deduplicated by stable source IDs/timestamps. This is intentionally best-effort recovery: a Hermes event committed and then lost before callback delivery may not be exactly reconstructable. Same-session rewind and edited or ambiguous overlaps remain fenced pending authoritative reconciliation.
 
+## Recall and model tools
+
+Configure the `memory-retrieval-decision` model route in the Reliquary configuration selected by `processing.json`. The product CLI exposes `config model set-memory-retrieval-decision`. Restart the host after changing the configuration. Root uses its configured embedding route when available.
+
+Hermes can prefetch relevant Memories at turn start and call `memory_query`, `refine_query` and `traverse_graph` within that turn. The service binds retrieval to the session's REL. Refinement uses the current turn's search ID, and traversal uses the returned Memory IDs and cut. Hermes displays a recall indicator only for context returned by the latest prefetch.
+
+Queued prefetch can stage an exact selection in the host. When Hermes asks for matching context, the host checks the current cut and accepted copied-source evidence before recording the selected return. A source crash fence, rewind or tombstone prevents return of Memories grounded in the affected copied evidence.
+
 ## Limits
 
-Recall, prefetch and model tools begin in HP05. Dashboard mutations require the later authenticated user channel. Setup uses existing Root owners and registry routing. Hermes workspace names, display names and caller-provided owner IDs convey no routing authority.
+Graph retrieval follows Root's one-hop workflow. A selection that exceeds the requested result or wire bounds fails before a retrieval receipt is recorded. Dashboard mutations require the later authenticated user channel. Setup uses existing Root owners and registry routing. Hermes workspace names, display names and caller-provided owner IDs convey no routing authority.
 
 ## Related docs
 

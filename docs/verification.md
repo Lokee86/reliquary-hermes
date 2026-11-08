@@ -121,10 +121,20 @@ The process suite killed an attached pinned provider and observed the durable fe
 
 A crash can leave a fence until a supported Hermes callback supplies the required source overlap. An upstream event absent from that view can remain unrecoverable. See the [HP04 crash/reconnect lifecycle](hp04-crash-reconnect-lifecycle-2026-11-08.md).
 
+## HP05 stable retrieval verification
+
+Use the HP03 process-test commands with the same stable Hermes and Reliquary pins as HP04. The focused Python process proof is `tests/test_hp05_retrieval.py`. It stages three copied Hermes turns through the authenticated host, processes them through the public Reliquary CLI, and uses deterministic loopback decisions for retrieval. The actual v0.23.0 Hermes memory manager exercises turn-start prefetch and all three tools against the Rust host.
+
+Queued preparation and Root inspection leave the REL bytes and retained history unchanged. Turn-start prefetch reuses the prepared decision and, together with an exact replay, adds one retained record. Query, refinement and one-hop traversal add one record each and return distinct selections within the tool turn. The proof checks the exact accepted snapshot digest, rejection of deeper traversal, and refusal to return stale copied evidence after a rewind from another session bound to the same REL. The Rust selected-return proof separately covers concurrent and reopened replay through the same Root receipt.
+
+HP05 passed local acceptance on November 8, 2026. The pinned suite passed 346 Python tests, 19 locked offline Rust host tests and all three detached Root processing tests. The focused process proof also passed with the exact digest and cross-session rewind assertions. Rust formatting, Git whitespace, the service documentation check and the Reliquary architecture guard passed.
+
+The local model endpoint verifies routing, grounding and receipt behavior with fixed synthetic decisions. HP07 owns the authorized real-model run.
+
 ## Remaining gates
 
-- HP05 wires real query/refine/traverse and prefetch. The acceptance test must distinguish candidate inspection from returned results and prove retrieval is recorded once.
-- HP06 packages and validates the standalone plugin against an isolated Hermes profile. HP07 and HU04 require real-service evidence. HP07 additionally requires an authorized real model run.
+- HP06 packages and validates the standalone plugin against an isolated Hermes profile.
+- HP07 and HU04 require real-service evidence. HP07 additionally requires an authorized real model run.
 
 ## Related docs
 

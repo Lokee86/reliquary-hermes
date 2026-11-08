@@ -2,7 +2,7 @@
 
 import importlib
 import json
-from threading import Event
+from threading import Event, Thread
 from time import monotonic, sleep
 from types import SimpleNamespace
 
@@ -57,7 +57,9 @@ def test_pinned_entry_point_produces_fresh_provider_instances(pinned_provider):
     assert isinstance(first, MemoryProvider)
     assert first.name == "reliquary"
     assert first is not second
-    assert first.get_tool_schemas() == []
+    assert {tool["name"] for tool in first.get_tool_schemas()} == {
+        "memory_query", "refine_query", "traverse_graph",
+    }
     assert first.recall_status() is None
 
 
@@ -436,3 +438,56 @@ def test_hermes_manager_keeps_profile_workers_and_hooks_isolated(pinned_provider
         set_multiplex_active(was_multiplexed)
     for provider in providers.values():
         assert provider.lifecycle_status == "stopped"
+
+
+def test_inflight_prefetch_discards_old_session_result(pinned_provider, monkeypatch, tmp_path):
+    from reliquary_hermes.validation import canonical
+
+    home = tmp_path / "recall"
+    save_settings(home, _profile(home, "recall-profile"))
+    (home / ".env").write_text(f"{TOKEN_VAR}=isolated-recall-test-credential-value\n", encoding="utf-8")
+    entered, release = Event(), Event()
+
+    class Client:
+        _principal_id = "recall-profile-operator"
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def attach(self, session_id):
+            return SimpleNamespace(session_id=session_id)
+
+        def attach_runtime(self, session_id):
+            return "runtime-lease", {}
+
+        def add_runtime_scope(self, session_id):
+            return self.attach_runtime(session_id)
+
+        def detach_runtime(self):
+            pass
+
+        def request(self, _raw):
+            entered.set()
+            assert release.wait(3)
+            return SimpleNamespace(status="ok", result_json=canonical({
+                "context": "Old session Memory", "memory_ids": ["memory-a"],
+            }))
+
+    monkeypatch.setattr(pinned_provider, "HostClient", Client)
+    provider = pinned_provider.ReliquaryMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(home))
+    results = []
+    recall = Thread(target=lambda: results.append(provider.prefetch("Find the checklist", session_id="session-a")))
+    try:
+        _settled(provider, "attached")
+        recall.start()
+        assert entered.wait(3)
+        provider.on_session_switch("session-b")
+        _settled(provider, "attached")
+    finally:
+        release.set()
+        if recall.ident is not None:
+            recall.join(3)
+        provider.shutdown()
+    assert results == [""]
+    assert provider.recall_status() is None

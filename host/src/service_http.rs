@@ -14,6 +14,7 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub(crate) const ATTACH: &str = "/v1/attach";
 pub(crate) const REQUEST: &str = "/v1/request";
+pub(crate) const RETRIEVAL_PREPARE: &str = "/v1/retrieval/prepare";
 pub(crate) const SOURCE: &str = "/v1/source";
 pub(crate) const RUNTIME_ATTACH: &str = "/v1/runtime/attach";
 pub(crate) const RUNTIME_HEARTBEAT: &str = "/v1/runtime/heartbeat";
@@ -119,6 +120,16 @@ impl HttpError {
         }
     }
 
+    pub(crate) const fn status_code(self) -> u16 {
+        self.status
+    }
+    pub(crate) const fn code(self) -> &'static str {
+        self.code
+    }
+    pub(crate) const fn retryable(self) -> bool {
+        self.retryable
+    }
+
     pub(crate) fn into_response(self) -> HttpResponse {
         HttpResponse {
             status: self.status,
@@ -199,6 +210,7 @@ fn parse_headers(bytes: &[u8], expected_host: &str) -> Result<RequestHeaders, Ht
     let path = match parsed.path {
         Some(ATTACH) => ATTACH,
         Some(REQUEST) => REQUEST,
+        Some(RETRIEVAL_PREPARE) => RETRIEVAL_PREPARE,
         Some(SOURCE) => SOURCE,
         Some(RUNTIME_ATTACH) => RUNTIME_ATTACH,
         Some(RUNTIME_HEARTBEAT) => RUNTIME_HEARTBEAT,

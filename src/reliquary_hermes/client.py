@@ -22,6 +22,7 @@ _MAX_HEADER = 8192
 # Winsock can take two seconds to report refusal on an unused loopback port.
 _CONNECT_SECONDS = 3.0
 _REQUEST_SECONDS = 1.5
+_RETRIEVAL_SECONDS = 7.0
 _STARTUP_SECONDS = 3.0
 
 
@@ -292,7 +293,15 @@ class HostClient:
     def attach(self, session_id: str) -> SessionBinding:
         """Bind through the live service or start a candidate protected by its lease."""
         identifier(session_id)
-        self._attached = None
+        if self._attached is not None and self._attached[1].session_id != session_id:
+            self._attached = None
+        try:
+            return self._connect_session(session_id)
+        except HostUnavailable:
+            self._attached = None
+            raise
+
+    def _connect_session(self, session_id: str) -> SessionBinding:
         previous = self._read_discovery()
         if previous is not None:
             try:
@@ -358,8 +367,30 @@ class HostClient:
                 self._profile_id, self._principal_id, attached[1].session_id):
             raise HostUnavailable("host_not_attached")
         discovery, _ = attached
-        reply = self._exchange(discovery, "/v1/request", raw, time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS)
+        budget = (_RETRIEVAL_SECONDS if request.operation in
+                  {"memory_query", "refine_query", "traverse_graph"} else _REQUEST_SECONDS)
+        reply = self._exchange(discovery, "/v1/request", raw,
+                               time.monotonic() + _CONNECT_SECONDS + budget,
+                               response_seconds=budget)
         try:
             return Response.parse(reply).for_request(request)
         except ContractError:
             raise HostUnavailable("invalid_provider_response") from None
+
+    def prepare_retrieval(self, raw: bytes) -> bool:
+        """Warm an exact retrieval request without releasing or recording its content."""
+        request = Request.parse(raw)
+        attached = self._attached
+        if attached is None or (request.profile_id, request.principal_id, request.session_id) != (
+                self._profile_id, self._principal_id, attached[1].session_id):
+            raise HostUnavailable("host_not_attached")
+        discovery, _ = attached
+        reply = self._exchange(discovery, "/v1/retrieval/prepare", raw,
+                               time.monotonic() + _CONNECT_SECONDS + _RETRIEVAL_SECONDS,
+                               response_seconds=_RETRIEVAL_SECONDS)
+        try:
+            result = obj(decode(reply), {"prepared"})
+            require(type(result["prepared"]) is bool, "invalid_prepare_response")
+            return result["prepared"]
+        except ContractError:
+            raise HostUnavailable("invalid_prepare_response") from None

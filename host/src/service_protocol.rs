@@ -174,19 +174,32 @@ pub(crate) enum Operation {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProviderRequest {
-    protocol_version: u16,
-    request_id: String,
+    pub(crate) protocol_version: u16,
+    pub(crate) request_id: String,
     pub(crate) operation: Operation,
     pub(crate) profile_id: String,
     pub(crate) principal_id: String,
     pub(crate) session_id: String,
-    turn_id: String,
+    pub(crate) turn_id: String,
     expected_revision: Value,
     idempotency_key: Value,
-    arguments: Value,
+    pub(crate) arguments: Value,
 }
 
 impl ProviderRequest {
+    pub(crate) fn retrieval_scope(&self) -> (&str, &str, &str, &str) {
+        (
+            &self.profile_id,
+            &self.principal_id,
+            &self.session_id,
+            &self.turn_id,
+        )
+    }
+
+    pub(crate) fn retrieval_request_id(&self) -> &str {
+        &self.request_id
+    }
+
     pub(crate) fn valid(&self) -> bool {
         let valid_id_fields = [
             &self.request_id,

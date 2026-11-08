@@ -70,6 +70,12 @@ impl<'a> SelectedReturn<'a> {
         })
     }
 
+    /// The exact Root projection bound to this prepared delivery. It remains
+    /// a candidate until `return_selected` successfully records its receipt.
+    pub fn selection(&self) -> &RetrievalPreview {
+        &self.selection
+    }
+
     /// Record through Root before releasing selected content. A duplicate
     /// returns status only, so a cached selection cannot be released again
     /// after its cut has changed.

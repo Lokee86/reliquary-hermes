@@ -1,11 +1,12 @@
 //! One profile-scoped local service and its owner registry.
 use crate::{
     registry::{OwnerConfig, Registry, RegistryError},
+    retrieval::RetrievalService,
     runtime::{HEARTBEAT_SECONDS, ReconciliationScope, RuntimeRegistry},
     service_http::{
         ATTACH, FORBIDDEN, HttpError, HttpRequest, HttpResponse, INVALID, MAX_WIRE_BYTES,
-        RUNTIME_ATTACH, RUNTIME_DETACH, RUNTIME_HEARTBEAT, RUNTIME_SCOPE, SOURCE, TransportKey,
-        UNAVAILABLE, hex, read_request, write_response,
+        RETRIEVAL_PREPARE, RUNTIME_ATTACH, RUNTIME_DETACH, RUNTIME_HEARTBEAT, RUNTIME_SCOPE,
+        SOURCE, TransportKey, UNAVAILABLE, hex, read_request, write_response,
     },
     service_protocol::{
         AttachRequest, Discovery, HERMES_REVISION, Operation, PROTOCOL_VERSION, ProviderRequest,
@@ -48,6 +49,7 @@ struct Service {
     principal_id: String,
     key: TransportKey,
     sources: Mutex<SourceService>,
+    retrieval: Mutex<RetrievalService>,
     runtimes: Mutex<RuntimeRegistry>,
     closing: AtomicBool,
     inflight: AtomicUsize,
@@ -61,7 +63,7 @@ impl Service {
         match read_request(&mut socket, accepted_at, &self.expected_host, &self.key) {
             Ok(request) => {
                 let response = self
-                    .dispatch(&request)
+                    .dispatch(&request, accepted_at)
                     .unwrap_or_else(HttpError::into_response);
                 let _ = write_response(&mut socket, response, Some((&self.key, &request.nonce)));
             }
@@ -71,18 +73,23 @@ impl Service {
         }
     }
 
-    fn dispatch(&self, request: &HttpRequest) -> Result<HttpResponse, HttpError> {
+    fn dispatch(
+        &self,
+        request: &HttpRequest,
+        accepted_at: Instant,
+    ) -> Result<HttpResponse, HttpError> {
         if self.closing.load(Ordering::Acquire) {
             return Err(UNAVAILABLE);
         }
         match request.path {
             ATTACH => self.attach(&request.body),
             SOURCE => self.source(&request.body),
+            RETRIEVAL_PREPARE => self.prepare_retrieval(&request.body),
             RUNTIME_ATTACH => self.runtime_attach(&request.body),
             RUNTIME_HEARTBEAT => self.runtime_heartbeat(&request.body),
             RUNTIME_DETACH => self.runtime_detach(&request.body),
             RUNTIME_SCOPE => self.runtime_scope(&request.body),
-            _ => self.request(&request.body),
+            _ => self.request(&request.body, accepted_at),
         }
     }
 
@@ -263,6 +270,7 @@ impl Service {
         }
 
         let terminal = request.operation == SourceAction::Terminal;
+        let invalidate_retrieval = request.operation != SourceAction::Snapshot;
         let reconcile = request.fence_epoch.is_some();
         let session_id = request.session_id.clone();
         let response = sources.handle(&self.instance, owner, request, fenced);
@@ -281,10 +289,40 @@ impl Service {
                 .clear_fence("hermes", &session_id, current)
                 .map_err(|_| UNAVAILABLE)?;
         }
+        drop(runtimes);
+        drop(sources);
+        if response.is_ok() && invalidate_retrieval {
+            if let Ok(mut retrieval) = self.retrieval.try_lock() {
+                retrieval.invalidate_session(&session_id, &self.instance);
+            }
+        }
         response
     }
 
-    fn request(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
+    fn prepare_retrieval(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
+        let request: ProviderRequest = decode(bytes).map_err(|_| INVALID)?;
+        if !request.valid() {
+            return Err(INVALID);
+        }
+        if request.profile_id != self.discovery.profile_id
+            || request.principal_id != self.principal_id
+        {
+            return Err(FORBIDDEN);
+        }
+        let registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
+        let owner = registry
+            .source_owner(&request.session_id, true)
+            .map_err(attach_error)?;
+        drop(registry);
+        self.retrieval.try_lock().map_err(|_| UNAVAILABLE)?.prepare(
+            &request,
+            bytes,
+            &self.instance,
+            owner,
+        )
+    }
+
+    fn request(&self, bytes: &[u8], accepted_at: Instant) -> Result<HttpResponse, HttpError> {
         let request: ProviderRequest = decode(bytes).map_err(|_| INVALID)?;
         if !request.valid() {
             return Err(INVALID);
@@ -308,7 +346,50 @@ impl Service {
                     request.error("unavailable", "source_ingest_unavailable", false)
                 }
                 Operation::MemoryQuery | Operation::RefineQuery | Operation::TraverseGraph => {
-                    request.error("unavailable", "retrieval_unavailable", false)
+                    let owner = match registry.source_owner(&request.session_id, true) {
+                        Ok(owner) => owner,
+                        Err(error) => {
+                            return Ok(HttpResponse::ok(request.error(
+                                error.status(),
+                                error.code(),
+                                error.retryable(),
+                            )));
+                        }
+                    };
+                    drop(registry);
+                    let mut retrieval = match self.retrieval.try_lock() {
+                        Ok(retrieval) => retrieval,
+                        Err(_) => {
+                            return Ok(HttpResponse::ok(request.error(
+                                "unavailable",
+                                "retrieval_busy",
+                                true,
+                            )));
+                        }
+                    };
+                    return match retrieval.request(
+                        &request,
+                        bytes,
+                        &self.instance,
+                        &self.registry,
+                        owner,
+                        &self.sources,
+                        &self.runtimes,
+                        accepted_at + std::time::Duration::from_millis(6500),
+                    ) {
+                        Ok(body) => Ok(HttpResponse::ok(body)),
+                        Err(error) => Ok(HttpResponse::ok(request.error(
+                            match error.status_code() {
+                                400 => "invalid",
+                                403 => "denied",
+                                409 => "conflict",
+                                501 => "unsupported",
+                                _ => "unavailable",
+                            },
+                            error.code(),
+                            error.retryable(),
+                        ))),
+                    };
                 }
                 Operation::InspectMemory => {
                     request.error("unavailable", "inspection_unavailable", false)
@@ -447,6 +528,7 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
         key,
         registry: Mutex::new(registry),
         sources: Mutex::new(SourceService::open(state_dir)?),
+        retrieval: Mutex::new(RetrievalService::open(state_dir)?),
         runtimes: Mutex::new(runtimes),
         closing: AtomicBool::new(false),
         inflight: AtomicUsize::new(0),
