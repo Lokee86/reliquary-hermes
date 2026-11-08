@@ -8,13 +8,14 @@ import sqlite3
 import stat
 
 from .source import SourceSnapshot
-from .validation import MAX_WIRE_BYTES, canonical, choice, content_digest, decode, identifier, integer, require
+from .validation import MAX_WIRE_BYTES, canonical, choice, content_digest, decode, identifier, integer, require, sequence
 
 
 BACKPRESSURE = "source_outbox_full"
 STALE = "source_generation_stale"
 TERMINAL = "source_terminal"
 UNAVAILABLE = "source_outbox_unavailable"
+MAX_TERMINAL_BATCH = 4096
 _MAX_GENERATION = (1 << 63) - 1
 _MAX_SNAPSHOT_BYTES = MAX_WIRE_BYTES - 4096
 _MAX_PENDING = 64
@@ -205,13 +206,21 @@ class SourceOutbox:
 
     def terminal(self, session_id: str, reason: str) -> str:
         """Persist one session-wide terminal intent and suppress any future enqueue."""
-        session = identifier(session_id)
+        return self.terminal_many([session_id], reason)[0]
+
+    def terminal_many(self, session_ids: list[str], reason: str) -> tuple[str, ...]:
+        """Commit every terminal fence from one Hermes lifecycle notice together."""
+        sessions = [identifier(value) for value in sequence(session_ids, MAX_TERMINAL_BATCH, nonempty=True)]
+        require(len(sessions) == len(set(sessions)), "invalid_terminal_sessions")
         choice(reason, {"archive", "delete"})
+        keys = []
         with self._transaction(write=True) as db:
-            generation, terminal = self._state(db, session)
-            if terminal is not None:
-                return self._key("terminal", session, generation)
-            return self._fence(db, session, generation, "terminal", reason)
+            for session in sessions:
+                generation, terminal = self._state(db, session)
+                key = (self._key("terminal", session, generation) if terminal is not None else
+                       self._fence(db, session, generation, "terminal", reason))
+                keys.append(key)
+        return tuple(keys)
 
     def next_job(self, session_id: str | None = None) -> SourceJob | None:
         query = "SELECT * FROM source_jobs WHERE profile=? AND principal=? AND receipt IS NULL"

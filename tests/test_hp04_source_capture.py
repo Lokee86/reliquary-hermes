@@ -88,6 +88,14 @@ def test_pinned_cold_plugin_discovery_fences_committed_archive_and_delete(pinned
                 assert outbox.next_job(session) == job
             with pytest.raises(SourceOutboxError):
                 outbox.enqueue(snapshot, generation=outbox.generation(session))
+        bulk = ["bulk-a", "bulk-b"]
+        with SessionDB(home / "state.db") as db:
+            for session in bulk:
+                db.create_session(session, source="cli")
+            assert db.delete_sessions(bulk) == len(bulk)
+        for session in bulk:
+            job = outbox.next_job(session)
+            assert (job.kind, job.session_id, job.reason) == ("terminal", session, "delete")
         assert manager._discovered
         on_session_delete(session_id="other", reason="delete", profile="different-hermes-home")
         assert outbox.next_job("other") is None

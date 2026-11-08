@@ -2,7 +2,7 @@
 
 import logging
 
-from .outbox import SourceOutbox, SourceOutboxError
+from .outbox import MAX_TERMINAL_BATCH, SourceOutbox, SourceOutboxError
 from .settings import OWNER_FIELDS, _read_object, _state_dir, profile_home
 from .validation import ContractError, identifier, require, sequence
 
@@ -29,12 +29,10 @@ def on_session_delete(*, session_id, reason, profile, deleted_ids=None, **_):
         owners = _read_object(state / "owners.json")
         require(OWNER_FIELDS <= set(owners) <= OWNER_FIELDS | {"session_projects"}, "invalid_owner_config")
         primary = identifier(session_id)
-        ids = ([primary] if deleted_ids is None else
-               [identifier(item) for item in sequence(deleted_ids, 4096, nonempty=True)])
-        require(primary in ids and len(ids) == len(set(ids)), "invalid_terminal_sessions")
+        ids = [primary] if deleted_ids is None else sequence(deleted_ids, MAX_TERMINAL_BATCH, nonempty=True)
+        require(primary in ids, "invalid_terminal_sessions")
         outbox = SourceOutbox(state, identifier(owners["profile_id"]), identifier(owners["principal_id"]))
-        for affected in ids:
-            outbox.terminal(affected, reason)
+        outbox.terminal_many(ids, reason)
     except (ContractError, OSError, SourceOutboxError):
         # No transcript, filesystem path, or private profile data enters Hermes logs.
         _LOG.warning("Reliquary source lifecycle could not persist an archive or delete notice")
