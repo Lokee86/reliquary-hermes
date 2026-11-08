@@ -141,19 +141,28 @@ def test_concurrent_exact_enqueue_commits_one_copy(tmp_path):
     assert feed.next_job() is None
 
 
-def test_failed_terminal_commit_leaves_the_original_job_pending(tmp_path, monkeypatch):
+def test_failed_bulk_terminal_commit_leaves_all_original_jobs_pending(tmp_path, monkeypatch):
     feed = queue(tmp_path)
-    source = snapshot()
-    feed.enqueue(source, generation=0)
-    original = feed.next_job()
+    sessions = ["session-a", "session-b"]
+    for session in sessions:
+        feed.enqueue(snapshot(session), generation=0)
+    original = [feed.next_job(session) for session in sessions]
+    real_key = feed._key
     with monkeypatch.context() as changes:
-        def fail(*_):
-            raise SourceOutboxError(UNAVAILABLE)
+        def fail_on_second(kind, session, generation):
+            if session == "session-b":
+                raise SourceOutboxError(UNAVAILABLE)
+            return real_key(kind, session, generation)
 
-        changes.setattr(feed, "_key", fail)
+        changes.setattr(feed, "_key", fail_on_second)
         with pytest.raises(SourceOutboxError, match=UNAVAILABLE):
-            feed.terminal(source.session_id, "delete")
-    assert queue(tmp_path).next_job() == original
+            feed.terminal_many(sessions, "delete")
+    reopened = queue(tmp_path)
+    assert [reopened.next_job(session) for session in sessions] == original
+
+    keys = reopened.terminal_many(sessions, "delete")
+    assert keys == tuple(reopened.terminal(session, "archive") for session in sessions)
+    assert [reopened.next_job(session).kind for session in sessions] == ["terminal", "terminal"]
 
 
 def test_foreign_database_fails_closed(tmp_path):

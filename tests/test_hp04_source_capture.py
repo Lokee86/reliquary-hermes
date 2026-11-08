@@ -38,6 +38,7 @@ def test_capture_preserves_source_identity_and_drops_unproven_attribution():
     [message(timestamp=10**20)], [message(content=[{"type": "text", "text": "multimodal"}])],
     [message(content="data:image/png;base64,AQID")], [message(), message()],
     [message(f"row-{i}", content="a" * 32768) for i in range(8)],
+    [message(f"row-{i}", content=chr(92) * 32768) for i in range(3)],
 ])
 def test_unsupported_or_unbound_source_bytes_fail_closed(rows):
     with pytest.raises(ContractError):
@@ -87,6 +88,14 @@ def test_pinned_cold_plugin_discovery_fences_committed_archive_and_delete(pinned
                 assert outbox.next_job(session) == job
             with pytest.raises(SourceOutboxError):
                 outbox.enqueue(snapshot, generation=outbox.generation(session))
+        bulk = ["bulk-a", "bulk-b"]
+        with SessionDB(home / "state.db") as db:
+            for session in bulk:
+                db.create_session(session, source="cli")
+            assert db.delete_sessions(bulk) == len(bulk)
+        for session in bulk:
+            job = outbox.next_job(session)
+            assert (job.kind, job.session_id, job.reason) == ("terminal", session, "delete")
         assert manager._discovered
         on_session_delete(session_id="other", reason="delete", profile="different-hermes-home")
         assert outbox.next_job("other") is None

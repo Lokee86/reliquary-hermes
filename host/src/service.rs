@@ -2,13 +2,15 @@
 use crate::{
     registry::{OwnerConfig, Registry, RegistryError},
     service_http::{
-        ATTACH, FORBIDDEN, HttpError, HttpRequest, HttpResponse, INVALID, MAX_WIRE_BYTES,
+        ATTACH, FORBIDDEN, HttpError, HttpRequest, HttpResponse, INVALID, MAX_WIRE_BYTES, SOURCE,
         TransportKey, UNAVAILABLE, hex, read_request, write_response,
     },
     service_protocol::{
         AttachRequest, Discovery, HERMES_REVISION, Operation, PROTOCOL_VERSION, ProviderRequest,
         decode,
     },
+    source_ingest::SourceService,
+    source_wire::{SourceAction, SourceRequest},
 };
 use reliquary_memory::Instance;
 use serde::Deserialize;
@@ -42,6 +44,7 @@ struct Service {
     principal_id: String,
     key: TransportKey,
     registry: Mutex<Registry>,
+    sources: Mutex<SourceService>,
     instance: Instance,
 }
 
@@ -61,10 +64,10 @@ impl Service {
     }
 
     fn dispatch(&self, request: &HttpRequest) -> Result<HttpResponse, HttpError> {
-        if request.path == ATTACH {
-            self.attach(&request.body)
-        } else {
-            self.request(&request.body)
+        match request.path {
+            ATTACH => self.attach(&request.body),
+            SOURCE => self.source(&request.body),
+            _ => self.request(&request.body),
         }
     }
 
@@ -79,18 +82,47 @@ impl Service {
         if request.principal_id != self.principal_id {
             return Err(FORBIDDEN);
         }
-        let binding = self
-            .registry
-            .lock()
-            .map_err(|_| UNAVAILABLE)?
-            .bind_session(&request.session_id)
-            .map_err(attach_error)?;
+        let (binding, owner) = {
+            let mut registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
+            let binding = registry
+                .bind_session(&request.session_id)
+                .map_err(attach_error)?;
+            let owner = registry
+                .source_owner(&request.session_id, true)
+                .map_err(attach_error)?;
+            (binding, owner)
+        };
+        if let Ok(mut sources) = self.sources.try_lock() {
+            sources.resume(&self.instance, owner, &request.session_id);
+        }
         Ok(HttpResponse::ok(json!({
             "discovery": self.discovery,
             "session_id": binding.session_id,
             "rel_id": binding.rel_id,
             "user_id": binding.user_id,
         })))
+    }
+
+    fn source(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
+        let request = SourceRequest::parse(bytes)?;
+        if request.profile_id != self.discovery.profile_id
+            || request.principal_id != self.principal_id
+        {
+            return Err(FORBIDDEN);
+        }
+        let owner = self
+            .registry
+            .lock()
+            .map_err(|_| UNAVAILABLE)?
+            .source_owner(
+                &request.session_id,
+                request.operation == SourceAction::Snapshot,
+            )
+            .map_err(attach_error)?;
+        self.sources
+            .lock()
+            .map_err(|_| UNAVAILABLE)?
+            .handle(&self.instance, owner, request)
     }
 
     fn request(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
@@ -244,6 +276,7 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
         principal_id: registry.principal_id().to_owned(),
         key,
         registry: Mutex::new(registry),
+        sources: Mutex::new(SourceService::open(state_dir)?),
         instance,
     });
     drop(bootstrap);

@@ -1,7 +1,9 @@
 """Build a bounded source view from the pinned Hermes provider's redacted callback."""
 
+from hashlib import sha256
+
 from .source import SourceSnapshot
-from .validation import MAX_WIRE_BYTES, canonical, choice, content_digest, identifier, require, sequence, text
+from .validation import MAX_WIRE_BYTES, canonical, choice, identifier, require, sequence, text
 
 
 # Product Archive times are nonnegative i64 nanoseconds.
@@ -30,8 +32,13 @@ def capture_snapshot(profile_id: str, session_id: str, messages) -> SourceSnapsh
         })
     source = {"profile_id": profile_id, "session_id": session_id, "branch_id": None,
               "source_revision": None, "messages": rows}
+    source_json = canonical(source)
+    snapshot_digest = sha256(source_json).hexdigest()
     candidate = {**source, "authority": "hermes_source_copied_snapshot", "availability": "current",
-                 "snapshot_digest": content_digest(source)}
-    # Leave space for the bounded provider request envelope and scoped IDs.
-    require(len(canonical(candidate)) <= MAX_WIRE_BYTES - 2048, "source_copy_limit")
+                 "snapshot_digest": snapshot_digest}
+    arguments = {"source_json": source_json.decode("utf-8"), "snapshot_digest": snapshot_digest}
+    # The private source wire embeds the canonical view as a string. Bound its
+    # escaped representation as well as the durable outbox payload.
+    require(max(len(canonical(candidate)), len(canonical(arguments))) <= MAX_WIRE_BYTES - 4096,
+            "source_copy_limit")
     return SourceSnapshot.parse(candidate)

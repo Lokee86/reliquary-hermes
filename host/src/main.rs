@@ -3,6 +3,9 @@ mod registry;
 mod service;
 mod service_http;
 mod service_protocol;
+mod source_ingest;
+mod source_store;
+mod source_wire;
 
 use std::{env, ffi::OsStr, path::PathBuf, process::ExitCode};
 

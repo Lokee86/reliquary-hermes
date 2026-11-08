@@ -14,6 +14,7 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub(crate) const ATTACH: &str = "/v1/attach";
 pub(crate) const REQUEST: &str = "/v1/request";
+pub(crate) const SOURCE: &str = "/v1/source";
 
 pub(crate) struct TransportKey(hmac::Key);
 
@@ -194,6 +195,7 @@ fn parse_headers(bytes: &[u8], expected_host: &str) -> Result<RequestHeaders, Ht
     let path = match parsed.path {
         Some(ATTACH) => ATTACH,
         Some(REQUEST) => REQUEST,
+        Some(SOURCE) => SOURCE,
         _ => return Err(INVALID),
     };
     let fields = parsed.headers;
