@@ -53,7 +53,7 @@ def community():
 
 
 def recall():
-    return {"state": "none", "search_id": None, "delivery_id": None, "candidate_ids": [], "selected_ids": [], "injected_ids": [], "receipt_id": None}
+    return {"state": "none", "search_id": None, "delivery_id": None, "candidate_ids": [], "selected_ids": [], "returned_ids": []}
 
 
 def arguments(op):
@@ -89,13 +89,13 @@ def page(items):
 
 def response(op="ui.memory_list"):
     r = {
-        "ui.owner_sessions": {"owners": page([owner()]), "active_session_id": "session-1", "session_owner_id": "rel-a"},
+        "ui.owner_sessions": {"owners": page([owner()]), "active_session_id": "session-1", "session_owner_id": "rel-a", "active_phy_id": None},
         "ui.memory_list": page([summary()]), "ui.memory_detail": detail(),
         "ui.memory_history": {"memory_id": "memory-1", "revisions": page([{"revision": "1", "body_id": "body-1", "availability": "pruned", "created_at_ms": "9007199254740993", "content_digest": None}])},
         "ui.provenance": {"memory_id": "memory-1", "revision": "1", "sources": [source()]},
         "ui.graph_page": {"routing_state": "available", "nodes": [node(1), node(2)], "edges": [edge()], "next_cursor": None, "truncated": False},
         "ui.community_list": {"metadata_state": "available", "communities": page([community()])},
-        "ui.operational_status": {"session_id": "session-1", "accepted_source_cursor": "source-cursor-1", "last_completed_receipt": "import-1",
+        "ui.operational_status": {"session_id": "session-1", "source_state": "active", "accepted_source_cursor": "source-cursor-1", "last_completed_receipt": "import-1",
                                   "pending_count": "3", "held_count": "2", "error_count": "1", "worker_state": "held", "latest_recall": recall()},
     }
     if op in MUTATIONS:
@@ -294,11 +294,36 @@ def test_ui_wire_rejects_precision_loss_secret_owner_paths_and_oversized_results
         UIResponse.parse(b" "*262145)
 
 
-def test_current_host_status_cannot_fabricate_confirmed_consumption():
+@pytest.mark.parametrize("state,selected,returned", [
+    ("candidate", [], []),
+    ("selected", ["memory-1"], []),
+    ("returned", ["memory-1"], ["memory-1"]),
+])
+def test_operational_status_distinguishes_candidates_selection_and_return(state, selected, returned):
+    req, resp = request("ui.operational_status"), response("ui.operational_status")
+    resp["result"]["latest_recall"] = {
+        "state": state, "search_id": "search-1", "delivery_id": "delivery-1" if returned else None,
+        "candidate_ids": ["memory-1", "memory-2"], "selected_ids": selected, "returned_ids": returned,
+    }
+    assert check(req, resp).value["result"]["latest_recall"]["returned_ids"] == returned
+
+
+def test_operational_status_validates_exact_returned_set():
     resp = response("ui.operational_status")
-    resp["result"]["latest_recall"] = {"state": "confirmed", "search_id": "search-1", "delivery_id": "delivery-1",
-        "candidate_ids": ["memory-1"], "selected_ids": ["memory-1"], "injected_ids": ["memory-1"], "receipt_id": "receipt-1"}
-    with pytest.raises(ContractError, match="handoff_unavailable"):
+    resp["result"]["latest_recall"] = {
+        "state": "returned", "search_id": "search-1", "delivery_id": "delivery-1",
+        "candidate_ids": ["memory-1", "memory-2"], "selected_ids": ["memory-1"], "returned_ids": ["memory-2"],
+    }
+    with pytest.raises(ContractError, match="recall_return_mismatch"):
+        UIResponse.parse(canonical(resp))
+
+
+def test_operational_status_binds_tombstoned_source_to_its_session():
+    req, resp = request("ui.operational_status"), response("ui.operational_status")
+    resp["result"]["source_state"] = "tombstoned"
+    assert check(req, resp).value["result"]["source_state"] == "tombstoned"
+    resp["result"]["session_id"] = None
+    with pytest.raises(ContractError, match="invalid_source_state"):
         UIResponse.parse(canonical(resp))
 
 
@@ -407,7 +432,8 @@ def test_mutation_response_preserves_authority_while_allowing_committed_cut_adva
 def test_session_mapping_cannot_relabel_private_phy_as_session_rel():
     req, resp = request("ui.owner_sessions"), response("ui.owner_sessions")
     phy = owner("phy-a", "PHY")
-    auth = VerifiedUIContext("profile-a", "principal-a", canonical([owner(), phy]), True, True, (("session-1", "rel-a"),), "session-1")
+    auth = VerifiedUIContext("profile-a", "principal-a", canonical([owner(), phy]), True, True,
+                             (("session-1", "rel-a"),), "session-1", active_phy_id="phy-a")
     resp["result"]["session_owner_id"] = "phy-a"
     with pytest.raises(ContractError, match="ui_denied"):
         auth.check_response(UIResponse.parse(canonical(resp)), parse_request(req))
@@ -428,6 +454,32 @@ def test_session_enumeration_uses_exact_authorized_selected_or_active_mapping():
     resp["result"]["active_session_id"] = "session-ungranted"
     with pytest.raises(ContractError, match="ui_denied"):
         context().check_response(UIResponse.parse(canonical(resp)), parse_request(req))
+
+
+def test_owner_discovery_keeps_active_phy_independent_of_general_or_project_rel():
+    main, project = owner("rel-main"), owner("rel-project")
+    phy, other_phy = owner("phy-a", "PHY"), owner("phy-b", "PHY")
+    auth = VerifiedUIContext("profile-a", "principal-a", canonical([main, project, phy, other_phy]), True, True,
+                             (("session-general", "rel-main"), ("session-project", "rel-project")),
+                             "session-general", active_phy_id="phy-a")
+    req, resp = request("ui.owner_sessions"), response("ui.owner_sessions")
+    resp["result"]["owners"] = page([main, project, phy])
+    resp["result"]["active_phy_id"] = "phy-a"
+    for session, rel in (("session-general", "rel-main"), ("session-project", "rel-project")):
+        req["session_id"] = session
+        resp["result"].update(active_session_id=session, session_owner_id=rel)
+        result = auth.check_response(UIResponse.parse(canonical(resp)), parse_request(req)).value["result"]
+        assert (result["session_owner_id"], result["active_phy_id"]) == (rel, "phy-a")
+    resp["result"]["active_phy_id"] = "phy-b"
+    with pytest.raises(ContractError, match="ui_denied"):
+        auth.check_response(UIResponse.parse(canonical(resp)), parse_request(req))
+
+    read = request()
+    read.update(session_id="session-project", owner_id="phy-a")
+    auth.authorize(parse_request(read))
+    read["owner_id"] = "phy-b"
+    with pytest.raises(ContractError, match="ui_denied"):
+        auth.authorize(parse_request(read))
 
 
 def test_selected_session_status_cannot_read_another_sessions_rel():

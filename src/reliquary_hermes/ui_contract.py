@@ -4,7 +4,6 @@ import json
 from dataclasses import dataclass
 from jsonschema import Draft202012Validator
 
-from . import PINNED_HANDOFF_API_VERSION
 from .ui_schema import MUTATIONS, OP_CAPABILITY, SCHEMA
 from .validation import canonical, content_digest, decode, identifier, require, text
 
@@ -115,24 +114,20 @@ class UIResponse:
                 _sources(r["sources"])
             elif op == "ui.operational_status":
                 recall = r["latest_recall"]
-                require(set(recall["selected_ids"]) <= set(recall["candidate_ids"]), "recall_selection_mismatch")
-                require(set(recall["injected_ids"]) <= set(recall["selected_ids"]), "recall_injection_mismatch")
                 state = recall["state"]
-                require((state == "confirmed") == (recall["receipt_id"] is not None), "recall_receipt_mismatch")
-                if state == "confirmed":
-                    require(PINNED_HANDOFF_API_VERSION == 1, "handoff_unavailable")
-                if state == "none":
-                    require(not recall["candidate_ids"] and recall["search_id"] is None and recall["delivery_id"] is None, "invalid_recall_state")
-                else:
-                    require(recall["search_id"] is not None and bool(recall["candidate_ids"]), "invalid_recall_state")
-                if state == "candidate":
-                    require(not recall["selected_ids"], "invalid_recall_state")
-                if state == "selected":
-                    require(bool(recall["selected_ids"]), "invalid_recall_state")
-                if state in {"injected", "confirmed"}:
-                    require(recall["delivery_id"] is not None and bool(recall["injected_ids"]), "invalid_recall_state")
-                else:
-                    require(recall["delivery_id"] is None and not recall["injected_ids"], "invalid_recall_state")
+                candidates = set(recall["candidate_ids"])
+                selected = set(recall["selected_ids"])
+                returned = set(recall["returned_ids"])
+                require(selected <= candidates, "recall_selection_mismatch")
+                has_search = state != "none"
+                has_delivery = state == "returned"
+                require((recall["search_id"] is not None) == has_search and bool(candidates) == has_search, "invalid_recall_state")
+                require(bool(selected) == (state in {"selected", "returned"}), "invalid_recall_state")
+                require((recall["delivery_id"] is not None) == has_delivery and bool(returned) == has_delivery, "invalid_recall_state")
+                if has_delivery:
+                    require(returned == selected, "recall_return_mismatch")
+                if r["session_id"] is None:
+                    require(r["source_state"] == "none", "invalid_source_state")
         return cls(canonical(v))
 
     @property
@@ -259,6 +254,7 @@ class VerifiedUIContext:
     same_origin: bool
     session_rel_bindings: tuple[tuple[str, str], ...]
     active_session_id: str | None = None
+    active_phy_id: str | None = None
 
     def bindings(self):
         values = json.loads(self.owner_bindings_json)
@@ -266,7 +262,13 @@ class VerifiedUIContext:
         for owner in values:
             _validate("OwnerBinding", owner)
         _unique(values, "owner_id")
-        return {owner["owner_id"]: owner for owner in values}
+        owners = {owner["owner_id"]: owner for owner in values}
+        if self.active_phy_id is not None:
+            identifier(self.active_phy_id)
+            active = owners.get(self.active_phy_id)
+            require(active is not None and active["owner_kind"] == "PHY" and active["capabilities"]["view"], "invalid_ui_active_phy")
+        return {owner_id: owner for owner_id, owner in owners.items()
+                if owner["owner_kind"] == "REL" or owner_id == self.active_phy_id}
 
     def sessions(self, owners):
         require(type(self.session_rel_bindings) is tuple and len(self.session_rel_bindings) <= 128, "invalid_ui_sessions")
@@ -311,7 +313,8 @@ class VerifiedUIContext:
                 sessions = self.sessions(owners)
                 selected_session = request.session_id if request.session_id is not None else self.active_session_id
                 require(result["active_session_id"] == selected_session and
-                        result["session_owner_id"] == sessions.get(selected_session), "ui_denied")
+                        result["session_owner_id"] == sessions.get(selected_session) and
+                        result["active_phy_id"] == self.active_phy_id, "ui_denied")
                 selected = result["session_owner_id"]
                 require(selected is None or (selected in owners and owners[selected]["owner_kind"] == "REL" and
                                              owners[selected]["capabilities"]["view"]), "ui_denied")

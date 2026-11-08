@@ -76,10 +76,12 @@ def build_schema():
         "source_id": ID, "target_id": ID, "revision": DECIMAL, "cut": ID, "active": BOOL})
     d["Community"] = obj({"community_id": ID, "generation": DECIMAL, "member_count": DECIMAL,
         "name": nullable(LABEL), "name_origin": enum("user", "derived", "unnamed"), "cursor": nullable(ID)})
-    d["Recall"] = obj({"state": enum("none", "candidate", "selected", "injected", "confirmed"),
+    d["Recall"] = obj({"state": enum("none", "candidate", "selected", "returned"),
         "search_id": nullable(ID), "delivery_id": nullable(ID), "candidate_ids": IDS, "selected_ids": IDS,
-        "injected_ids": IDS, "receipt_id": nullable(ID)})
-    d["OperationalStatus"] = obj({"session_id": nullable(ID), "accepted_source_cursor": nullable(ID), "last_completed_receipt": nullable(ID),
+        "returned_ids": IDS})
+    d["OperationalStatus"] = obj({"session_id": nullable(ID),
+        "source_state": enum("none", "active", "stale", "tombstoned", "unavailable"),
+        "accepted_source_cursor": nullable(ID), "last_completed_receipt": nullable(ID),
         "pending_count": DECIMAL, "held_count": DECIMAL, "error_count": DECIMAL,
         "worker_state": enum("pending", "running", "held", "failed", "complete", "unavailable"), "latest_recall": ref("Recall")})
     cursor = nullable(ID)
@@ -106,7 +108,7 @@ def build_schema():
     }
     results = {
         "ui.owner_sessions": obj({"owners": page(ref("OwnerBinding")), "active_session_id": nullable(ID),
-                                   "session_owner_id": nullable(ID)}),
+                                   "session_owner_id": nullable(ID), "active_phy_id": nullable(ID)}),
         "ui.memory_list": page(ref("MemorySummary")),
         "ui.memory_detail": ref("MemoryDetail"),
         "ui.memory_history": obj({"memory_id": ID, "revisions": page(ref("HistoryRevision"))}),

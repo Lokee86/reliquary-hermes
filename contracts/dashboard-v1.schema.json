@@ -859,8 +859,7 @@
             "none",
             "candidate",
             "selected",
-            "injected",
-            "confirmed"
+            "returned"
           ]
         },
         "search_id": {
@@ -925,7 +924,7 @@
           "maxItems": 50,
           "uniqueItems": true
         },
-        "injected_ids": {
+        "returned_ids": {
           "type": "array",
           "items": {
             "type": "string",
@@ -939,22 +938,6 @@
           "minItems": 0,
           "maxItems": 50,
           "uniqueItems": true
-        },
-        "receipt_id": {
-          "anyOf": [
-            {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
-              "not": {
-                "pattern": "[\r\n]"
-              }
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "required": [
@@ -963,8 +946,7 @@
         "delivery_id",
         "candidate_ids",
         "selected_ids",
-        "injected_ids",
-        "receipt_id"
+        "returned_ids"
       ],
       "additionalProperties": false
     },
@@ -985,6 +967,15 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "source_state": {
+          "enum": [
+            "none",
+            "active",
+            "stale",
+            "tombstoned",
+            "unavailable"
           ]
         },
         "accepted_source_cursor": {
@@ -1059,6 +1050,7 @@
       },
       "required": [
         "session_id",
+        "source_state",
         "accepted_source_cursor",
         "last_completed_receipt",
         "pending_count",
@@ -3629,12 +3621,29 @@
                       "type": "null"
                     }
                   ]
+                },
+                "active_phy_id": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+                      "not": {
+                        "pattern": "[\r\n]"
+                      }
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [
                 "owners",
                 "active_session_id",
-                "session_owner_id"
+                "session_owner_id",
+                "active_phy_id"
               ],
               "additionalProperties": false
             }
