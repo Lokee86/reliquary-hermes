@@ -34,7 +34,7 @@ Management pages have at most 128 items and 256 KiB, matching accepted product c
 
 ## User-origin operations
 
-Every mutation requires server-side manage plus its operation capability, same-origin verified UI context, expected owner generation/cut and a stable idempotency key. Existing-target edits also require an expected revision. `verify_expected_revisions` specifies the mandatory named-product CAS gate against trusted current target revisions, including both relation endpoints; this fixture is not a mutable-store reader. A literal body field claiming user origin is not authorization. Product workflows must reject stale revisions, preserve drafts for conflict handling and return the actual committed result.
+Every mutation requires an authorized REL, server-side manage plus its operation capability, same-origin verified UI context, expected owner generation/cut and a stable idempotency key. PHY bindings can advertise scoped reads. Existing-target edits also require an expected revision. `verify_expected_revisions` checks trusted current target revisions, including both relation endpoints. The service must obtain those revisions from the product workflows and return the committed result so the client can preserve drafts on conflicts.
 
 - `ui.memory_create`: title/body/category/type through a manual user-origin workflow. No caller source citation/provenance field exists. The committed result must cite the same authenticated principal as user origin, never fabricated Hermes evidence.
 - `ui.memory_edit` requests a correction to the specified Memory revision. ADR 0013 keeps semantic title and body immutable for a stable ID. A committed correction returns the original ID, its superseded revision and a distinct replacement with the requested title, body and authenticated user provenance.
@@ -42,7 +42,7 @@ Every mutation requires server-side manage plus its operation capability, same-o
 - `ui.relation_change`: named user association link/unlink, source/target IDs and revisions. Unlink also names the existing edge/revision. The committed edge must retain user origin, exact endpoints and link/unlink active state. An unlink's committed edge revision must advance beyond the expected revision when changed, or equal it for a no-op. Raw/canonical/duplicate/supersession edge edits are not exposed by this API. Their read kinds remain visible; closure-rule mutations require a later separately approved named workflow, not arbitrary edge writes.
 - `ui.community_rename`: community ID, expected community generation (carried as `expected_revision`, distinct from the owner generation) and name; committed name-origin is user. The committed community generation must advance beyond the expected revision when changed, or equal it for a no-op.
 
-These reserved named operations require HP02 public Root/Gateway/Application mappings to existing semantics or the minimal allowed owner-level addition. Their DTOs are frozen now; they are not successful no-ops or implemented product APIs. All required v1 user actions remain required for HU04, not silently reduced to disabled controls.
+HP02 exposes these workflows through public Root. The service uses the idempotency key as the durable product request ID and keeps the wire request ID for correlation. The service also resolves immutable body identity and retirement successor evidence from the authorized owner at the requested cut before calling the corresponding product workflow. HU04 verifies these mappings through the live dashboard.
 
 ## Cursor, scope and security contract
 

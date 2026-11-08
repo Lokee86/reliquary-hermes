@@ -14,6 +14,7 @@ from reliquary_hermes.validation import ContractError, canonical
 
 
 def owner(owner_id="rel-a", kind="REL", *, generation="9007199254740993", cut="cut-1", manage=True):
+    manage = manage and kind == "REL"
     return {"owner_id": owner_id, "owner_kind": kind, "display_label": "Private owner",
             "generation": generation, "cut": cut, "capabilities": {name: manage or name not in
             {"manage", "memory_create", "memory_edit", "memory_retire", "relation_edit", "community_rename"} for name in CAPABILITIES}}
@@ -547,6 +548,21 @@ def test_owner_discovery_keeps_active_phy_independent_of_general_or_project_rel(
     read["owner_id"] = "phy-b"
     with pytest.raises(ContractError, match="ui_denied"):
         auth.authorize(parse_request(read))
+
+
+def test_phy_binding_cannot_advertise_rel_mutation_authority():
+    rel, phy = owner(), owner("phy-a", "PHY")
+    req = request("ui.memory_create")
+    req["owner_id"] = "phy-a"
+    auth = VerifiedUIContext("profile-a", "principal-a", canonical([rel, phy]), True, True,
+                             (("session-1", "rel-a"),), "session-1", active_phy_id="phy-a")
+    with pytest.raises(ContractError, match="ui_denied"):
+        auth.authorize(parse_request(req))
+    phy["capabilities"]["memory_create"] = True
+    forged = VerifiedUIContext("profile-a", "principal-a", canonical([rel, phy]), True, True,
+                               (("session-1", "rel-a"),), "session-1", active_phy_id="phy-a")
+    with pytest.raises(ContractError, match="invalid_ui_grants"):
+        forged.authorize(parse_request(request("ui.owner_sessions")))
 
 
 def test_selected_session_status_cannot_read_another_sessions_rel():

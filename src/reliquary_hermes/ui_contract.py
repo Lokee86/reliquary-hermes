@@ -173,6 +173,7 @@ class UIResponse:
         if op not in MUTATIONS:
             require((b["generation"], b["cut"]) == (q["generation"], q["cut"]), "ui_stale_resync")
         else:
+            require(b["owner_kind"] == "REL", "ui_denied")
             require(b["capabilities"]["manage"], "ui_capability_mismatch")
             require(r["request_id"] == q["request_id"] and r["idempotency_key"] == q["idempotency_key"], "ui_receipt_mismatch")
             require(b["generation"] == q["generation"], "ui_stale_resync")
@@ -290,6 +291,10 @@ class VerifiedUIContext:
         require(type(values) is list and len(values) <= 128, "invalid_ui_grants")
         for owner in values:
             _validate("OwnerBinding", owner)
+            if owner["owner_kind"] == "PHY":
+                capabilities = owner["capabilities"]
+                require(not capabilities["manage"] and not any(capabilities[OP_CAPABILITY[op]] for op in MUTATIONS),
+                        "invalid_ui_grants")
         _unique(values, "owner_id")
         owners = {owner["owner_id"]: owner for owner in values}
         if self.active_phy_id is not None:
