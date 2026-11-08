@@ -135,6 +135,14 @@ python -B -m pytest -q -rs -p no:cacheprovider -c "$hermes/pyproject.toml" --bas
   "$hermes/tests/hermes_cli/test_plugin_secondary_profile_host.py::test_browser_assets_follow_the_selected_profile"
 ```
 
+## HP04 provisional local verification
+
+The current implementation was exercised against the same audited Hermes pin used for HP03 and the sibling Reliquary commit `b31aaee577fc0e1caa3b9d7913c18f8155c4f972`. Use the HP03 local build and Python commands above to enable the HP04 process probes. Run `cargo test --manifest-path ../Reliquary/tests/external-consumer/Cargo.toml --locked --offline --test operational_processing` for the independent Root extension proof. Tests use synthetic owner files and deterministic loopback endpoints.
+
+The probes cover the pinned privacy projection, stable logical IDs and timestamps, real provider delivery, completed native append, exact older receipt replay, restart before acknowledgment, a late same-session rewind callback, the cold archive/delete observer and native terminal replay. The product workspace passed all 668 tests. The three detached Root processing tests passed, including completed append and divergent maintenance replay. The architecture guard still reports 23 production packages and 76 production edges.
+
+A replay of the private outbox covers delivered callback data. Provider-equivalent history export and a durable lifecycle replay interface are still needed for events that never reached it. HP04 acceptance remains provisional on this pin.
+
 ## Remaining gates
 - HP04 final acceptance requires the stable-host integration run of the coherent HP04 checkpoint. Recovery of already queued work is covered separately from catch-up for turns and lifecycle notifications Hermes never delivered. The stable provider API has no supported catch-up export or durable lifecycle cursor.
 - HP05 wires real query/refine/traverse and prefetch. The acceptance test must distinguish candidate inspection from returned results and prove retrieval is recorded once.

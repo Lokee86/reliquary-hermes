@@ -46,9 +46,19 @@ The binary binds `127.0.0.1` on an ephemeral port. Attach verifies protocol vers
 
 An authenticated `owner_status` request reports the bound REL's processing state and pending count. The provider lifecycle distinguishes connecting, attached, unavailable, non-primary and stopped. Diagnostics are fixed codes and omit private wire data. On startup failure, check the configured executable and owner kinds, then check whether a verified process already owns the lease. A different profile using the same writable REL must resolve that conflict before attaching.
 
+## Copied-source operation
+
+The provider hands bounded, text-only Hermes egress to a context-bound worker. The worker persists jobs in the private `source-outbox-v1.sqlite3` and delivers them through the authenticated source channel. `source_capture_pending` is volatile. `source_queued_durable` indicates local persistence and `source_accepted_durable` indicates a verified native staging receipt. Processing can still be pending after staging. Preserve the outbox and `sources-v1/` with the service and owner backups.
+
+Setup enables the ordinary `reliquary-source-observer` companion unless the profile explicitly disables it. The observer records committed deliberate archive and delete notifications even when the service is down. The next running provider worker prioritizes that terminal intent over older copies. An existing native import epoch must settle before Root can write its tombstone. The host still denies replay during that wait. A terminal fence does not schedule new extraction for a stopped import.
+
+To enable native processing, create a private `<hermes_home>/reliquary/processing.json` containing `config_path` set to the absolute path of an existing Reliquary binary configuration. Configure the required processing routes through Reliquary. The host uses those routes for REL-only work. A profile without processing configuration can stage a copy, and its import may remain open.
+
+Recovery replays work that reached the outbox. The audited Hermes export redacts differently from the provider egress and can include rows without a completed text-only callback. Missing callbacks and terminal notifications therefore remain unavailable for catch-up. The pinned Gateway's canonical single-session dashboard DELETE bypasses the observer. Same-session rewind and edited or ambiguous overlaps remain fenced pending authoritative reconciliation.
+
 ## Limits
 
-HP03 binds lifecycle and status. Source copying and tombstone delivery begin in HP04. Recall, prefetch and model tools begin in HP05. Dashboard mutations require the later authenticated user channel. Setup uses existing Root owners and registry routing. Hermes workspace names, display names and caller-provided owner IDs convey no routing authority.
+Recall, prefetch and model tools begin in HP05. Dashboard mutations require the later authenticated user channel. Setup uses existing Root owners and registry routing. Hermes workspace names, display names and caller-provided owner IDs convey no routing authority.
 
 ## Related docs
 
