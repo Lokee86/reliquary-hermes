@@ -226,11 +226,17 @@ class SourceOutbox:
             return None
         try:
             payload = row["payload"]
-            snapshot = SourceSnapshot.parse(decode(payload)) if row["kind"] == "snapshot" else None
+            kind, session = row["kind"], identifier(row["session"])
+            generation = integer(row["generation"], 0, _MAX_GENERATION)
+            snapshot = SourceSnapshot.parse(decode(payload)) if kind == "snapshot" else None
+            if snapshot is not None:
+                snapshot.require_current()
+                require((snapshot.profile_id, snapshot.session_id, snapshot.snapshot_digest) ==
+                        (self._scope[0], session, row["snapshot_digest"]), "source_scope_mismatch")
+            require(row["key"] == self._key(kind, session, generation, row["snapshot_digest"]), "invalid_source_job")
         except ValueError:
             raise SourceOutboxError(UNAVAILABLE) from None
-        return SourceJob(row["kind"], row["key"], row["session"], row["generation"], snapshot, payload,
-                         row["reason"], self._scope)
+        return SourceJob(kind, row["key"], session, generation, snapshot, payload, row["reason"], self._scope)
 
     def _job_receipt(self, db, job):
         if job._scope != self._scope:

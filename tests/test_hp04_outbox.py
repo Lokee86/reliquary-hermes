@@ -161,3 +161,16 @@ def test_foreign_database_fails_closed(tmp_path):
         db.execute("CREATE TABLE foreign_data (id INTEGER)")
     with pytest.raises(SourceOutboxError, match=UNAVAILABLE):
         queue(tmp_path)
+
+
+def test_reopened_queue_rejects_a_payload_under_the_wrong_scope(tmp_path):
+    feed = queue(tmp_path)
+    foreign = queue(tmp_path, profile="profile-b")
+    key = feed.enqueue(snapshot(), generation=0)
+    foreign.enqueue(snapshot(profile="profile-b"), generation=0)
+    foreign_payload = foreign.next_job().snapshot_json
+    with closing(sqlite3.connect(tmp_path / "source-outbox-v1.sqlite3")) as db:
+        db.execute("UPDATE source_jobs SET payload=? WHERE key=?", (foreign_payload, key))
+        db.commit()
+    with pytest.raises(SourceOutboxError, match=UNAVAILABLE):
+        queue(tmp_path).next_job()
