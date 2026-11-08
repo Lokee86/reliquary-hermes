@@ -78,9 +78,34 @@ cargo test --manifest-path tests/external-consumer/Cargo.toml --locked --offline
 & ./scripts/run_g4_acceptance.ps1
 ```
 
-## Remaining gates
+## HP03 local process verification
 
-- HP03 implements the authenticated loopback service and provider setup, persistent general/project session mappings, active PHY binding, single-writer lease and restart behavior.
+Use the same pinned Hermes and Reliquary checkouts. The following Windows commands build the actual host and product CLI, then run the Python suite with all process proofs enabled. The local-service guide owns runtime setup. [Local service](local-service.md)
+
+```powershell
+$scratch = Join-Path (Get-Location) 'host\.test-tmp\hp03'
+New-Item -ItemType Directory -Force -Path $scratch | Out-Null
+$env:TEMP = $scratch
+$env:TMP = $scratch
+$env:TMPDIR = $scratch
+cargo fmt --manifest-path host/Cargo.toml --check
+cargo test --manifest-path host/Cargo.toml --locked --offline -- --test-threads=1
+cargo build --manifest-path host/Cargo.toml --locked --offline
+cargo build --manifest-path ../Reliquary/cli/Cargo.toml --locked --offline --target-dir host/target
+$env:HP03_HOST_BINARY = (Resolve-Path host/target/debug/reliquary-hermes-host.exe).Path
+$env:HP03_RELIQUARY_CLI = (Resolve-Path host/target/debug/reliquary.exe).Path
+$env:HP01_HERMES_CHECKOUT = 'C:\!bin\workspace\hermes-agent-reliquary-hp01-pin'
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
+$env:PYTHONDONTWRITEBYTECODE = '1'
+python -B -m pytest -q --basetemp .pytest_tmp
+python -B ../Reliquary/scripts/check_architecture.py
+```
+
+The process tests create native owners with the product CLI. They exercise startup, authenticated attachment to a running host, invalid credentials, competing processes, cross-profile writer denial, outage and restart. A real pinned Hermes setup hook provisions an isolated profile and the provider attaches to the Rust process, recovers after its exit and leaves the REL unchanged during source callbacks. Separate profiles with distinct REL writers retain the same explicitly selected PHY identity. Unit tests cover stale attach completion, transport authentication and framing, durable registry conflicts and actual Root status.
+
+The HP03 gate passed 16 Rust tests and 311 Python tests with the pinned Hermes and real-process probes enabled. The architecture guard reported 23 production packages and 76 production dependency edges. All runs used synthetic owners under the local plugin worktree.
+
+## Remaining gates
 - HP04 implements supported source recovery, durable copied imports, post-commit lifecycle handling, retry reconciliation and tombstone persistence. Hermes stays the history and resume authority. Reliquary maintenance owns pruning.
 - HP05 wires real query/refine/traverse and prefetch. The acceptance test must distinguish candidate inspection from returned results and prove retrieval is recorded once.
 - HP06 packages and validates the standalone plugin against an isolated Hermes profile. HP07 and HU04 require real-service evidence. HP07 additionally requires an authorized real model run.

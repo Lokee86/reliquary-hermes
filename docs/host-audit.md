@@ -64,7 +64,7 @@ hermes plugins validate /path/to/your-plugin --install-deps
 
 These commands are reserved for HP06 against an actual packaged plugin in an isolated profile. HP01 has no manifest/registration/dependencies to validate and does not run either command or provision an environment. `--install-deps` would mutate an environment and is not part of this bounded task.
 
-The Hermes suite runner is `scripts/run_tests.sh`. Relevant suites include `tests/agent/test_memory_provider.py`, `test_memory_session_switch.py`, `test_memory_sync_redaction.py`, `tests/plugins/memory/test_discovery_sources.py`, `test_provider_threads_inherit_profile.py` and `tests/hermes_state/test_session_delete_hook.py`. The standalone HP01 tests use the pinned Hermes checkout and the installed host runtime dependencies for the source probes. Their child profiles and synthetic databases live under the plugin test temp directory. See [verification.md](verification.md) for the standalone command.
+The Hermes suite runner is `scripts/run_tests.sh`. Relevant suites include `tests/agent/test_memory_provider.py`, `test_memory_session_switch.py`, `test_memory_sync_redaction.py`, `tests/plugins/memory/test_discovery_sources.py`, `test_provider_threads_inherit_profile.py` and `tests/hermes_state/test_session_delete_hook.py`. The standalone tests use the pinned Hermes checkout and its local runtime dependencies for source probes, provider registration and setup. Their child profiles and synthetic databases live under the plugin test temp directory. See [verification.md](verification.md) for the standalone command.
 
 ## Pinned web-dashboard loader, SDK and auth
 
@@ -83,6 +83,7 @@ The accepted G4 product exposes opaque owner handles, trusted host admission, ma
 ## Related docs
 
 - [Documentation policy and ownership](documentation-policy.md)
+- [Local service and setup](local-service.md)
 - [Contract documentation index](INDEX.md)
 - [Repository status and usage](../README.md)
 

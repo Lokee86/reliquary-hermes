@@ -6,7 +6,7 @@ Keep the Python contract, pinned Hermes source evidence and executable Rust host
 
 ## Overview
 
-The Reliquary integration maintainers own this standalone repository. The shared engineering standard permits its `minimal` profile for fixtures and narrow utilities. The HP02 selected-return bridge is a detached library component. Reevaluate the profile when HP03 introduces a service or HP06 packages the provider.
+The Reliquary integration maintainers own this standalone repository. HP03 adopts the shared `service` profile. The local service guide owns architecture, configuration, operation, recovery, security and limits. The verification guide owns acceptance and planned integration gates. [Local service](local-service.md) · [Verification](verification.md)
 
 There is no baseline and no blanket document or source exemption. The root index links every document, substantive documents retain Purpose/Overview/Related docs/Notes, and code/test paths map to canonical owners:
 
@@ -16,7 +16,7 @@ There is no baseline and no blanket document or source exemption. The root index
 - `ui_schema.py`, `ui_contract.py` and exported `contracts/dashboard-v1.schema.json`: [web-dashboard DTO contract](ui-contract.md).
 - Tests and test configuration are owned by [verification](verification.md).
 - The detached Rust host crate is covered by [protocol](protocol.md) and [verification](verification.md).
-- Planning, limitations and behavioral evidence remain in the verification owner's later-gates sections. A separate maintainer map/coverage/roadmap/limits hierarchy is unnecessary for this small contract fixture; these explicit owners satisfy the narrow fixture scope, rather than pretending a production profile is complete.
+- The Python client, provider settings, registration and Rust service map to the [local service](local-service.md), [protocol](protocol.md) and [maintainer map](maintainer-map.md). Machine-readable coverage lives in `docs-standard.json`.
 
 ## Change procedure
 
@@ -40,4 +40,4 @@ The change-impact check compares commits through HEAD, so run it after committin
 
 ## Notes
 
-The config adopts the shared deterministic documentation checks for this fixture. A vendored checker snapshot, CI wiring, Archivist ledger and Pitlord semantic policy are not installed and are not claimed. Their production adoption belongs to later repository/tooling work, with the profile reevaluated against the actual shipped system. No sibling standards registry was changed by this task.
+This repository runs the shared deterministic documentation checker directly from the local engineering standards checkout. Reevaluate deployment, upgrade and maintenance documentation when HP06 packages the provider.

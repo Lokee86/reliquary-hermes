@@ -1,4 +1,4 @@
-# HP01 version-one protocol and authority
+# Version-one protocol and authority
 
 ## Purpose
 
@@ -6,19 +6,23 @@ Freeze the bounded HP01 transport, copied-source and server-owned authority DTOs
 
 ## Overview
 
-The Python DTOs and behavioral fixtures define the provider boundary. The detached Rust host implements the selected-return step below. The public product facade accepts an initial Hermes copied snapshot and can mark it terminal by exact receipt. Later tickets own the listening service, credential store and durable Hermes import.
+The Python DTOs define the provider boundary. The HP03 Rust host authenticates attach and serves owner status through Root. HP02 exposes initial copied snapshots and the selected-return workflow through Root. HP04 and HP05 wire those workflows into Hermes lifecycle and recall.
 
 ## Transport and authentication
 
-A future long-lived service binds literal loopback only. The discovery value pins HTTP endpoint, protocol version, Hermes SHA, instance, profile and single-instance lease. Only `http://127.0.0.1:<port>/` or `http://[::1]:<port>/` is accepted by the fixture. DNS hostnames, wildcard/public addresses, userinfo, path routes, query parameters, fragments and absent ports fail closed. No credential goes in a URL or JSON DTO.
+The Rust service listens on `127.0.0.1` and publishes a literal loopback HTTP endpoint. Discovery pins `endpoint`, `instance_id`, `profile_id`, `protocol_version`, `hermes_revision` and `lease_id`. The client rejects other profiles or versions, non-loopback addresses, DNS hostnames, userinfo, route paths, query parameters and fragments.
 
-A per-profile private credential authenticates an out-of-band header/channel. Private service configuration lives outside the browser and follows the active profile's scoped secret storage; no logs, exports, bundles or shared default-profile cache. The fixture stores only a supplied credential in memory with redacted repr and constant-time equality. It does not provision, save, rotate or prove entropy of a real credential.
+The profile secret stays in Hermes secret storage and is passed to the local process on standard input. HTTP authenticates both peers with HMAC-SHA256. The HMAC of the UTF-8 strings `reliquary-hermes-transport-v1`, instance ID and lease ID, separated by NUL bytes, derives a binary per-instance key from the secret.
 
-Server-side `ProfileGrant` binds profile and authenticated principal to configured `RelBindings`, one explicitly selected `ActivePhy` and operation capabilities. General conversations map to the main REL. Each configured project has one distinct child REL. A session uses its server-owned main/project binding and unbound sessions fail closed. The service persists those bindings in HP03. The active PHY's stable owner ID supplies the integration `user_id` independently of the session's REL. Hermes home, profile and bot identity only scope configuration and runtime state. DTO IDs must match the authenticated binding. Caller owner IDs, paths, SQL and store handles confer no authority.
+- Requests send a random 16-byte nonce as lowercase hex in `X-Reliquary-Nonce`. The `Authorization` value is `Reliquary ` followed by the lowercase hex HMAC of `request`, the HTTP route, the nonce and the exact body, separated by NUL bytes.
+- Authenticated responses return the lowercase hex HMAC of `response`, the request nonce, the decimal HTTP status and the exact response body in `X-Reliquary-Proof`. The client verifies this proof before parsing the response.
+- `POST /v1/attach` accepts exactly `discovery`, `principal_id` and `session_id`. Its success returns `discovery`, `session_id`, `rel_id` and `user_id`. `POST /v1/request` uses the provider envelope below. Each exchange uses one fixed-length JSON body. Invalid authentication, browser-origin traffic and alternate Host headers fail before dispatch.
 
-The provider grant excludes user edits even if its operation list is expanded. Dashboard edits require a separate authenticated user channel. A JSON `origin='authenticated_user'` claim confers no edit capability. HP03 and the dashboard integration own session exchange, browser protections, credential storage and revocation.
+The server binds the profile and authenticated principal to configured RELs and one explicitly selected PHY. Authenticated attach persists the main or configured project route for a session. Provider requests require an existing session route. The active PHY's stable owner ID supplies `user_id` independently of the session's REL. Hermes home, profile and bot identity scope configuration and runtime state. Only the private server registry chooses owners.
 
-An ambiguous discovery/probe is unavailable, not permission to kill a process, start a second writer or create a fallback owner. Future mount ownership uses existing lease conflicts and a single service owner registry.
+The provider channel denies user edits. Dashboard edits require a separately authenticated user channel. HP03 serves `owner_status` through Root. Source, inspection and retrieval requests return typed unavailable results until the corresponding live service wiring exists.
+
+An ambiguous discovery probe reports unavailable. A missing discovery file or literal connection refusal can start a candidate. The candidate must acquire the service lease before opening any writable Root owner. The host uses existing Root writer conflicts across separate service profiles.
 
 ## Request envelope
 
@@ -33,7 +37,7 @@ Every request has exactly these fields:
 
 `expected_revision` is a **host owner-state revision**, not an invented Hermes source revision. Mutations reject stale revisions. Replay of an already accepted idempotency key with the same scoped operation/content returns its original receipt before CAS evaluation; reusing a key for different content, principal, session or turn conflicts. A new key for an already accepted identical snapshot does not duplicate Memory publication or clocks. The fake import ledger specifies these decisions but is not durable storage.
 
-A future request sequence is: strict DTO decode, out-of-band profile/principal authentication, operation-channel grant check, trusted copied-source registration and current owner-cut checks, the named public product operation, then strict correlated response parsing. HP01 implements only the pure DTO/grant/correlation pieces; it does not dispatch operations.
+The host verifies transport authentication, decodes the exact DTO, checks profile, principal, session and operation grants, then invokes an available Root workflow. The client verifies the response signature and correlation. Trusted copied-source registration and mutation-cut checks enter live dispatch in HP04.
 
 ## Named operations
 

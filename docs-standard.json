@@ -1,8 +1,9 @@
 {
   "version": 1,
-  "profile": "minimal",
+  "profile": "service",
   "capabilities": [
-    "protocol"
+    "protocol",
+    "stateful"
   ],
   "docs_root": "docs",
   "root_index": "docs/INDEX.md",
@@ -16,7 +17,9 @@
     "docs/protocol.md",
     "docs/verification.md",
     "docs/ui-contract.md",
-    "contracts/dashboard-v1.schema.json"
+    "contracts/dashboard-v1.schema.json",
+    "docs/local-service.md",
+    "docs/maintainer-map.md"
   ],
   "index_exempt_directories": [],
   "section_exemptions": [
@@ -83,7 +86,20 @@
       ],
       "docs": [
         "docs/protocol.md",
-        "docs/verification.md"
+        "docs/verification.md",
+        "docs/local-service.md"
+      ]
+    },
+    {
+      "paths": [
+        "src/reliquary_hermes/client.py",
+        "src/reliquary_hermes/provider.py",
+        "src/reliquary_hermes/settings.py"
+      ],
+      "docs": [
+        "docs/local-service.md",
+        "docs/protocol.md",
+        "docs/maintainer-map.md"
       ]
     }
   ],

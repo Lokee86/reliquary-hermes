@@ -1,10 +1,10 @@
 # Reliquary Hermes
 
-This repository contains the HP01 Python contracts and the HP02 Rust host bridge. The bridge records selected retrieval through Reliquary's public Root APIs. HP02 also exposes the copied-source and dashboard workflows on the sibling product checkout. Provider installation and the loopback service belong to later tickets.
+Reliquary Hermes is the standalone memory provider and loopback host for the pinned Hermes revision. HP03 attaches Hermes sessions to existing Reliquary owners and keeps their routing durable across host restarts. The Rust host uses public Root APIs. The Reliquary integration maintainers own the service and contracts.
 
 Hermes remains canonical history. The product facade accepts an initial privacy-filtered, source-ID-preserving snapshot and its exact replay. Hermes resumes from its own history. HP04 owns the continuous copy and recovery service.
 
-The Reliquary integration maintainers own the contracts, the host bridge and the staged verification gates.
+Use the local service guide to configure existing owners and activate the provider through `hermes memory setup`. HP04 owns live source copying. HP05 owns recall and model tools. HP06 owns distribution and installation acceptance. [Local service guide](docs/local-service.md)
 
 ## Contract and evidence
 
