@@ -6,7 +6,7 @@ Freeze the bounded HP01 transport, copied-source and server-owned authority DTOs
 
 ## Overview
 
-The Python DTOs and behavioral fixtures define the provider boundary. The detached Rust host implements the selected-return step below. Later tickets own the listening service, credential store and durable Hermes import.
+The Python DTOs and behavioral fixtures define the provider boundary. The detached Rust host implements the selected-return step below. The public product facade accepts an initial Hermes copied snapshot and can mark it terminal by exact receipt. Later tickets own the listening service, credential store and durable Hermes import.
 
 ## Transport and authentication
 
@@ -94,6 +94,10 @@ DTO validation does not prove a server actually committed a mutation. Durable re
 ## HP02 mapping requirement
 
 Map named operations to public Root, Gateway and Application methods backed by existing owner workflows. The [dashboard contract](ui-contract.md) defines the separate inspection and mutation vocabulary.
+
+### Copied-source product boundary
+
+The trusted source adapter can normalize a text-only snapshot through `NativeImportPlan::from_hermes_copy` and the existing Root import workflow. The copied author remains provenance and the initial import runs REL-only. Root binds a terminal notice to the original principal, profile, session and accepted normalized copy digest. It retains the receipt and source identity after tombstoning, hides the source body, and rejects exact stale replay. HP04 owns continuous copying, rewrite reconciliation, and service-side invalidation while a source transition is pending.
 
 ### Selected retrieval return
 

@@ -33,9 +33,9 @@ The checkout must be at the exact SHA in [host audit](host-audit.md). Without `H
 
 The integrated HP01 suite passed all 290 tests with the upstream pin enabled. The shared minimal-profile documentation check and Git whitespace check passed.
 
-## HP02 selected-return verification
+## HP02 host and product facade verification
 
-Use the sibling `Reliquary` checkout at `2c13a06478f89205cab176495276517a4e32e663` and a Rust toolchain with the offline dependency cache available. From this repository in PowerShell:
+Use the sibling `Reliquary` checkout at `9d2b333e2412b120bcd797c4c842b26781ea6c8d` and a Rust toolchain with the offline dependency cache available. From this repository in PowerShell:
 
 ```powershell
 $hostScratch = Join-Path (Get-Location) 'host\.test-tmp'
@@ -49,11 +49,11 @@ python -B ../Reliquary/scripts/check_architecture.py
 
 The external consumer seeds a Freshness-enrolled Memory through public Root import and processing. A deterministic loopback decision endpoint chooses the selection. The proof observes the REL before inspection and after the first return. Two concurrent calls share one return object. Exact replay through a newly opened Gateway preserves the resulting REL byte for byte. The negative cases cover a revoked credential, a truncated projection and mismatched delivery evidence. It verifies that the bridge returns the exact selected Memory set and records its durable receipt once.
 
-All four host tests passed on the pinned product checkout. The architecture guard reported 23 packages and 76 production edges.
+Seven host tests passed on the pinned product checkout. The copied-source cases covered source identity, author and branch metadata, REL-only processing, foreign binding denial and terminal replay after reopen. Two detached Root-only checked-create tests passed. Four OC06 tests passed using the same offline dependency set and the tracked product test source. The product lock's Archive suite passed 25 tests. The architecture guard reported 23 packages and 76 production edges.
 
 ## Remaining gates
 
-- Remaining HP02 work maps the provider and dashboard operations to public Root workflows and runs the full G4/GM/P01 gate. The selected-return proof covers this bridge.
+- HP02 now covers selected retrieval return, initial copied-source staging and tombstoning, checked manual creation, filtered Memory summaries and bounded graph neighborhoods. Memory correction requires an atomic successor workflow under ADR 0013 and a matching dashboard result contract. Broader retirement, association edits, persistent community names, and the full G4/GM/P01 gate remain open.
 - HP03 implements the authenticated loopback service and provider setup, persistent general/project session mappings, active PHY binding, single-writer lease and restart behavior.
 - HP04 implements supported source recovery, durable copied imports, post-commit lifecycle handling, retry reconciliation and tombstone persistence. Hermes stays the history and resume authority. Reliquary maintenance owns pruning.
 - HP05 wires real query/refine/traverse and prefetch. The acceptance test must distinguish candidate inspection from returned results and prove retrieval is recorded once.

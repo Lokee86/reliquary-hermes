@@ -23,11 +23,12 @@ pub const PROJECT: &str = "Lantern release uses the amber checklist.";
 const PRIVATE: &str = "My preferred meeting window is afternoons.";
 const DECOY: &str = "Lantern color is unrelated to the release checklist.";
 pub const TOKEN: &str = "hp02-test-operator-admission-credential";
+pub const OTHER_TOKEN: &str = "hp02-test-other-operator-admission-credential";
 
 pub struct Fixture {
     pub rel_path: PathBuf,
     pub runtime: ConfiguredRuntime,
-    processing_runtime: ConfiguredRuntime,
+    pub processing_runtime: ConfiguredRuntime,
     _endpoint: Endpoint,
     directory: tempfile::TempDir,
 }
@@ -37,18 +38,22 @@ pub struct Mounted {
     pub admission: HostAdmissionAdapter,
     pub control: HostAdmissionControl,
     pub instance: Instance,
-    phy_owner: OwnerId,
+    pub phy_owner: OwnerId,
 }
 
 impl Fixture {
     pub fn new() -> Self {
+        Self::with_private_fixture(true)
+    }
+
+    pub fn with_private_fixture(include_private: bool) -> Self {
         let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/hp02-fixtures");
         fs::create_dir_all(&scratch).unwrap();
         let directory = tempfile::Builder::new()
             .prefix("selected-return-")
             .tempdir_in(scratch)
             .unwrap();
-        let endpoint = Endpoint::new();
+        let endpoint = Endpoint::new(include_private);
         let (runtime, processing_runtime) = runtimes(directory.path(), endpoint.address);
         let rel_path = directory.path().join("project.rel");
         Rel::create(&rel_path, OwnerScope::Project).unwrap();
@@ -73,15 +78,18 @@ impl Fixture {
             Phylactery::create(&phy_path).unwrap()
         };
         let phy_owner = gateway.mount_phylactery(&phy, true).unwrap();
-        let (admission, control) = TrustedHostAdmission::new([HostCredentialBinding::new(
-            "operator",
-            TOKEN,
-            [
-                OwnerGrant::ManageRel(owner),
-                OwnerGrant::OperateRel(owner),
-                OwnerGrant::OperatePhylactery(phy_owner),
-            ],
-        )])
+        let (admission, control) = TrustedHostAdmission::new([
+            HostCredentialBinding::new(
+                "operator",
+                TOKEN,
+                [
+                    OwnerGrant::ManageRel(owner),
+                    OwnerGrant::OperateRel(owner),
+                    OwnerGrant::OperatePhylactery(phy_owner),
+                ],
+            ),
+            HostCredentialBinding::new("other", OTHER_TOKEN, [OwnerGrant::OperateRel(owner)]),
+        ])
         .install(&gateway)
         .unwrap();
         let instance = admission.authenticate(TOKEN).unwrap();
@@ -207,7 +215,7 @@ struct Endpoint {
 }
 
 impl Endpoint {
-    fn new() -> Self {
+    fn new(include_private: bool) -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let address = listener.local_addr().unwrap();
         let stopping = Arc::new(AtomicBool::new(false));
@@ -221,7 +229,7 @@ impl Endpoint {
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
-                let body = reply(&read_request(&stream)).to_string();
+                let body = reply(&read_request(&stream), include_private).to_string();
                 write!(
                     stream,
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -271,7 +279,7 @@ fn read_request(stream: &TcpStream) -> Value {
     serde_json::from_slice(&body).unwrap()
 }
 
-fn reply(request: &Value) -> Value {
+fn reply(request: &Value, include_private: bool) -> Value {
     if let Some(inputs) = request["input"].as_array() {
         let data = inputs
             .iter()
@@ -326,15 +334,39 @@ fn reply(request: &Value) -> Value {
         .as_str()
         .unwrap()
     {
-        "insomnia_authority_disposition_ledger" => json!({
-            "turns":{"accepted":[clause("fact","project",PROJECT),clause("preference","communication",PRIVATE)]},
-            "evidence_requests":[]
-        }),
-        "insomnia_memory_ownership" => json!({"ownership":{"g000":"project","g001":"user"}}),
-        "insomnia_memory_wording" => json!({"candidates":[
-            candidate("fact","project","project","Amber checklist",PROJECT),
-            candidate("preference","communication","user","Meeting window",PRIVATE)
-        ]}),
+        "insomnia_authority_disposition_ledger" => {
+            let mut clauses = vec![clause("fact", "project", PROJECT)];
+            if include_private {
+                clauses.push(clause("preference", "communication", PRIVATE));
+            }
+            json!({"turns":{"accepted":clauses},"evidence_requests":[]})
+        }
+        "insomnia_memory_ownership" => {
+            let mut ownership = json!({"g000":"project"});
+            if include_private {
+                ownership["g001"] = json!("user");
+            }
+            json!({"ownership":ownership})
+        }
+        "insomnia_memory_wording" => {
+            let mut candidates = vec![candidate(
+                "fact",
+                "project",
+                "project",
+                "Amber checklist",
+                PROJECT,
+            )];
+            if include_private {
+                candidates.push(candidate(
+                    "preference",
+                    "communication",
+                    "user",
+                    "Meeting window",
+                    PRIVATE,
+                ));
+            }
+            json!({"candidates":candidates})
+        }
         schema => panic!("unexpected provider schema {schema}"),
     };
     json!({"choices":[{"message":{"content":output.to_string()}}]})

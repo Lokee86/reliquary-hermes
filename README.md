@@ -29,6 +29,6 @@ python -B -m pytest -q --basetemp=.pytest_tmp
 
 The source probes use synthetic history and an isolated Hermes profile. They require no model credentials, network calls or Cargo builds. Without `HP01_HERMES_CHECKOUT`, the pinned-ABC provider tests are explicitly skipped; that reduced run is not equivalent evidence.
 
-## Rust retrieval proof
+## Rust host proofs
 
-Run `cargo test --manifest-path host/Cargo.toml --locked --offline -j 1` with the accepted product checkout at the sibling `Reliquary` path. The test uses real Root storage and retrieval with deterministic loopback model responses. The exact product revision, workspace-local temp paths and verification steps are in [verification](docs/verification.md).
+Run `cargo test --manifest-path host/Cargo.toml --locked --offline -j 1` with the accepted product checkout at the sibling `Reliquary` path. The tests exercise real Root retrieval, copied-source import and tombstone replay with deterministic loopback model responses. The exact product revision, workspace-local temp paths and verification steps are in [verification](docs/verification.md).
