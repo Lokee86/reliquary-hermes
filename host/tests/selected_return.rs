@@ -1,7 +1,7 @@
 mod support;
 
 use reliquary_hermes_host::{ReturnOutcome, SelectedReturn};
-use reliquary_memory::{ProductErrorKind, RetrievalMode, SearchOptions};
+use reliquary_memory::{ProductErrorKind, Rel, RetrievalMode, SearchOptions};
 use std::fs;
 use support::{DECOY, Fixture, PROJECT, TOKEN};
 
@@ -11,6 +11,10 @@ fn selected_return_commits_once_and_reopen_suppresses_duplicate_return() {
     let mounted = fixture.mount();
     fixture.seed(&mounted);
     let unchanged = fixture.rel_len();
+    let initial_proof = Rel::open(&fixture.rel_path)
+        .unwrap()
+        .current_historical_proof()
+        .unwrap();
 
     let search = mounted
         .instance
@@ -89,6 +93,14 @@ fn selected_return_commits_once_and_reopen_suppresses_duplicate_return() {
     drop(mounted);
 
     let accepted_bytes = fs::read(&fixture.rel_path).unwrap();
+    let accepted_proof = Rel::open(&fixture.rel_path)
+        .unwrap()
+        .current_historical_proof()
+        .unwrap();
+    assert_eq!(
+        accepted_proof.retained_records,
+        initial_proof.retained_records + 1
+    );
     let reopened = fixture.mount();
     let turn = reopened
         .instance
@@ -112,6 +124,13 @@ fn selected_return_commits_once_and_reopen_suppresses_duplicate_return() {
     drop(turn);
     drop(reopened);
     assert_eq!(fs::read(&fixture.rel_path).unwrap(), accepted_bytes);
+    assert_eq!(
+        Rel::open(&fixture.rel_path)
+            .unwrap()
+            .current_historical_proof()
+            .unwrap(),
+        accepted_proof
+    );
 }
 
 #[test]
