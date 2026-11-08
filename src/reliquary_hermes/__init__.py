@@ -1,6 +1,6 @@
 """Reliquary Hermes protocol constants and standalone provider registration."""
 
-HERMES_REVISION = "cf4f3a7396814ffcaef69d9af09f7cfdade3ddbe"
+HERMES_REVISION = "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
 PROTOCOL_VERSION = 1
 
 

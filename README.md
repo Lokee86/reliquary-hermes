@@ -14,7 +14,7 @@ Use the local service guide to configure existing owners and activate the provid
 - [Web-dashboard DTOs](docs/ui-contract.md): standard typed schema for all required HU views and user actions.
 - [Verification and remaining gates](docs/verification.md) records the test commands, observed results and remaining integration gates.
 
-Hermes is pinned to upstream `cf4f3a7396814ffcaef69d9af09f7cfdade3ddbe`. The canonical planning files are in the Reliquary Git repository at `bd1acf2c10ab3ffb2887928b8497608fcd5c21f7:docs/architecture/`, including `hermes-reliquary-plugin-implementation-spec-2026-11-06.md` and the post-G4 execution DAG. The accepted G4 product evidence is anchored at `a3c3a964`.
+Hermes is pinned to stable `v0.23.0` at upstream commit `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19`. The canonical planning files are in the Reliquary Git repository at `bd1acf2c10ab3ffb2887928b8497608fcd5c21f7:docs/architecture/`, including `hermes-reliquary-plugin-implementation-spec-2026-11-06.md` and the post-G4 execution DAG. The accepted G4 product evidence is anchored at `a3c3a964`.
 
 ## Python contract tests
 
@@ -23,7 +23,7 @@ Run from this repository using an existing Python 3.11+ interpreter with pytest 
 ```powershell
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 $env:PYTHONDONTWRITEBYTECODE='1'
-$env:HP01_HERMES_CHECKOUT='C:\!bin\workspace\hermes-agent-reliquary-hp01-pin'
+$env:HP01_HERMES_CHECKOUT='C:\!bin\workspace\hermes-agent-reliquary-hp01-v023'
 python -B -m pytest -q --basetemp=.pytest_tmp
 ```
 

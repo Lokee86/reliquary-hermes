@@ -290,3 +290,89 @@ def test_shutdown_drops_an_in_flight_attachment(pinned_provider, monkeypatch, tm
             assert not worker.is_alive()
     assert provider.lifecycle_status == "stopped"
     assert provider.binding is None
+
+
+def test_hermes_manager_keeps_profile_workers_and_hooks_isolated(pinned_provider, monkeypatch, tmp_path):
+    from contextlib import contextmanager
+
+    from agent.memory_manager import MemoryManager
+    from agent.secret_scope import (
+        current_secret_scope_home, get_secret, is_multiplex_active, reset_secret_scope,
+        set_multiplex_active, set_secret_scope,
+    )
+    from hermes_constants import get_hermes_home, reset_hermes_home_override, set_hermes_home_override
+
+    homes = {name: tmp_path / name for name in ("profile-a", "profile-b")}
+    tokens = {name: f"{name}-isolated-multiplex-credential" for name in homes}
+    for name, home in homes.items():
+        save_settings(home, _profile(home, name))
+
+    entered = {name: Event() for name in homes}
+    release = Event()
+    workers, hooks = {}, []
+
+    class Client:
+        def __init__(self, state_dir, profile_id, principal_id, credential, *, binary):
+            assert state_dir == homes[profile_id] / "reliquary"
+            assert principal_id == f"{profile_id}-operator"
+            self.profile_id = profile_id
+            self.credential = credential
+
+        def attach(self, session_id):
+            workers[self.profile_id] = (get_hermes_home(), current_secret_scope_home(),
+                                        get_secret(TOKEN_VAR), self.credential)
+            entered[self.profile_id].set()
+            assert release.wait(5)
+            return SimpleNamespace(session_id=session_id)
+
+    @contextmanager
+    def profile_scope(name):
+        home = set_hermes_home_override(homes[name])
+        secrets = set_secret_scope({TOKEN_VAR: tokens[name]}, profile_home=str(homes[name]))
+        try:
+            yield
+        finally:
+            reset_secret_scope(secrets)
+            reset_hermes_home_override(home)
+
+    original_hook = pinned_provider.ReliquaryMemoryProvider.on_turn_start
+
+    def on_turn_start(provider, turn_number, message, **kwargs):
+        hooks.append((provider, message))
+        return original_hook(provider, turn_number, message, **kwargs)
+
+    monkeypatch.setattr(pinned_provider, "HostClient", Client)
+    monkeypatch.setattr(pinned_provider.ReliquaryMemoryProvider, "on_turn_start", on_turn_start)
+    was_multiplexed = is_multiplex_active()
+    managers, providers = {}, {}
+    set_multiplex_active(True)
+    try:
+        for name in homes:
+            managers[name] = MemoryManager()
+            providers[name] = pinned_provider.ReliquaryMemoryProvider()
+            managers[name].add_provider(providers[name])
+            with profile_scope(name):
+                # The manager must inject the active home rather than falling back to process state.
+                managers[name].initialize_all("same-session")
+        assert all(event.wait(3) for event in entered.values())
+        assert workers == {name: (home, str(home), tokens[name], tokens[name]) for name, home in homes.items()}
+
+        managers["profile-a"].on_turn_start(1, "unresolved")
+        with profile_scope("profile-b"):
+            managers["profile-a"].on_turn_start(1, "foreign")
+            managers["profile-b"].on_turn_start(1, "own-b")
+        with profile_scope("profile-a"):
+            managers["profile-a"].on_turn_start(1, "own-a")
+        assert hooks == [(providers["profile-b"], "own-b"), (providers["profile-a"], "own-a")]
+
+        release.set()
+        for provider in providers.values():
+            _settled(provider, "attached")
+            assert provider.binding.session_id == "same-session"
+    finally:
+        release.set()
+        for manager in managers.values():
+            manager.shutdown_all()
+        set_multiplex_active(was_multiplexed)
+    for provider in providers.values():
+        assert provider.lifecycle_status == "stopped"

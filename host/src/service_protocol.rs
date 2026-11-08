@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 use std::{collections::BTreeSet, fmt};
 
 pub(crate) const PROTOCOL_VERSION: u16 = 1;
-pub(crate) const HERMES_REVISION: &str = "cf4f3a7396814ffcaef69d9af09f7cfdade3ddbe";
+pub(crate) const HERMES_REVISION: &str = "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19";
 
 #[derive(Debug)]
 pub(crate) struct InvalidWire;

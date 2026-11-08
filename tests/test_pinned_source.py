@@ -2,6 +2,7 @@
 
 import inspect
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -18,7 +19,7 @@ def _run_probe(probe, checkout, tmp_path):
         HOME=str(tmp_path),
         USERPROFILE=str(tmp_path),
         HP01_HERMES_CHECKOUT=str(checkout),
-        PYTHONPATH=str(checkout),
+        PYTHONPATH=os.pathsep.join((str(checkout), str(Path(__file__).resolve().parents[1] / "src"))),
         PYTHONNOUSERSITE="1",
         PYTHONIOENCODING="utf-8",
         TEMP=str(tmp_path),
@@ -48,8 +49,10 @@ def _live_sync_probe():
     from agent.codex_responses_adapter import _summarize_user_message_for_log
     from agent.memory_manager import MemoryManager
     from agent.memory_provider import MemoryProvider, is_trivial_prompt
+    from agent.message_metadata import PRE_LLM_BLOCK_WITHHELD_PROMPT, WITHHELD_PROMPT
     from agent.session_persistence import _db_flush_row, _db_flush_write
     from hermes_state import SessionDB
+    from reliquary_hermes.source_capture import capture_snapshot
 
     # Execute the actual turn-to-manager adapter without booting run_agent.py.
     run_agent = Path(os.environ["HP01_HERMES_CHECKOUT"]) / "run_agent.py"
@@ -79,7 +82,10 @@ def _live_sync_probe():
             self.calls.append((user_content, assistant_content, session_id, messages, turn_author))
 
     secret = "sk-proj-abc123def456ghi789jkl012"
+    withheld = "Synthetic prompt withheld by policy"
     messages = [
+        {"role": "user", "content": PRE_LLM_BLOCK_WITHHELD_PROMPT,
+         "display_metadata": {WITHHELD_PROMPT: withheld}},
         {"role": "user", "content": "Review the test configuration", "timestamp": 1700000000.25},
         {"role": "assistant", "content": f"Test output: OPENAI_API_KEY={secret}"},
     ]
@@ -100,8 +106,8 @@ def _live_sync_probe():
             _db_flush_write(agent, rows, messages, messages)
             scope[sync_method.name](
                 agent,
-                original_user_message=messages[0]["content"],
-                final_response=messages[1]["content"],
+                original_user_message=messages[1]["content"],
+                final_response=messages[2]["content"],
                 interrupted=False,
                 messages=messages,
             )
@@ -113,18 +119,26 @@ def _live_sync_probe():
     assert len(provider.calls) == 1
     user, assistant, received_session, received, received_author = provider.calls[0]
     assert (received_session, received_author) == (session_id, turn_author)
-    assert user == messages[0]["content"]
+    assert user == messages[1]["content"]
     assert secret not in assistant and secret not in repr(received)
-    assert secret in messages[1]["content"]
+    assert secret in messages[2]["content"]
+    assert received[0]["content"] == PRE_LLM_BLOCK_WITHHELD_PROMPT
+    # Stable sync_turn still forwards display-only metadata. Copy only the permitted text and markers.
+    assert received[0]["display_metadata"][WITHHELD_PROMPT] == withheld
+    copied = capture_snapshot("hp01-probe", session_id, received)
+    assert withheld.encode() not in copied.messages_json
+    assert PRE_LLM_BLOCK_WITHHELD_PROMPT.encode() in copied.messages_json
+    assert messages[0]["display_metadata"][WITHHELD_PROMPT] == withheld
+    assert [row["role"] for row in received] == ["user", "user", "assistant"]
 
     def identity(view):
         return [(item["message_uid"], item["timestamp"]) for item in view]
 
     assert identity(received) == identity(messages) == identity(durable)
-    assert len({item["message_uid"] for item in received}) == 2
+    assert len({item["message_uid"] for item in received}) == 3
     assert all(isinstance(item["message_uid"], str) and item["message_uid"] for item in received)
-    assert received[0]["timestamp"] == 1700000000.25
-    assert received[1]["timestamp"] > 0
+    assert received[1]["timestamp"] == 1700000000.25
+    assert received[2]["timestamp"] > 0
 
 
 def _archive_delete_probe():
@@ -132,6 +146,9 @@ def _archive_delete_probe():
     from pathlib import Path
 
     from hermes_cli.plugins import get_plugin_manager
+    from hermes_constants import (
+        get_hermes_home, reset_hermes_home_override, set_hermes_home_override,
+    )
     from hermes_state import SessionDB
     from plugins.memory import _ProviderCollector
 
@@ -143,9 +160,11 @@ def _archive_delete_probe():
     seen = []
     db_path = profile / "state.db"
     with SessionDB(db_path) as db, SessionDB(db_path, read_only=True) as reader:
-        def observe(session_id, reason, profile, **kwargs):
-            row = reader.get_session(session_id)
-            seen.append((session_id, reason, profile, None if row is None else row["archived"]))
+        def observe(session_id, reason, profile, deleted_ids=None, **kwargs):
+            ids = deleted_ids or [session_id]
+            rows = [reader.get_session(affected) for affected in ids]
+            states = [None if row is None else row["archived"] for row in rows]
+            seen.append((session_id, reason, profile, get_hermes_home(), ids, states))
 
         _ProviderCollector("hp01-probe").collect(lambda ctx: ctx.register_hook("on_session_delete", observe))
         db.create_session("source-1", source="cli")
@@ -153,10 +172,22 @@ def _archive_delete_probe():
         assert db.set_session_archived("source-1", True)  # Same archived state produces no event.
         assert db.delete_session("source-1")
         assert not db.delete_session("source-1")
+        db.create_session("source-2", source="cli")
+        db.end_session("source-2", "compression")
+        db.create_session("source-3", source="cli", parent_session_id="source-2")
+        assert db.set_session_archived("source-3", True)
+        db.create_session("source-4", source="cli")
+        other_scope = set_hermes_home_override(profile.with_name("other-profile"))
+        try:
+            assert db.delete_sessions(["source-3", "source-4", "missing"], include_compression_chain=True) == 2
+        finally:
+            reset_hermes_home_override(other_scope)
 
     assert seen == [
-        ("source-1", "archive", "hp01-probe", 1),
-        ("source-1", "delete", "hp01-probe", None),
+        ("source-1", "archive", "hp01-probe", profile, ["source-1"], [1]),
+        ("source-1", "delete", "hp01-probe", profile, ["source-1"], [None]),
+        ("source-3", "archive", "hp01-probe", profile, ["source-2", "source-3"], [1, 1]),
+        ("source-2", "delete", "hp01-probe", profile, ["source-2", "source-3", "source-4"], [None, None, None]),
     ], seen
 
 

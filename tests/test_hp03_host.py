@@ -83,6 +83,18 @@ def test_live_host_start_attach_scope_leases_outage_and_restart(tmp_path, binari
         project = existing.attach("session-project")
         assert (project.rel_id, project.user_id) == (project_id, user_id)
         assert existing._process is None
+
+        assert first_discovery["hermes_revision"] == "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
+        discovery_path = state / "discovery.json"
+        # The historical canary pin must fail through normal discovery, even with valid credentials.
+        previous_pin = "cf4f3a7396814ffcaef69d9af09f7cfdade3ddbe"
+        discovery_path.write_bytes(canonical({**first_discovery, "hermes_revision": previous_pin}))
+        try:
+            with pytest.raises(HostUnavailable, match="invalid_discovery"):
+                existing.attach("session-a")
+        finally:
+            discovery_path.write_bytes(canonical(first_discovery))
+
         wrong = HostClient(state, "profile-a", "principal-a", "wrong-" + TOKEN, binary=binary)
         with pytest.raises(HostUnavailable, match="host_authentication"):
             wrong.attach("session-a")
