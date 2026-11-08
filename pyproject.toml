@@ -11,6 +11,9 @@ test = ["pytest>=9.1,<10"]
 [project.entry-points."hermes_agent.memory_providers"]
 reliquary = "reliquary_hermes:register"
 
+[project.entry-points."hermes_agent.plugins"]
+reliquary-source-observer = "reliquary_hermes.source_observer:register"
+
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests"]
 testpaths = ["tests"]
