@@ -14,7 +14,6 @@
     "docs/documentation-policy.md",
     "docs/host-audit.md",
     "docs/protocol.md",
-    "docs/handoff-contract.md",
     "docs/verification.md",
     "docs/ui-contract.md",
     "contracts/dashboard-v1.schema.json"
@@ -52,11 +51,9 @@
     },
     {
       "paths": [
-        "src/reliquary_hermes/consumption.py",
         "src/reliquary_hermes/__init__.py"
       ],
       "docs": [
-        "docs/handoff-contract.md",
         "docs/host-audit.md"
       ]
     },
@@ -88,7 +85,6 @@
       ],
       "docs": [
         "docs/protocol.md",
-        "docs/handoff-contract.md",
         "docs/host-audit.md",
         "docs/verification.md"
       ]

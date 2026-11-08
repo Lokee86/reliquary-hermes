@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
-from reliquary_hermes.authority import ProfileGrant
+from reliquary_hermes.authority import ActivePhy, ProfileGrant, RelBindings, SessionRel
 from reliquary_hermes.ui_contract import CursorBinding, UIRequest, UIResponse, VerifiedUIContext, verify_expected_revisions
 from reliquary_hermes.ui_schema import CAPABILITIES, MUTATIONS, SCHEMA
 from reliquary_hermes.validation import ContractError, canonical
@@ -169,7 +169,10 @@ def test_viewer_cross_origin_and_unauthenticated_ui_mutations_are_denied(op):
     for auth in (context(manage=False), context(authenticated=False), context(same_origin=False)):
         with pytest.raises(ContractError, match="ui_denied"):
             auth.authorize(req)
-    provider = ProfileGrant("profile-a", "principal-a", "rel-a", (), "a"*32)
+    provider = ProfileGrant(
+        "profile-a", "principal-a", RelBindings("rel-a", (SessionRel("session-1"),)),
+        ActivePhy("phy-a", "alice"), "a"*32,
+    )
     with pytest.raises(ContractError):
         provider.authorize(req, "a"*32)
 

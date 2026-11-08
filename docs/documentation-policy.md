@@ -12,7 +12,7 @@ There is no baseline and no blanket document or source exemption. The root index
 
 - `protocol.py`, `validation.py`, `tools.py`: [protocol](protocol.md).
 - `authority.py`, `source.py`: [protocol](protocol.md) and [host audit](host-audit.md).
-- `consumption.py` and pinned capability constants: [handoff contract](handoff-contract.md) and [host audit](host-audit.md).
+- `__init__.py` and the pinned source probes are owned by [host audit](host-audit.md) and [verification](verification.md).
 - `ui_schema.py`, `ui_contract.py` and exported `contracts/dashboard-v1.schema.json`: [web-dashboard DTO contract](ui-contract.md).
 - Tests and test configuration: [verification](verification.md).
 - Planning, limitations and behavioral evidence remain in the verification owner's later-gates sections. A separate maintainer map/coverage/roadmap/limits hierarchy is unnecessary for this small contract fixture; these explicit owners satisfy the narrow fixture scope, rather than pretending a production profile is complete.

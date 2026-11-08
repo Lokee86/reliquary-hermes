@@ -3,11 +3,31 @@
 import json
 from collections import deque
 from dataclasses import dataclass
+from hashlib import sha256
+from itertools import count
 
-from reliquary_hermes import PINNED_HANDOFF_API_VERSION
 from reliquary_hermes.authority import ProfileGrant
-from reliquary_hermes.consumption import Decision, TurnScope, evaluate_handoff
-from reliquary_hermes.validation import canonical, content_digest
+from reliquary_hermes.validation import (MAX_WIRE_BYTES, ContractError, canonical, choice, content_digest,
+                                        identifier, require, sequence, text)
+from source_lifecycle import SourceTombstones
+
+
+@dataclass(frozen=True)
+class TurnScope:
+    profile_id: str
+    principal_id: str
+    session_id: str
+    turn_id: str
+    epoch: int
+
+
+@dataclass(frozen=True)
+class SelectedRecall:
+    delivery_id: str
+    scope: TurnScope
+    source_epoch: int
+    memory_ids: tuple[str, ...]
+    context: str
 
 
 @dataclass(frozen=True)
@@ -16,6 +36,7 @@ class ReferenceJob:
     principal_id: str
     session_id: str
     epoch: int
+    source_epoch: int
     egress_digest: str
     message_uids: tuple[str, ...]
     turn_author_json: bytes
@@ -23,33 +44,37 @@ class ReferenceJob:
 
 
 class FakeHost:
-    def __init__(self, grant: ProfileGrant, *, proposed_hook_version=PINNED_HANDOFF_API_VERSION):
+    def __init__(self, grant: ProfileGrant):
         self.grant = grant
-        self.proposed_hook_version = proposed_hook_version
-        self.receipts = set()
-        self.prepared = {}
+        self.recalls = {}
         self.available = True
-        self.source_available = True
-        self.active_cut = "cut-1"
-        self.invalidated_manifests = set()
+        self.source_tombstones = SourceTombstones()
+        self.unavailable_sources = set()
+        self.source_epochs = {}
+        self.binding_epochs = count(1)
 
-    def source_invalidation_notice(self, reason):
-        """Simulate the required future host-only event; no authenticated wire path exists."""
-        from reliquary_hermes.validation import choice
-        choice(reason, {"stale", "deleted", "rewound", "unavailable"})
-        self.source_available = False
-        self.invalidated_manifests.update(d.manifest_digest for d in self.prepared.values())
-        self.prepared.clear()
+    def source_invalidation_notice(self, profile_id, session_id, reason):
+        """Simulate the trusted lifecycle signal without implementing its transport."""
+        choice(reason, {"stale", "archived", "deleted", "rewound", "unavailable"})
+        key = (profile_id, session_id)
+        if reason in {"archived", "deleted"}:
+            self.source_tombstones.record(profile_id, session_id, reason)
+        self.unavailable_sources.add(key)
+        self.source_epochs[key] = self.source_epochs.get(key, 0) + 1
+        self.recalls = {
+            delivery_id: recall for delivery_id, recall in self.recalls.items()
+            if (recall.scope.profile_id, recall.scope.session_id) != key
+        }
 
-    def handoff(self, delivery, event, active_scope):
-        if delivery.manifest_digest in self.invalidated_manifests:
-            return Decision("source_unavailable")
-        decision = evaluate_handoff(delivery, event, active_scope=active_scope,
-                                    hook_api_version=self.proposed_hook_version,
-                                    source_available=self.source_available, active_cut=self.active_cut)
-        if decision.status == "confirmed":
-            self.receipts.add(decision.receipt_key)
-        return decision
+    def source_status(self, profile_id, session_id):
+        if self.source_tombstones.is_tombstoned(profile_id, session_id):
+            return "source_tombstoned"
+        if not self.available or (profile_id, session_id) in self.unavailable_sources:
+            return "source_unavailable"
+        return "current"
+
+    def source_epoch(self, profile_id, session_id):
+        return self.source_epochs.get((profile_id, session_id), 0)
 
 
 def provider_class(abc):
@@ -67,24 +92,37 @@ def provider_class(abc):
             self.context = "primary"
             self.profile_id = None
             self.session_id = None
+            self.user_id = None
 
         def is_available(self):
             return bool(self.homes)  # no host call and no network
 
+        def _clear_recall(self):
+            self.last_recall = None
+            if self.profile_id is not None and self.session_id is not None:
+                scope = self.scope()
+                self.host.recalls = {
+                    delivery_id: recall for delivery_id, recall in self.host.recalls.items()
+                    if recall.scope != scope
+                }
+
         def initialize(self, session_id, **kwargs):
             home = kwargs["hermes_home"]
             profile = self.homes.get(home)
+            self._clear_recall()
+            self.profile_id = self.session_id = self.user_id = None
             if profile != self.host.grant.profile_id:
                 self.status = "denied"
-                self.profile_id = self.session_id = None
-                self.last_recall = None
-                self.host.prepared.clear()
+                return
+            try:
+                self.host.grant.rel_bindings.rel_for(session_id)
+            except ContractError:
+                self.status = "denied"
                 return
             self.profile_id, self.session_id = profile, session_id
+            self.user_id = self.host.grant.user_id
             self.context = kwargs.get("agent_context", "primary")
-            self.epoch += 1
-            self.last_recall = None
-            self.host.prepared.clear()
+            self.epoch = next(self.host.binding_epochs)
             self.status = "ready"
 
         def scope(self, turn="turn-1"):
@@ -97,40 +135,76 @@ def provider_class(abc):
             if not self.host.available or session_id != self.session_id or self.profile_id is None:
                 self.status = "unavailable"
                 return
+            source_status = self.host.source_status(self.profile_id, session_id)
+            if source_status != "current":
+                self.status = source_status
+                return
             if len(self.jobs) == self.jobs.maxlen:
                 self.status = "backpressure"
                 return
-            if not messages or any(not isinstance(m.get("message_uid"), str) or not m["message_uid"] for m in messages):
+            try:
+                uids = []
+                for message in sequence(messages, 128, nonempty=True):
+                    require(type(message) is dict, "invalid_source_message")
+                    uids.append(identifier(message.get("message_uid")))
+                    timestamp = message.get("timestamp")
+                    require(type(timestamp) in {int, float} and 0 <= timestamp < float("inf"), "invalid_source_timestamp")
+                    text(message.get("content"), 32768, blank=True)
+                require(len(set(uids)) == len(uids), "duplicate_source_id")
+                egress, author = canonical(messages), canonical(turn_author)
+                require(len(egress) + len(author) <= MAX_WIRE_BYTES, "wire_limit")
+            except (ContractError, RecursionError):
                 self.status = "source_unavailable"
                 return
-            # Already privacy-filtered provider egress; never reread an unredacted source here.
-            self.jobs.append(ReferenceJob(self.profile_id, self.host.grant.principal_id, session_id, self.epoch, content_digest(messages), tuple(m["message_uid"] for m in messages),
-                                          canonical(turn_author), canonical(messages)))
+            # Copy the already filtered callback. A source registry verifies it separately.
+            self.jobs.append(ReferenceJob(
+                self.profile_id, self.host.grant.principal_id, session_id, self.epoch,
+                self.host.source_epoch(self.profile_id, session_id), sha256(egress).hexdigest(),
+                tuple(uids), author, egress,
+            ))
             self.status = "queued_not_durable"
+
+        def _scoped_recall(self, session_id):
+            if (self.profile_id is None or self.session_id is None or session_id != self.session_id or
+                    self.host.source_status(self.profile_id, session_id) != "current"):
+                return None
+            scope = self.scope()
+            source_epoch = self.host.source_epoch(self.profile_id, session_id)
+            return next((result for result in reversed(self.host.recalls.values())
+                         if result.scope == scope and result.source_epoch == source_epoch), None)
 
         def prefetch(self, query, *, session_id=""):
             self.last_recall = None
-            if (not self.host.available or not self.host.source_available or self.profile_id is None or
-                    session_id != self.session_id):
+            delivery = self._scoped_recall(session_id)
+            if delivery is None:
                 return ""
-            entries = [d for d in self.host.prepared.values() if d.scope == self.scope()]
-            if not entries:
-                return ""
-            delivery = entries[-1]
-            self.last_recall = abc.RecallStatus("HP01 fake", len(delivery.memory_ids))
+            self.last_recall = (
+                delivery.source_epoch,
+                abc.RecallStatus("HP01 fake", len(delivery.memory_ids)),
+            )
             return delivery.context
 
         def queue_prefetch(self, query, *, session_id=""):
-            self.status = "prefetch_queued"  # never an accepted handoff
+            self.status = "prefetch_queued"
 
         def recall_status(self):
-            return self.last_recall
+            if self.last_recall is None or self.host.source_status(self.profile_id, self.session_id) != "current":
+                return None
+            source_epoch, status = self.last_recall
+            return status if source_epoch == self.host.source_epoch(self.profile_id, self.session_id) else None
 
         def on_session_switch(self, new_session_id, *, parent_session_id="", reset=False, rewound=False, **kwargs):
+            self._clear_recall()
+            self.epoch = next(self.host.binding_epochs)
+            self.session_id = None
+            if self.profile_id is None:
+                return
+            try:
+                self.host.grant.rel_bindings.rel_for(new_session_id)
+            except ContractError:
+                self.status = "denied"
+                return
             self.session_id = new_session_id
-            self.epoch += 1
-            self.last_recall = None
-            self.host.prepared.clear()
 
         def get_tool_schemas(self):
             from reliquary_hermes.tools import tool_schemas
@@ -139,12 +213,12 @@ def provider_class(abc):
         def handle_tool_call(self, tool_name, args, **kwargs):
             if kwargs.get("cancelled"):
                 return json.dumps({"status": "cancelled"})
-            return json.dumps({"status": "read_only", "content": self.prefetch(args.get("query", ""), session_id=self.session_id)})
+            delivery = self._scoped_recall(self.session_id)
+            return json.dumps({"status": "ok", "content": delivery.context} if delivery else {"status": "unavailable"})
 
         def shutdown(self):
-            self.last_recall = None
-            self.host.prepared.clear()
-            self.profile_id = self.session_id = None
+            self._clear_recall()
+            self.profile_id = self.session_id = self.user_id = None
             self.status = "stopped"
 
     return FakeProvider
@@ -221,7 +295,8 @@ class BoundSourceImporter:
                      "snapshot_digest": content_digest(body), "availability": "current"}
         parsed = SourceSnapshot.parse(candidate)
         key = (scope.profile_id, scope.principal_id, scope.session_id, scope.epoch)
-        self.sources[key] = {"candidate": parsed, "egress_digest": content_digest(messages),
+        source_epoch = self.host.source_epoch(scope.profile_id, scope.session_id)
+        self.sources[(*key, source_epoch)] = {"candidate": parsed, "egress_digest": content_digest(messages),
                              "uids": tuple(m["message_uid"] for m in messages), "author": canonical(turn_author),
                              "authenticated_actor_ids": tuple(authenticated_actor_ids),
                              "authenticated_message_actors": tuple(authenticated_message_actors), "available": available}
@@ -235,10 +310,13 @@ class BoundSourceImporter:
             return BoundImportDecision("denied")
         key = (job.profile_id, job.principal_id, job.session_id, job.epoch)
         active = (active_scope.profile_id, active_scope.principal_id, active_scope.session_id, active_scope.epoch)
-        if key != active:
+        source_status = self.host.source_status(job.profile_id, job.session_id)
+        if source_status == "source_tombstoned":
+            return BoundImportDecision(source_status)
+        if key != active or job.source_epoch != self.host.source_epoch(job.profile_id, job.session_id):
             return BoundImportDecision("stale_job")
-        record = self.sources.get(key)
-        if record is None or not record["available"] or not self.host.source_available:
+        record = self.sources.get((*key, job.source_epoch))
+        if record is None or not record["available"] or source_status != "current":
             return BoundImportDecision("source_unavailable")
         messages = json.loads(job.copied_egress_json)
         if (job.egress_digest != content_digest(messages) or job.egress_digest != record["egress_digest"] or
@@ -246,14 +324,14 @@ class BoundSourceImporter:
             return BoundImportDecision("source_changed")
         if job.turn_author_json != record["author"]:
             return BoundImportDecision("source_author_mismatch")
-        author = json.loads(job.turn_author_json)
-        current_actor = author.get("id") if type(author) is dict else None
-        current_bot = author.get("is_bot") if type(author) is dict else None
+        turn_author = json.loads(job.turn_author_json)
+        current_actor = turn_author.get("id") if type(turn_author) is dict else None
+        current_bot = turn_author.get("is_bot") if type(turn_author) is dict else None
         current_verified = (type(current_actor) is str and bool(current_actor) and type(current_bot) is bool and
                             record["authenticated_actor_ids"] == (current_actor,))
         # Snapshot-level copied history is REL-only. A current turn actor is NOT
         # authority for historical/shared rows, even when independently authenticated.
-        owners = (grant.rel_owner,)
+        owners = (grant.rel_bindings.rel_for(job.session_id),)
         assertions = record["authenticated_message_actors"]
         asserted = dict(assertions)
         if len(asserted) != len(assertions) or not set(asserted) <= set(job.message_uids):
@@ -268,11 +346,11 @@ class BoundSourceImporter:
             verified = type(actor) is str and bool(actor) and type(bot) is bool and asserted.get(uid) == actor
             if uid in asserted and not verified:
                 return BoundImportDecision("source_author_mismatch")
-            routes.append((uid, grant.owners_for(actor, bot) if verified else owners))
+            routes.append((uid, grant.owners_for(job.session_id, actor, bot) if verified else owners))
         phy = "authorized" if any(len(route) > 1 for _, route in routes) else "denied"
         digest = record["candidate"].snapshot_digest
         receipt = content_digest({"profile_id": job.profile_id, "principal_id": job.principal_id,
                                   "session_id": job.session_id, "epoch": job.epoch,
-                                  "snapshot_digest": digest, "turn_author": author, "message_routes": routes})
+                                  "snapshot_digest": digest, "turn_author": turn_author, "message_routes": routes})
         self.receipts.add(receipt)
         return BoundImportDecision("accepted_fixture", owners, digest, receipt, phy, tuple(routes), current_verified)

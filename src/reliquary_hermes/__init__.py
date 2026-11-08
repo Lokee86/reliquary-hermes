@@ -1,6 +1,4 @@
 """Pure HP01 contract values; no plugin registration or service side effects."""
 
-HERMES_REVISION = "11c1f1bbe65fca1cf8bcaa005443473a67915712"
+HERMES_REVISION = "cf4f3a7396814ffcaef69d9af09f7cfdade3ddbe"
 PROTOCOL_VERSION = 1
-# The pinned host does NOT supply the proposed terminal handoff API.
-PINNED_HANDOFF_API_VERSION = None

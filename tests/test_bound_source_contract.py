@@ -87,7 +87,7 @@ def test_author_tampering_unavailable_source_and_unregistered_dto_never_get_rece
     importer.register_source_fixture(p.scope(), messages(), author, authenticated_actor_ids=("alice",))
     tampered = replace(job, turn_author_json=canonical({"id": "other", "is_bot": False}))
     assert importer.accept_job(tampered, p.scope()).status == "source_author_mismatch"
-    h.source_available = False
+    h.available = False
     assert importer.accept_job(job, p.scope()).status == "source_unavailable"
     assert importer.accept_job({"authority": "hermes_source_copied_snapshot"}, p.scope()).status == "invalid_job"
     assert not importer.receipts
@@ -152,3 +152,37 @@ def test_forged_unknown_duplicate_or_missing_per_message_actor_assertion_fails(p
                                      authenticated_message_actors=assertions)
     assert importer.accept_job(job, p.scope()).status == "source_author_mismatch"
     assert not importer.receipts
+
+
+@pytest.mark.parametrize("reason", ["archived", "deleted"])
+def test_terminal_source_tombstone_rejects_accepted_replay_and_reregistered_job(pinned_abc, reason):
+    p, h = setup_provider(pinned_abc)
+    source, author = messages(), {"id": "alice", "is_bot": False}
+    job = queued(p, source, author)
+    importer = BoundSourceImporter(h)
+    importer.register_source_fixture(p.scope(), source, author)
+    decision = importer.accept_job(job, p.scope())
+    assert decision.status == "accepted_fixture"
+    h.source_invalidation_notice("profile-a", "session-1", reason)
+    assert importer.accept_job(job, p.scope()).status == "source_tombstoned"
+
+    p.on_session_switch("session-1")
+    importer.register_source_fixture(p.scope(), source, author)
+    replay = replace(job, epoch=p.scope().epoch, source_epoch=h.source_epoch("profile-a", "session-1"))
+    assert importer.accept_job(replay, p.scope()).status == "source_tombstoned"
+    assert importer.receipts == {decision.receipt_key}
+
+
+def test_transient_source_invalidation_rejects_queued_job_after_resync(pinned_abc):
+    p, h = setup_provider(pinned_abc)
+    source, author = messages(), {"id": "alice", "is_bot": False}
+    job = queued(p, source, author)
+    importer = BoundSourceImporter(h)
+    importer.register_source_fixture(p.scope(), source, author)
+    h.source_invalidation_notice("profile-a", "session-1", "rewound")
+    h.unavailable_sources.clear()
+    assert importer.accept_job(job, p.scope()).status == "stale_job"
+    fresh_job = queued(p, source, author)
+    assert importer.accept_job(fresh_job, p.scope()).status == "source_unavailable"
+    importer.register_source_fixture(p.scope(), source, author)
+    assert importer.accept_job(fresh_job, p.scope()).status == "accepted_fixture"

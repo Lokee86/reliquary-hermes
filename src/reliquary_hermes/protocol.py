@@ -3,13 +3,12 @@
 from dataclasses import dataclass
 from typing import Any
 
-from . import PINNED_HANDOFF_API_VERSION, PROTOCOL_VERSION
+from . import PROTOCOL_VERSION
 from .source import SourceSnapshot
-from .consumption import confirmation_key
 from .validation import (canonical, choice, decode, digest, identifier,
                          integer, obj, require, sequence, text)
 
-MUTATIONS = frozenset({"snapshot_submit", "consumption_confirm", "edit_memory"})
+MUTATIONS = frozenset({"snapshot_submit", "edit_memory"})
 OPERATIONS = MUTATIONS | {"memory_query", "refine_query", "traverse_graph", "owner_status", "inspect_memory"}
 
 
@@ -35,11 +34,6 @@ def _arguments(operation: str, value: Any) -> None:
         integer(v["depth"], 1, 3)
         integer(v["limit"], 1, 50)
         identifier(v["cut"])
-    elif operation == "consumption_confirm":
-        v = obj(value, {"delivery_id", "manifest_digest", "handoff_event_id"})
-        identifier(v["delivery_id"])
-        digest(v["manifest_digest"])
-        identifier(v["handoff_event_id"])
     elif operation == "owner_status":
         obj(value, set())
     elif operation == "inspect_memory":
@@ -81,9 +75,6 @@ class Request:
         else:
             require(revision is None and key is None, "unexpected_mutation_fields")
         _arguments(op, v["arguments"])
-        if op == "consumption_confirm":
-            require(key == confirmation_key(v["arguments"]["delivery_id"], v["arguments"]["manifest_digest"]),
-                    "confirmation_key_mismatch")
         if op == "snapshot_submit":
             require(v["arguments"]["profile_id"] == v["profile_id"] and
                     v["arguments"]["session_id"] == v["session_id"], "source_scope_mismatch")
@@ -114,31 +105,30 @@ class Response:
             identifier(e["code"])
             require(type(e["retryable"]) is bool, "invalid_retryable")
         elif op in {"memory_query", "refine_query", "traverse_graph"}:
-            r = obj(result, {"search_id", "delivery_id", "manifest_digest", "context", "memory_ids"})
+            r = obj(result, {"search_id", "delivery_id", "context", "memory_ids", "provenance"})
             identifier(r["search_id"])
             identifier(r["delivery_id"])
-            digest(r["manifest_digest"])
             text(r["context"], 32768, blank=True)
             _ids(r["memory_ids"])
+            sources = set()
+            for item in sequence(r["provenance"], 50):
+                source = obj(item, {"memory_id", "source_snapshot_digests"})
+                memory_id = identifier(source["memory_id"])
+                require(memory_id not in sources, "duplicate_id")
+                digests = [digest(d) for d in sequence(source["source_snapshot_digests"], 50)]
+                require(len(set(digests)) == len(digests), "duplicate_source_digest")
+                sources.add(memory_id)
+            require(sources == set(r["memory_ids"]), "provenance_mismatch")
             require(v["cut"] is not None, "missing_cut")
         elif op == "snapshot_submit":
             r = obj(result, {"import_receipt", "snapshot_digest", "durable"})
             identifier(r["import_receipt"])
             digest(r["snapshot_digest"])
             require(r["durable"] is True, "not_durable")
-        elif op == "consumption_confirm":
-            require(PINNED_HANDOFF_API_VERSION == 1, "handoff_unavailable")
-            r = obj(result, {"receipt_id", "delivery_id", "manifest_digest", "confirmed"})
-            identifier(r["receipt_id"])
-            identifier(r["delivery_id"])
-            digest(r["manifest_digest"])
-            require(r["confirmed"] is True, "not_confirmed")
         elif op == "owner_status":
-            r = obj(result, {"worker_state", "pending_jobs", "handoff_api_version"})
+            r = obj(result, {"worker_state", "pending_jobs"})
             choice(r["worker_state"], {"pending", "running", "held", "failed", "complete", "unavailable"})
             integer(r["pending_jobs"], 0, 10000)
-            require(r["handoff_api_version"] is None or type(r["handoff_api_version"]) is int and
-                    r["handoff_api_version"] == 1, "unsupported_handoff")
         elif op == "inspect_memory":
             r = obj(result, {"memory_id", "content", "source_snapshot_digests"})
             identifier(r["memory_id"])
@@ -169,7 +159,4 @@ class Response:
             require(result["memory_id"] == arguments["memory_id"], "response_target_mismatch")
         if self.operation == "snapshot_submit":
             require(result["snapshot_digest"] == arguments["snapshot_digest"], "response_source_mismatch")
-        if self.operation == "consumption_confirm":
-            require(result["delivery_id"] == arguments["delivery_id"], "response_target_mismatch")
-            require(result["manifest_digest"] == arguments["manifest_digest"], "response_manifest_mismatch")
         return self
