@@ -21,7 +21,7 @@ use std::{
 
 pub const PROJECT: &str = "Lantern release uses the amber checklist.";
 const PRIVATE: &str = "My preferred meeting window is afternoons.";
-const DECOY: &str = "Lantern color is unrelated to the release checklist.";
+pub const DECOY: &str = "Lantern color is unrelated to the release checklist.";
 pub const TOKEN: &str = "hp02-test-operator-admission-credential";
 pub const OTHER_TOKEN: &str = "hp02-test-other-operator-admission-credential";
 
@@ -302,6 +302,7 @@ fn reply(request: &Value, include_private: bool) -> Value {
                 );
                 "Amber checklist"
             }
+            "decoy" => "Lantern decoy",
             "overflow" => {
                 assert_eq!(candidates.len(), 1);
                 "Overflow note"

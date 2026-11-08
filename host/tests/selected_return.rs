@@ -3,7 +3,7 @@ mod support;
 use reliquary_hermes_host::{ReturnOutcome, SelectedReturn};
 use reliquary_memory::{ProductErrorKind, RetrievalMode, SearchOptions};
 use std::fs;
-use support::{Fixture, PROJECT, TOKEN};
+use support::{DECOY, Fixture, PROJECT, TOKEN};
 
 #[test]
 fn selected_return_commits_once_and_reopen_suppresses_duplicate_return() {
@@ -138,6 +138,36 @@ fn revoked_return_leaves_the_owner_unchanged() {
         ProductErrorKind::Revoked
     );
     assert_eq!(fixture.rel_len(), unchanged);
+}
+
+#[test]
+fn unenrolled_selection_is_not_released_without_a_receipt() {
+    let fixture = Fixture::new();
+    let mounted = fixture.mount();
+    fixture.seed(&mounted);
+    let before = fs::read(&fixture.rel_path).unwrap();
+    let turn = mounted
+        .instance
+        .begin_retrieval(mounted.owner, "unenrolled-turn", RetrievalMode::Deliver)
+        .unwrap();
+    let prepared = mounted
+        .instance
+        .memory_query(&turn, "decoy", &fixture.runtime)
+        .unwrap()
+        .prepared
+        .unwrap();
+    let preview = mounted
+        .instance
+        .preview_retrieval(&turn, &prepared)
+        .unwrap();
+    assert_eq!(preview.memories.len(), 1);
+    assert_eq!(preview.memories[0].content, DECOY);
+
+    let boundary =
+        SelectedReturn::new(&mounted.admission, &mounted.instance, &turn, &prepared).unwrap();
+    assert!(boundary.return_selected().is_err());
+    assert!(boundary.return_selected().is_err());
+    assert_eq!(fs::read(&fixture.rel_path).unwrap(), before);
 }
 
 #[test]
