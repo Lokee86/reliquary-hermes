@@ -15,6 +15,10 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 pub(crate) const ATTACH: &str = "/v1/attach";
 pub(crate) const REQUEST: &str = "/v1/request";
 pub(crate) const SOURCE: &str = "/v1/source";
+pub(crate) const RUNTIME_ATTACH: &str = "/v1/runtime/attach";
+pub(crate) const RUNTIME_HEARTBEAT: &str = "/v1/runtime/heartbeat";
+pub(crate) const RUNTIME_DETACH: &str = "/v1/runtime/detach";
+pub(crate) const RUNTIME_SCOPE: &str = "/v1/runtime/scope";
 
 pub(crate) struct TransportKey(hmac::Key);
 
@@ -196,6 +200,10 @@ fn parse_headers(bytes: &[u8], expected_host: &str) -> Result<RequestHeaders, Ht
         Some(ATTACH) => ATTACH,
         Some(REQUEST) => REQUEST,
         Some(SOURCE) => SOURCE,
+        Some(RUNTIME_ATTACH) => RUNTIME_ATTACH,
+        Some(RUNTIME_HEARTBEAT) => RUNTIME_HEARTBEAT,
+        Some(RUNTIME_DETACH) => RUNTIME_DETACH,
+        Some(RUNTIME_SCOPE) => RUNTIME_SCOPE,
         _ => return Err(INVALID),
     };
     let fields = parsed.headers;

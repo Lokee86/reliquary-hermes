@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from .authority import Discovery
 from .protocol import Request, Response
 from .validation import (ContractError, MAX_WIRE_BYTES, canonical, decode, digest,
-                         identifier, obj, require)
+                         identifier, integer, obj, require)
 
 
 _DISCOVERY_FIELDS = set(Discovery.__dataclass_fields__)
@@ -98,6 +98,94 @@ class HostClient:
         self._token = token
         self._attached: tuple[Discovery, SessionBinding] | None = None
         self._process: subprocess.Popen | None = None
+        self._runtime_lease: str | None = None
+        self._runtime_id = secrets.token_hex(16)
+        self._runtime_scopes: set[str] = set()
+
+    def _runtime_call(self, path: str, value: dict) -> dict:
+        discovery = self._read_discovery()
+        if discovery is None:
+            raise HostUnavailable("host_unavailable")
+        reply = self._exchange(discovery, path, canonical(value),
+                               time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS)
+        try:
+            result = decode(reply)
+            require(type(result) is dict, "invalid_runtime_response")
+            return result
+        except ContractError:
+            raise HostUnavailable("invalid_runtime_response") from None
+
+    def attach_runtime(self, session_id: str) -> tuple[str, dict[str, int]]:
+        """Register this provider process as a live integration runtime."""
+        session = identifier(session_id)
+        result = self._runtime_call("/v1/runtime/attach", {
+            "integration_kind": "hermes", "runtime_id": self._runtime_id,
+            "principal_id": self._principal_id, "session_id": session,
+        })
+        try:
+            lease = identifier(result["runtime_lease_id"])
+        except (KeyError, ContractError):
+            raise HostUnavailable("invalid_runtime_response") from None
+        scopes = self._parse_reconciliation_scopes(result)
+        self._runtime_lease = lease
+        self._runtime_scopes = {session}
+        return lease, scopes
+
+    def add_runtime_scope(self, session_id: str) -> tuple[str, dict[str, int]]:
+        session = identifier(session_id)
+        lease = self._runtime_lease
+        if lease is None:
+            return self.attach_runtime(session)
+        try:
+            result = self._runtime_call("/v1/runtime/scope", {"lease_id": lease,
+                                                             "session_id": session})
+        except HostUnavailable as error:
+            if str(error) != "runtime_lease_stale":
+                raise
+            # Invalidate this exact lease. The next probe can retry registration
+            # even if the host goes away again before this attempt completes.
+            self._runtime_lease = None
+            self._runtime_scopes.clear()
+            return self.attach_runtime(session)
+        scopes = self._parse_reconciliation_scopes(result)
+        self._runtime_scopes.add(session)
+        return lease, scopes
+
+    @staticmethod
+    def _parse_reconciliation_scopes(result: dict) -> dict[str, int]:
+        try:
+            required = result["reconciliation_required"]
+            require(type(required) is list, "invalid_runtime_response")
+            scopes = {}
+            for item in required:
+                require(type(item) is dict and set(item) == {"session_id", "fence_epoch"},
+                        "invalid_runtime_response")
+                session = identifier(item["session_id"])
+                epoch = integer(item["fence_epoch"], 1, (1 << 63) - 1)
+                require(session not in scopes, "invalid_runtime_response")
+                scopes[session] = epoch
+            return scopes
+        except (KeyError, ContractError):
+            raise HostUnavailable("invalid_runtime_response") from None
+
+    def heartbeat_runtime(self) -> None:
+        lease = self._runtime_lease
+        if lease is None:
+            raise HostUnavailable("runtime_not_attached")
+        self._runtime_call("/v1/runtime/heartbeat", {"lease_id": lease})
+
+    def detach_runtime(self) -> None:
+        lease, self._runtime_lease = self._runtime_lease, None
+        self._runtime_scopes.clear()
+        if lease is not None:
+            self._runtime_call("/v1/runtime/detach", {"lease_id": lease, "clean": True})
+
+    @property
+    def runtime_lease_id(self) -> str | None:
+        return self._runtime_lease
+
+    def runtime_has_scope(self, session_id: str) -> bool:
+        return self._runtime_lease is not None and session_id in self._runtime_scopes
 
     def _read_discovery(self) -> Discovery | None:
         path = self._state_dir / "discovery.json"
@@ -154,7 +242,7 @@ class HostClient:
             raise HostUnavailable("invalid_host_response") from None
         if status != 200:
             code = {403: "host_denied", 409: "host_conflict", 503: "host_unavailable"}.get(status)
-            if path == "/v1/source":
+            if path == "/v1/source" or path.startswith("/v1/runtime/"):
                 try:
                     error = obj(decode(reply), {"code", "retryable"})
                     require(type(error["retryable"]) is bool, "invalid_source_response")
@@ -238,10 +326,17 @@ class HostClient:
                          "source_json": canonical(view).decode("utf-8")}
         elif job.kind == "terminal":
             arguments = {"reason": job.reason}
-        envelope = canonical({"protocol_version": 1, "profile_id": self._profile_id,
+        envelope_value = {"protocol_version": 1, "profile_id": self._profile_id,
                               "principal_id": self._principal_id, "session_id": job.session_id,
                               "generation": job.generation, "idempotency_key": job.idempotency_key,
-                              "operation": job.kind, "arguments": arguments})
+                              "operation": job.kind, "arguments": arguments}
+        runtime_lease = job.lease_id or (
+            self._runtime_lease if job.kind == "snapshot" and job.session_id in self._runtime_scopes else None)
+        if runtime_lease is not None:
+            envelope_value["lease_id"] = runtime_lease
+        if job.lease_id is not None:
+            envelope_value["fence_epoch"] = job.fence_epoch
+        envelope = canonical(envelope_value)
         if len(envelope) > MAX_WIRE_BYTES:
             raise HostUnavailable("source_snapshot_too_large")
         reply = self._exchange(discovery, "/v1/source", envelope, time.monotonic() + _CONNECT_SECONDS + 8,

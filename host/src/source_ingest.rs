@@ -16,6 +16,7 @@ use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
 const STALE: HttpError = HttpError::new(409, "source_generation_stale", false);
 const UNRECONCILED: HttpError = HttpError::new(409, "source_revision_unreconciled", false);
 const TERMINAL: HttpError = HttpError::new(409, "source_terminal", false);
+const RECOVERY_REQUIRED: HttpError = HttpError::new(409, "source_reconciliation_required", true);
 const PENDING: HttpError = HttpError::new(503, "source_import_pending", true);
 
 pub(crate) struct SourceService {
@@ -38,6 +39,7 @@ impl SourceService {
         instance: &Instance,
         owner: OwnerId,
         request: SourceRequest,
+        reconciliation_required: bool,
     ) -> Result<HttpResponse, HttpError> {
         let snapshot = if request.operation == SourceAction::Snapshot {
             Some(Snapshot::parse(&request)?)
@@ -75,11 +77,23 @@ impl SourceService {
             }
             return Ok(receipt(&request, request.idempotency_key.clone()));
         }
+        if reconciliation_required && request.fence_epoch.is_none() {
+            return Err(RECOVERY_REQUIRED);
+        }
         if request.generation != state.generation {
             return Err(STALE);
         }
         if state.stale {
             return Err(UNRECONCILED);
+        }
+        if request.fence_epoch.is_some() && !reconciliation_required {
+            // A recovery receipt may have reached disk just before the reply
+            // was lost. An already resolved epoch can only replay that receipt.
+            let evidence = self
+                .store
+                .read_receipt(&path, &request.idempotency_key)?
+                .ok_or(HttpError::new(409, "source_fence_epoch_stale", false))?;
+            return Ok(receipt(&request, hex(&evidence)));
         }
         self.submit(
             instance,
@@ -100,6 +114,7 @@ impl SourceService {
         path: &Path,
         mut state: SourceState,
     ) -> Result<HttpResponse, HttpError> {
+        let reconciling = request.fence_epoch.is_some();
         if state.pending.is_some() {
             self.recover_pending(instance, owner, &mut state, path)?;
             if state
@@ -113,7 +128,11 @@ impl SourceService {
                 self.store.write(path, &state)?;
             }
         }
-        if let Some(evidence) = self.store.read_receipt(path, &request.idempotency_key)? {
+        // Recovery must prove continuity with the latest accepted head, even
+        // if this snapshot already has a receipt for an older accepted head.
+        if !reconciling
+            && let Some(evidence) = self.store.read_receipt(path, &request.idempotency_key)?
+        {
             if let Some(accepted) = &state.accepted {
                 self.schedule(instance, owner, &accepted.import_id);
             }
@@ -122,9 +141,11 @@ impl SourceService {
         let skip = if let Some(accepted) = &state.accepted {
             let overlap = overlap(accepted, &snapshot);
             let Some(skip) = overlap else {
-                state.available = false;
-                state.stale = true;
-                self.store.write(path, &state)?;
+                if !reconciling {
+                    state.available = false;
+                    state.stale = true;
+                    self.store.write(path, &state)?;
+                }
                 return Err(UNRECONCILED);
             };
             if accepted.wire_digest == snapshot.digest || skip == snapshot.messages.len() {
@@ -256,6 +277,10 @@ impl SourceService {
         Ok(())
     }
 
+    pub(crate) fn is_terminal(&self, session: &str) -> Result<bool, HttpError> {
+        Ok(self.store.read(&self.store.path(session))?.terminal)
+    }
+
     pub(crate) fn resume(&mut self, instance: &Instance, owner: OwnerId, session: &str) {
         let path = self.store.path(session);
         if let Ok(state) = self.store.read(&path) {
@@ -329,16 +354,19 @@ fn verify_key(request: &SourceRequest, digest: Option<&str>) -> Result<(), HttpE
         SourceAction::Invalidate => "invalidate",
         SourceAction::Terminal => "terminal",
     };
-    let raw = serde_json::to_vec(&(
-        "hermes-source-outbox-v1",
-        &request.profile_id,
-        &request.principal_id,
-        &request.session_id,
-        kind,
-        request.generation,
-        digest,
-    ))
-    .map_err(|_| INVALID)?;
+    let mut parts = vec![
+        json!("hermes-source-outbox-v1"),
+        json!(request.profile_id),
+        json!(request.principal_id),
+        json!(request.session_id),
+        json!(kind),
+        json!(request.generation),
+        json!(digest),
+    ];
+    if let Some(epoch) = request.fence_epoch {
+        parts.extend([json!("reconcile"), json!(request.lease_id), json!(epoch)]);
+    }
+    let raw = serde_json::to_vec(&parts).map_err(|_| INVALID)?;
     if request.idempotency_key != hex(&Sha256::digest(raw)) {
         return Err(INVALID);
     }

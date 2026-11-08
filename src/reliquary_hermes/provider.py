@@ -1,6 +1,6 @@
 """Hermes MemoryProvider lifecycle for the authenticated local Reliquary host."""
 
-from threading import Lock
+from threading import Event, Lock
 
 from agent.memory_provider import MemoryProvider, spawn_context_thread
 
@@ -43,6 +43,10 @@ class ReliquaryMemoryProvider(MemoryProvider):
         self._generation = 0
         self._pending = None
         self._attaching = False
+        self._runtime_lease_id = None
+        self._heartbeat_stop = Event()
+        self._heartbeat_thread = None
+        self._shutdown_drained = False
 
     @property
     def binding(self):
@@ -59,6 +63,19 @@ class ReliquaryMemoryProvider(MemoryProvider):
     def sync_status(self):
         with self._lock:
             return self._source.status if self._source is not None else self._sync_status
+
+    @property
+    def runtime_lease_id(self):
+        with self._lock:
+            return self._runtime_lease_id
+
+    def _heartbeat(self, client):
+        while not self._heartbeat_stop.wait(15):
+            try:
+                client.heartbeat_runtime()
+            except (HostUnavailable, OSError, ContractError):
+                # A missed renewal is handled by host-side expiry and reconciliation.
+                pass
 
     def is_available(self):
         try:
@@ -125,17 +142,39 @@ class ReliquaryMemoryProvider(MemoryProvider):
                 generation, session_id = self._pending
                 client = self._client
                 self._pending = None
+                lease_missing = self._runtime_lease_id is None
+            lease_id = None
             try:
                 binding = client.attach(session_id)
+                with self._lock:
+                    if self._status == "stopped":
+                        continue
+                if lease_missing:
+                    lease_id, reconciliation = client.attach_runtime(session_id)
+                else:
+                    lease_id, reconciliation = client.add_runtime_scope(session_id)
             except (HostUnavailable, OSError, ContractError):
                 binding = None
+
             with self._lock:
+                stopped = self._status == "stopped"
+                if lease_id is not None and not stopped:
+                    self._runtime_lease_id = lease_id
+                    if self._source is not None:
+                        self._source.set_runtime(lease_id, reconciliation, queried_scope=session_id)
+                    if self._heartbeat_thread is None:
+                        self._heartbeat_thread = spawn_context_thread(
+                            self._heartbeat, args=(client,), name="reliquary-runtime-heartbeat")
+                        self._heartbeat_thread.start()
                 if generation == self._generation:
                     self._binding = binding
                     self._status = "attached" if binding is not None else "unavailable"
-                if self._pending is None:
-                    self._attaching = False
-                    return
+                detach_late = stopped and self._shutdown_drained and lease_id is not None
+            if detach_late:
+                try:
+                    client.detach_runtime()
+                except (HostUnavailable, OSError, ContractError):
+                    pass
 
     def on_session_switch(self, new_session_id, *, parent_session_id="", reset=False, rewound=False, **kwargs):
         with self._lock:
@@ -161,14 +200,14 @@ class ReliquaryMemoryProvider(MemoryProvider):
             if self._status in {"non_primary", "stopped"} or session_id != self._session_id:
                 return
             source, profile = self._source, self._source_profile
-        if source is None:
-            return
-        try:
-            snapshot = capture_snapshot(profile, session_id, messages)
-        except ContractError:
-            source.unavailable(session_id)
-            return
-        source.submit(snapshot)
+            if source is None:
+                return
+            try:
+                snapshot = capture_snapshot(profile, session_id, messages)
+            except ContractError:
+                source.unavailable(session_id)
+                return
+            source.submit(snapshot)
 
     def get_tool_schemas(self):
         # HP05 owns retrieval dispatch and prefetch. Publish tools only when they can execute.
@@ -176,13 +215,32 @@ class ReliquaryMemoryProvider(MemoryProvider):
 
     def shutdown(self):
         with self._lock:
+            if self._status == "stopped":
+                return
             self._generation += 1
+            self._shutdown_drained = False
+            client = self._client
             self._pending = self._binding = self._client = self._session_id = None
             source = self._source
             self._source = self._source_profile = None
             self._status = self._sync_status = "stopped"
         if source is not None:
-            source.stop()
+            drained = source.stop()
+        else:
+            drained = True
+        with self._lock:
+            self._shutdown_drained = drained
+        self._heartbeat_stop.set()
+        with self._lock:
+            self._runtime_lease_id = None
+        if drained and client is not None:
+            try:
+                client.detach_runtime()
+            except (HostUnavailable, OSError, ContractError):
+                pass
+        thread = self._heartbeat_thread
+        if thread is not None:
+            thread.join(timeout=2)
 
     def get_config_schema(self):
         return [{"key": key, "description": prompt, "required": True} for key, prompt in PROMPTS]

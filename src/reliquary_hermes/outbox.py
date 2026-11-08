@@ -20,6 +20,8 @@ _MAX_GENERATION = (1 << 63) - 1
 _MAX_SNAPSHOT_BYTES = MAX_WIRE_BYTES - 4096
 _MAX_PENDING = 64
 _MAX_PENDING_BYTES = 4 * MAX_WIRE_BYTES
+_MAX_CANDIDATES = 8
+_MAX_CANDIDATE_BYTES = _MAX_SNAPSHOT_BYTES
 _APPLICATION_ID = 0x52484F42
 
 
@@ -37,6 +39,8 @@ class SourceJob:
     snapshot_json: bytes | None = field(repr=False)
     reason: str | None
     _scope: tuple[str, str] = field(repr=False)
+    lease_id: str | None = None
+    fence_epoch: int | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,7 @@ _SCHEMA = (
         profile TEXT NOT NULL, principal TEXT NOT NULL, session TEXT NOT NULL,
         generation INTEGER NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('snapshot', 'invalidate', 'terminal')),
         reason TEXT, payload BLOB, snapshot_digest TEXT, last_message_uid TEXT, receipt TEXT,
+        lease_id TEXT, fence_epoch INTEGER,
         FOREIGN KEY(profile, principal, session) REFERENCES source_state(profile, principal, session)
     )""",
     """CREATE INDEX source_jobs_pending ON source_jobs(profile, principal, session, sequence)
@@ -101,8 +106,12 @@ class SourceOutbox:
                 for statement in _SCHEMA:
                     db.execute(statement)
                 db.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
-                db.execute("PRAGMA user_version = 1")
-            elif (application, version) != (_APPLICATION_ID, 1):
+                db.execute("PRAGMA user_version = 2")
+            elif (application, version) == (_APPLICATION_ID, 1):
+                db.execute("ALTER TABLE source_jobs ADD COLUMN lease_id TEXT")
+                db.execute("ALTER TABLE source_jobs ADD COLUMN fence_epoch INTEGER")
+                db.execute("PRAGMA user_version = 2")
+            elif (application, version) != (_APPLICATION_ID, 2):
                 raise SourceOutboxError(UNAVAILABLE)
 
     @contextmanager
@@ -135,14 +144,18 @@ class SourceOutbox:
             (*self._scope, session_id),
         )
 
-    def _key(self, kind, session_id, generation, snapshot_digest=None):
-        return content_digest(["hermes-source-outbox-v1", *self._scope, session_id, kind, generation, snapshot_digest])
+    def _key(self, kind, session_id, generation, snapshot_digest=None, lease_id=None, fence_epoch=None):
+        parts = ["hermes-source-outbox-v1", *self._scope, session_id, kind, generation, snapshot_digest]
+        if lease_id is not None:
+            parts.extend(("reconcile", lease_id, fence_epoch))
+        return content_digest(parts)
 
     def generation(self, session_id: str) -> int:
         with self._transaction() as db:
             return self._state(db, identifier(session_id))[0]
 
-    def enqueue(self, snapshot: SourceSnapshot, *, generation: int) -> str:
+    def enqueue(self, snapshot: SourceSnapshot, *, generation: int, lease_id: str | None = None,
+                fence_epoch: int | None = None) -> str:
         """Persist a current snapshot for an exact adapter generation."""
         require(type(snapshot) is SourceSnapshot, "invalid_source_snapshot")
         require(snapshot.profile_id == self._scope[0], "source_scope_mismatch")
@@ -150,7 +163,12 @@ class SourceOutbox:
         session = identifier(snapshot.session_id)
         integer(generation, 0, _MAX_GENERATION)
         payload, last_uid = _snapshot_payload(snapshot)
-        key = self._key("snapshot", session, generation, snapshot.snapshot_digest)
+        if lease_id is not None:
+            lease_id = identifier(lease_id)
+        if fence_epoch is not None:
+            fence_epoch = integer(fence_epoch, 1, _MAX_GENERATION)
+        require((lease_id is None) == (fence_epoch is None), "invalid_reconciliation_candidate")
+        key = self._key("snapshot", session, generation, snapshot.snapshot_digest, lease_id, fence_epoch)
         with self._transaction(write=True) as db:
             current, terminal = self._state(db, session)
             if terminal is not None:
@@ -159,18 +177,36 @@ class SourceOutbox:
                 raise SourceOutboxError(STALE)
             if db.execute("SELECT 1 FROM source_jobs WHERE key=?", (key,)).fetchone():
                 return key
-            count, size = db.execute(
-                """SELECT COUNT(*), COALESCE(SUM(length(payload)), 0) FROM source_jobs
-                   WHERE profile=? AND principal=? AND receipt IS NULL AND kind='snapshot'""",
-                self._scope,
-            ).fetchone()
-            if count >= _MAX_PENDING or size + len(payload) > _MAX_PENDING_BYTES:
-                raise SourceOutboxError(BACKPRESSURE)
+            if lease_id is not None:
+                # Keep only the newest unaccepted full view for this exact observed fence.
+                db.execute("""DELETE FROM source_jobs WHERE profile=? AND principal=? AND session=?
+                              AND lease_id IS NOT NULL AND fence_epoch < ? AND receipt IS NULL""",
+                           (*self._scope, session, fence_epoch))
+                db.execute("""DELETE FROM source_jobs WHERE profile=? AND principal=? AND session=?
+                              AND lease_id=? AND fence_epoch=? AND receipt IS NULL""",
+                           (*self._scope, session, lease_id, fence_epoch))
+                count, size = db.execute(
+                    """SELECT COUNT(*), COALESCE(SUM(length(payload)), 0) FROM source_jobs
+                       WHERE profile=? AND principal=? AND receipt IS NULL AND kind='snapshot'
+                       AND lease_id IS NOT NULL""", self._scope,
+                ).fetchone()
+                if count >= _MAX_CANDIDATES or size + len(payload) > _MAX_CANDIDATE_BYTES:
+                    raise SourceOutboxError(BACKPRESSURE)
+            else:
+                count, size = db.execute(
+                    """SELECT COUNT(*), COALESCE(SUM(length(payload)), 0) FROM source_jobs
+                       WHERE profile=? AND principal=? AND receipt IS NULL AND kind='snapshot'
+                       AND lease_id IS NULL""", self._scope,
+                ).fetchone()
+                if count >= _MAX_PENDING or size + len(payload) > _MAX_PENDING_BYTES - _MAX_CANDIDATE_BYTES:
+                    raise SourceOutboxError(BACKPRESSURE)
             self._ensure_state(db, session)
             db.execute(
                 """INSERT INTO source_jobs(key, profile, principal, session, generation, kind,
-                   payload, snapshot_digest, last_message_uid) VALUES (?, ?, ?, ?, ?, 'snapshot', ?, ?, ?)""",
-                (key, *self._scope, session, generation, payload, snapshot.snapshot_digest, last_uid),
+                   payload, snapshot_digest, last_message_uid, lease_id, fence_epoch)
+                   VALUES (?, ?, ?, ?, ?, 'snapshot', ?, ?, ?, ?, ?)""",
+                (key, *self._scope, session, generation, payload, snapshot.snapshot_digest, last_uid,
+                 lease_id, fence_epoch),
             )
         return key
 
@@ -222,13 +258,26 @@ class SourceOutbox:
                 keys.append(key)
         return tuple(keys)
 
-    def next_job(self, session_id: str | None = None) -> SourceJob | None:
+    def next_job(self, session_id: str | None = None, *, terminal_only: bool = False,
+                 fence_only: bool = False, runtime_scope: bool = False,
+                 runtime_lease_id: str | None = None) -> SourceJob | None:
         query = "SELECT * FROM source_jobs WHERE profile=? AND principal=? AND receipt IS NULL"
         bindings = self._scope
+        if terminal_only:
+            query += " AND kind='terminal'"
+        elif fence_only:
+            query += " AND kind IN ('terminal', 'invalidate')"
         if session_id is not None:
             query += " AND session=?"
             bindings = (*bindings, identifier(session_id))
-        query += " ORDER BY CASE kind WHEN 'terminal' THEN 0 WHEN 'invalidate' THEN 1 ELSE 2 END, sequence LIMIT 1"
+        if runtime_scope:
+            if runtime_lease_id is None:
+                query += " AND lease_id IS NULL"
+            else:
+                query += " AND (lease_id IS NULL OR lease_id=?)"
+                bindings = (*bindings, identifier(runtime_lease_id))
+        query += " ORDER BY CASE kind WHEN 'terminal' THEN 0 WHEN 'invalidate' THEN 1 ELSE 2 END, " \
+                 "CASE WHEN lease_id IS NOT NULL THEN 0 ELSE 1 END, sequence LIMIT 1"
         with self._transaction() as db:
             row = db.execute(query, bindings).fetchone()
         if row is None:
@@ -242,10 +291,17 @@ class SourceOutbox:
                 snapshot.require_current()
                 require((snapshot.profile_id, snapshot.session_id, snapshot.snapshot_digest) ==
                         (self._scope[0], session, row["snapshot_digest"]), "source_scope_mismatch")
-            require(row["key"] == self._key(kind, session, generation, row["snapshot_digest"]), "invalid_source_job")
+            lease_id, fence_epoch = row["lease_id"], row["fence_epoch"]
+            require((lease_id is None) == (fence_epoch is None), "invalid_source_job")
+            if lease_id is not None:
+                identifier(lease_id)
+                integer(fence_epoch, 1, _MAX_GENERATION)
+            require(row["key"] == self._key(kind, session, generation, row["snapshot_digest"],
+                                            lease_id, fence_epoch), "invalid_source_job")
         except ValueError:
             raise SourceOutboxError(UNAVAILABLE) from None
-        return SourceJob(kind, row["key"], session, generation, snapshot, payload, row["reason"], self._scope)
+        return SourceJob(kind, row["key"], session, generation, snapshot, payload, row["reason"], self._scope,
+                         lease_id, fence_epoch)
 
     def _job_receipt(self, db, job):
         if job._scope != self._scope:
@@ -273,6 +329,30 @@ class SourceOutbox:
             if row["receipt"] is not None:
                 return row["receipt"] == receipt
             db.execute("UPDATE source_jobs SET receipt=?, payload=NULL WHERE key=?", (receipt, job.idempotency_key))
+            if job.lease_id is not None:
+                db.execute(
+                    """DELETE FROM source_jobs WHERE profile=? AND principal=? AND session=?
+                       AND kind='snapshot' AND lease_id IS NULL AND receipt IS NULL AND sequence <
+                       (SELECT sequence FROM source_jobs WHERE key=?)""",
+                    (*self._scope, job.session_id, job.idempotency_key),
+                )
+                db.execute(
+                    """DELETE FROM source_jobs WHERE profile=? AND principal=? AND session=?
+                       AND kind='snapshot' AND lease_id IS NOT NULL AND fence_epoch<=?
+                       AND receipt IS NULL""",
+                    (*self._scope, job.session_id, job.fence_epoch),
+                )
+        return True
+
+    def discard_candidate(self, job: SourceJob) -> bool:
+        """Drop only a rejected, still-pending reconciliation candidate."""
+        require(job.lease_id is not None and job.fence_epoch is not None, "not_reconciliation_candidate")
+        with self._transaction(write=True) as db:
+            row = self._job_receipt(db, job)
+            if row is None or row["receipt"] is not None:
+                return False
+            db.execute("DELETE FROM source_jobs WHERE key=? AND lease_id=? AND fence_epoch=? AND receipt IS NULL",
+                       (job.idempotency_key, job.lease_id, job.fence_epoch))
         return True
 
     def cursor(self, session_id: str) -> SourceCursor | None:

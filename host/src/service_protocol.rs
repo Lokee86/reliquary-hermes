@@ -7,7 +7,46 @@ use serde_json::{Map, Value, json};
 use std::{collections::BTreeSet, fmt};
 
 pub(crate) const PROTOCOL_VERSION: u16 = 1;
-pub(crate) const HERMES_REVISION: &str = "cf4f3a7396814ffcaef69d9af09f7cfdade3ddbe";
+pub(crate) const HERMES_REVISION: &str = "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19";
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeAttachRequest {
+    pub(crate) integration_kind: String,
+    pub(crate) runtime_id: String,
+    pub(crate) principal_id: String,
+    #[serde(default)]
+    pub(crate) session_id: Option<String>,
+}
+
+impl RuntimeAttachRequest {
+    pub(crate) fn valid(&self) -> bool {
+        [&self.integration_kind, &self.runtime_id, &self.principal_id]
+            .into_iter()
+            .all(|value| valid_id(value))
+            && self.session_id.as_ref().is_none_or(|value| valid_id(value))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeLeaseRequest {
+    pub(crate) lease_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeDetachRequest {
+    pub(crate) lease_id: String,
+    pub(crate) clean: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeScopeRequest {
+    pub(crate) lease_id: String,
+    pub(crate) session_id: String,
+}
 
 #[derive(Debug)]
 pub(crate) struct InvalidWire;

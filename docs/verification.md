@@ -15,7 +15,7 @@ From the plugin repository with Python 3.11+, pytest 9.1.x, jsonschema 4.x, the 
 ```powershell
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 $env:PYTHONDONTWRITEBYTECODE='1'
-$env:HP01_HERMES_CHECKOUT='C:\!bin\workspace\hermes-agent-reliquary-hp01-pin'
+$env:HP01_HERMES_CHECKOUT='C:\!bin\workspace\hermes-agent-reliquary-hp01-v023'
 python -B -m pytest -q --basetemp .pytest_tmp
 git diff --check
 ```
@@ -80,7 +80,7 @@ cargo test --manifest-path tests/external-consumer/Cargo.toml --locked --offline
 
 ## HP03 local process verification
 
-Use the same pinned Hermes and Reliquary checkouts. The following Windows commands build the actual host and product CLI, then run the Python suite with all process proofs enabled. The local-service guide owns runtime setup. [Local service](local-service.md)
+Use the stable Hermes checkout above and the sibling Reliquary checkout at the HP04 checkpoint below. The following Windows commands build the actual host and product CLI, then run the Python suite with all process proofs enabled. The local-service guide owns runtime setup. [Local service](local-service.md)
 
 ```powershell
 $scratch = Join-Path (Get-Location) 'host\.test-tmp\hp03'
@@ -94,7 +94,7 @@ cargo build --manifest-path host/Cargo.toml --locked --offline
 cargo build --manifest-path ../Reliquary/cli/Cargo.toml --locked --offline --target-dir host/target
 $env:HP03_HOST_BINARY = (Resolve-Path host/target/debug/reliquary-hermes-host.exe).Path
 $env:HP03_RELIQUARY_CLI = (Resolve-Path host/target/debug/reliquary.exe).Path
-$env:HP01_HERMES_CHECKOUT = 'C:\!bin\workspace\hermes-agent-reliquary-hp01-pin'
+$env:HP01_HERMES_CHECKOUT = 'C:\!bin\workspace\hermes-agent-reliquary-hp01-v023'
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
 $env:PYTHONDONTWRITEBYTECODE = '1'
 python -B -m pytest -q --basetemp .pytest_tmp
@@ -105,16 +105,24 @@ The process tests create native owners with the product CLI. They exercise start
 
 The HP03 gate passed 16 Rust tests and 311 Python tests with the pinned Hermes and real-process probes enabled. The architecture guard reported 23 production packages and 76 production dependency edges. All runs used synthetic owners under the local plugin worktree.
 
-## HP04 provisional local verification
+## HP04 stable host and runtime verification
 
-The current implementation was exercised against the same audited Hermes pin used for HP03 and the sibling Reliquary commit `b31aaee577fc0e1caa3b9d7913c18f8155c4f972`. Use the HP03 local build and Python commands above to enable the HP04 process probes. Run `cargo test --manifest-path ../Reliquary/tests/external-consumer/Cargo.toml --locked --offline --test operational_processing` for the independent Root extension proof. Tests use synthetic owner files and deterministic loopback endpoints.
+Use the HP03 build and test commands with Hermes `v0.23.0` at `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19` and the sibling Reliquary checkout at `b31aaee577fc0e1caa3b9d7913c18f8155c4f972`. The [host audit](host-audit.md) records the stable pin and provider callback evidence. The process proofs use synthetic owners and deterministic loopback processing endpoints.
 
-The probes cover the pinned privacy projection, stable logical IDs and timestamps, real provider delivery, completed native append, exact older receipt replay, restart before acknowledgment, a late same-session rewind callback, the cold archive/delete observer and native terminal replay. The product workspace passed all 668 tests. The three detached Root processing tests passed, including completed append and divergent maintenance replay. The architecture guard still reports 23 production packages and 76 production edges.
+The HP04 suite covers stable transcript IDs and timestamps, privacy-filtered provider delivery, native append and exact replay, same-session rewind, committed archive/delete notices and tombstone anti-resurrection. The runtime tests exercise heartbeat expiry, a durable scoped crash fence, reconnect with the original owner binding, authoritative recovery and final clean shutdown. The independent Root extension proof is:
 
-A replay of the private outbox covers delivered callback data. Provider-equivalent history export and a durable lifecycle replay interface are still needed for events that never reached it. HP04 acceptance remains provisional on this pin.
+```powershell
+cargo test --manifest-path ../Reliquary/tests/external-consumer/Cargo.toml --target-dir host/target --locked --offline --test operational_processing
+```
+
+HP04 passed local acceptance on November 8, 2026. The final run passed 344 Python tests with both process binaries and the stable Hermes checkout enabled. It also passed 19 locked offline Rust host tests and all three detached Root processing tests. Rust formatting, Git whitespace and the Reliquary architecture guard passed.
+
+The process suite killed an attached pinned provider and observed the durable fence after the production lease expired. The surviving host accepted a replacement provider with the same REL/PHY binding. A subsequent full callback imported the new row once, while stale snapshots and old lease messages were rejected. The restart proof found the existing fence when a live runtime added the affected scope, kept the fence while import was pending and advanced its epoch after another host restart. Registration recovered when an intermediate reattach attempt failed. Archive stayed terminal. Clean shutdown drained volatile captures to the outbox, removed discovery and released the owner leases for restart.
+
+A crash can leave a fence until a supported Hermes callback supplies the required source overlap. An upstream event absent from that view can remain unrecoverable. See the [HP04 crash/reconnect lifecycle](hp04-crash-reconnect-lifecycle-2026-11-08.md).
 
 ## Remaining gates
-- HP04 implements supported source recovery, durable copied imports, post-commit lifecycle handling, retry reconciliation and tombstone persistence. Hermes stays the history and resume authority. Reliquary maintenance owns pruning.
+
 - HP05 wires real query/refine/traverse and prefetch. The acceptance test must distinguish candidate inspection from returned results and prove retrieval is recorded once.
 - HP06 packages and validates the standalone plugin against an isolated Hermes profile. HP07 and HU04 require real-service evidence. HP07 additionally requires an authorized real model run.
 

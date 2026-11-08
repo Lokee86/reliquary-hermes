@@ -1,12 +1,15 @@
 //! One profile-scoped local service and its owner registry.
 use crate::{
     registry::{OwnerConfig, Registry, RegistryError},
+    runtime::{HEARTBEAT_SECONDS, ReconciliationScope, RuntimeRegistry},
     service_http::{
-        ATTACH, FORBIDDEN, HttpError, HttpRequest, HttpResponse, INVALID, MAX_WIRE_BYTES, SOURCE,
-        TransportKey, UNAVAILABLE, hex, read_request, write_response,
+        ATTACH, FORBIDDEN, HttpError, HttpRequest, HttpResponse, INVALID, MAX_WIRE_BYTES,
+        RUNTIME_ATTACH, RUNTIME_DETACH, RUNTIME_HEARTBEAT, RUNTIME_SCOPE, SOURCE, TransportKey,
+        UNAVAILABLE, hex, read_request, write_response,
     },
     service_protocol::{
         AttachRequest, Discovery, HERMES_REVISION, Operation, PROTOCOL_VERSION, ProviderRequest,
+        RuntimeAttachRequest, RuntimeDetachRequest, RuntimeLeaseRequest, RuntimeScopeRequest,
         decode,
     },
     source_ingest::SourceService,
@@ -22,6 +25,7 @@ use std::{
     path::Path,
     sync::{
         Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{TrySendError, sync_channel},
     },
     thread,
@@ -43,9 +47,13 @@ struct Service {
     discovery: Discovery,
     principal_id: String,
     key: TransportKey,
-    registry: Mutex<Registry>,
     sources: Mutex<SourceService>,
+    runtimes: Mutex<RuntimeRegistry>,
+    closing: AtomicBool,
+    inflight: AtomicUsize,
     instance: Instance,
+    // Drop the source service (and join its jobs) before releasing owner leases.
+    registry: Mutex<Registry>,
 }
 
 impl Service {
@@ -64,11 +72,123 @@ impl Service {
     }
 
     fn dispatch(&self, request: &HttpRequest) -> Result<HttpResponse, HttpError> {
+        if self.closing.load(Ordering::Acquire) {
+            return Err(UNAVAILABLE);
+        }
         match request.path {
             ATTACH => self.attach(&request.body),
             SOURCE => self.source(&request.body),
+            RUNTIME_ATTACH => self.runtime_attach(&request.body),
+            RUNTIME_HEARTBEAT => self.runtime_heartbeat(&request.body),
+            RUNTIME_DETACH => self.runtime_detach(&request.body),
+            RUNTIME_SCOPE => self.runtime_scope(&request.body),
             _ => self.request(&request.body),
         }
+    }
+
+    fn runtime_attach(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
+        let request: RuntimeAttachRequest = decode(bytes).map_err(|_| INVALID)?;
+        if !request.valid() {
+            return Err(INVALID);
+        }
+        if request.principal_id != self.principal_id {
+            return Err(FORBIDDEN);
+        }
+        let candidate_lease_id = new_id().map_err(|_| UNAVAILABLE)?;
+        let integration_kind = request.integration_kind.clone();
+        let session_id = request.session_id.clone();
+        let (lease_id, reconciliation_required) = self
+            .runtimes
+            .lock()
+            .map_err(|_| UNAVAILABLE)?
+            .attach(
+                candidate_lease_id,
+                integration_kind.clone(),
+                request.runtime_id,
+                request.principal_id,
+                session_id,
+            )
+            .map_err(runtime_error)?;
+        let reconciliation_required =
+            self.recovery_scopes(&integration_kind, reconciliation_required)?;
+        Ok(HttpResponse::ok(json!({
+            "runtime_lease_id": lease_id,
+            "heartbeat_interval_seconds": HEARTBEAT_SECONDS,
+            "lease_expires_after_seconds": crate::runtime::EXPIRY_SECONDS,
+            "reconciliation_required": reconciliation_required,
+        })))
+    }
+
+    fn runtime_heartbeat(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
+        let request: RuntimeLeaseRequest = decode(bytes).map_err(|_| INVALID)?;
+        if !crate::service_protocol::valid_id(&request.lease_id) {
+            return Err(INVALID);
+        }
+        self.runtimes
+            .lock()
+            .map_err(|_| UNAVAILABLE)?
+            .heartbeat(&request.lease_id, &self.principal_id)
+            .map_err(runtime_error)?;
+        Ok(HttpResponse::ok(json!({"ok": true})))
+    }
+
+    fn runtime_scope(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
+        let request: RuntimeScopeRequest = decode(bytes).map_err(|_| INVALID)?;
+        if !crate::service_protocol::valid_id(&request.lease_id)
+            || !crate::service_protocol::valid_id(&request.session_id)
+        {
+            return Err(INVALID);
+        }
+        let (integration_kind, scopes) = self
+            .runtimes
+            .lock()
+            .map_err(|_| UNAVAILABLE)?
+            .add_scope(&request.lease_id, &self.principal_id, request.session_id)
+            .map_err(runtime_error)?;
+        let reconciliation_required = self.recovery_scopes(&integration_kind, scopes)?;
+        Ok(HttpResponse::ok(
+            json!({"reconciliation_required": reconciliation_required}),
+        ))
+    }
+
+    fn recovery_scopes(
+        &self,
+        integration_kind: &str,
+        scopes: Vec<ReconciliationScope>,
+    ) -> Result<Vec<ReconciliationScope>, HttpError> {
+        if integration_kind != "hermes" || scopes.is_empty() {
+            return Ok(scopes);
+        }
+        let sources = self.sources.lock().map_err(|_| UNAVAILABLE)?;
+        let mut runtimes = self.runtimes.lock().map_err(|_| UNAVAILABLE)?;
+        let mut pending = Vec::new();
+        for scope in scopes {
+            if sources.is_terminal(&scope.session_id)? {
+                runtimes
+                    .clear_fence(integration_kind, &scope.session_id, Some(scope.fence_epoch))
+                    .map_err(|_| UNAVAILABLE)?;
+            } else {
+                pending.push(scope);
+            }
+        }
+        Ok(pending)
+    }
+
+    fn runtime_detach(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
+        let request: RuntimeDetachRequest = decode(bytes).map_err(|_| INVALID)?;
+        if !request.clean || !crate::service_protocol::valid_id(&request.lease_id) {
+            return Err(INVALID);
+        }
+        let mut runtimes = self.runtimes.lock().map_err(|_| UNAVAILABLE)?;
+        let shutdown = runtimes
+            .detach(&request.lease_id, &self.principal_id)
+            .map_err(runtime_error)?;
+        if shutdown {
+            self.closing.store(true, Ordering::Release);
+        }
+        Ok(HttpResponse::ok(
+            json!({"detached": true, "shutdown_ready": shutdown}),
+        ))
     }
 
     fn attach(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
@@ -119,10 +239,49 @@ impl Service {
                 request.operation == SourceAction::Snapshot,
             )
             .map_err(attach_error)?;
-        self.sources
-            .lock()
-            .map_err(|_| UNAVAILABLE)?
-            .handle(&self.instance, owner, request)
+        // Preserve the source-before-runtime lock order. The source lock stays
+        // held through commit and fence clearing so an expiry cannot race a
+        // fresh authoritative snapshot.
+        let mut sources = self.sources.lock().map_err(|_| UNAVAILABLE)?;
+        let mut runtimes = self.runtimes.lock().map_err(|_| UNAVAILABLE)?;
+        let (fenced, eligible_epoch) = if let Some(lease_id) = request.lease_id.as_deref() {
+            let (kind, fenced, eligible_epoch) = runtimes
+                .authorize_scope(lease_id, &request.principal_id, &request.session_id)
+                .map_err(runtime_error)?;
+            if kind != "hermes" {
+                return Err(FORBIDDEN);
+            }
+            (fenced, eligible_epoch)
+        } else {
+            let fenced = runtimes
+                .has_fence("hermes", &request.session_id)
+                .map_err(runtime_error)?;
+            (fenced, None)
+        };
+        if fenced && request.fence_epoch.is_some() && request.fence_epoch != eligible_epoch {
+            return Err(HttpError::new(409, "source_fence_epoch_stale", false));
+        }
+
+        let terminal = request.operation == SourceAction::Terminal;
+        let reconcile = request.fence_epoch.is_some();
+        let session_id = request.session_id.clone();
+        let response = sources.handle(&self.instance, owner, request, fenced);
+        if reconcile && response.is_ok() && eligible_epoch.is_some() {
+            runtimes
+                .clear_fence("hermes", &session_id, eligible_epoch)
+                .map_err(|_| UNAVAILABLE)?;
+        }
+        // An authenticated terminal notice can settle the runtime fence once
+        // the source tombstone is durable, even if native maintenance is pending.
+        if terminal && sources.is_terminal(&session_id)? {
+            let current = runtimes
+                .current_fence_epoch("hermes", &session_id)
+                .map_err(runtime_error)?;
+            runtimes
+                .clear_fence("hermes", &session_id, current)
+                .map_err(|_| UNAVAILABLE)?;
+        }
+        response
     }
 
     fn request(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
@@ -170,6 +329,16 @@ fn attach_error(error: RegistryError) -> HttpError {
         _ => 503,
     };
     HttpError::new(status, error.code(), error.retryable())
+}
+
+fn runtime_error(code: &'static str) -> HttpError {
+    match code {
+        "runtime_lease_denied" => FORBIDDEN,
+        "runtime_lease_stale" => HttpError::new(409, code, false),
+        "host_closing" => UNAVAILABLE,
+        "invalid" => INVALID,
+        _ => UNAVAILABLE,
+    }
 }
 
 fn read_bounded(reader: impl Read, limit: usize) -> Result<Vec<u8>, &'static str> {
@@ -270,6 +439,7 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
         &discovery.instance_id,
         &discovery.lease_id,
     );
+    let runtimes = RuntimeRegistry::open(state_dir)?;
     let service = Arc::new(Service {
         expected_host,
         discovery,
@@ -277,44 +447,88 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
         key,
         registry: Mutex::new(registry),
         sources: Mutex::new(SourceService::open(state_dir)?),
+        runtimes: Mutex::new(runtimes),
+        closing: AtomicBool::new(false),
+        inflight: AtomicUsize::new(0),
         instance,
     });
     drop(bootstrap);
 
     let (sender, receiver) = sync_channel::<(TcpStream, Instant)>(QUEUE_CAPACITY);
     let receiver = Arc::new(Mutex::new(receiver));
+    let mut workers = Vec::new();
     for _ in 0..WORKERS {
         let service = Arc::clone(&service);
         let receiver = Arc::clone(&receiver);
-        thread::Builder::new()
-            .spawn(move || {
-                loop {
-                    let received = {
-                        let Ok(receiver) = receiver.lock() else { break };
-                        receiver.recv()
-                    };
-                    let Ok((socket, accepted_at)) = received else {
-                        break;
-                    };
-                    service.connection(socket, accepted_at);
-                }
-            })
-            .map_err(|_| "worker_unavailable")?;
+        workers.push(
+            thread::Builder::new()
+                .spawn(move || {
+                    loop {
+                        let received = {
+                            let Ok(receiver) = receiver.lock() else { break };
+                            receiver.recv()
+                        };
+                        let Ok((socket, accepted_at)) = received else {
+                            break;
+                        };
+                        service.connection(socket, accepted_at);
+                        service.inflight.fetch_sub(1, Ordering::AcqRel);
+                    }
+                })
+                .map_err(|_| "worker_unavailable")?,
+        );
     }
     publish_discovery(state_dir, &service.discovery)?;
-    for connection in listener.incoming() {
-        let socket = match connection {
-            Ok(socket) => socket,
+    listener
+        .set_nonblocking(true)
+        .map_err(|_| "loopback_unavailable")?;
+    loop {
+        // Expiry is a liveness event, not an idle-time event. Persist fences
+        // even while no client is currently talking to the host.
+        if let Ok(mut runtimes) = service.runtimes.lock() {
+            let _ = runtimes.expire();
+        }
+        if service.closing.load(Ordering::Acquire) {
+            if service.inflight.load(Ordering::Acquire) == 0
+                && service
+                    .runtimes
+                    .lock()
+                    .map_err(|_| "runtime_state_unavailable")?
+                    .should_shutdown()?
+            {
+                break;
+            }
+            thread::sleep(std::time::Duration::from_millis(100));
+            continue;
+        }
+        match listener.accept() {
+            Ok((socket, _)) => {
+                // Accepted Winsock streams can inherit the listener's mode.
+                // Workers use blocking I/O with per-request deadlines.
+                if socket.set_nonblocking(false).is_err() {
+                    continue;
+                }
+                service.inflight.fetch_add(1, Ordering::AcqRel);
+                match sender.try_send((socket, Instant::now())) {
+                    Ok(()) => {}
+                    Err(TrySendError::Full((mut socket, _))) => {
+                        service.inflight.fetch_sub(1, Ordering::AcqRel);
+                        let _ = write_response(&mut socket, UNAVAILABLE.into_response(), None);
+                    }
+                    Err(TrySendError::Disconnected(_)) => return Err("worker_unavailable"),
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(std::time::Duration::from_millis(100))
+            }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => return Err("loopback_unavailable"),
-        };
-        match sender.try_send((socket, Instant::now())) {
-            Ok(()) => {}
-            Err(TrySendError::Full((mut socket, _))) => {
-                let _ = write_response(&mut socket, UNAVAILABLE.into_response(), None);
-            }
-            Err(TrySendError::Disconnected(_)) => return Err("worker_unavailable"),
         }
     }
+    drop(sender);
+    for worker in workers {
+        let _ = worker.join();
+    }
+    let _ = fs::remove_file(state_dir.join("discovery.json"));
     Ok(())
 }

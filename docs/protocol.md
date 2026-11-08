@@ -65,17 +65,27 @@ The callback can omit branch, revision and historical author attribution. Missin
 
 A bounded sync job captures privacy-filtered callback bytes, logical IDs, profile, principal, session, local invalidation epochs and exact egress digest. Missing IDs or timestamps fail closed. The queue is volatile and reports `queued_not_durable` until an import receipt exists. `BoundSourceImporter` binds the real fixture job to a separately registered normalized source fixture. Its snapshot-level route stays REL-only and exact verified per-row identities can route to the active PHY. HP04 must implement supported cursor recovery, revalidate source IDs, timestamps, digest and privacy after restart, and acknowledge only a durable product receipt.
 
+## Integration runtime leases
+
+Runtime lifecycle uses the existing authenticated, instance-bound loopback transport. `/v1/runtime/attach` registers an opaque runtime instance under an integration kind and returns a separate runtime lease ID. A runtime renews that lease with `/v1/runtime/heartbeat` and cleanly retires it with `/v1/runtime/detach`. A runtime may attach with an opaque source scope or without one. An adapter can associate additional source scopes with its lease through `/v1/runtime/scope`. Owner binding and the process lease remain separate.
+
+Expiry durably records an unclean runtime and establishes a fence for each affected integration source scope. A replacement runtime sees the required recovery scopes and their fence epochs. Only the current lease for that scope can supply reconciliation evidence for the observed epoch. A clean detach releases only its exact lease. The host begins graceful shutdown when a clean detach leaves neither live leases nor unresolved crash fences.
+
 ## HP04 private source adapter
 
 `POST /v1/source` uses the same instance-bound transport proof and requires the configured profile and principal. The provider invokes this private channel from its filtered Hermes callback and the committed lifecycle observer. The profile credential authorizes this adapter. A JSON authority claim in a model-facing request conveys no source grant.
 
 The exact envelope carries `protocol_version`, `profile_id`, `principal_id`, `session_id`, integer `generation`, `idempotency_key`, `operation` and `arguments`. A snapshot sends the original canonical copied view as `source_json` and its SHA-256 as `snapshot_digest`. Invalidation sends an empty object. A terminal operation sends the committed `archive` or `delete` reason. Both reasons share one terminal identity for the logical session. The generation fences adapter work and has no meaning as a Hermes source revision.
 
+The Hermes provider supplies its runtime `lease_id` for snapshot delivery. During crash recovery, a fresh provider transcript callback also supplies the observed `fence_epoch`. Ordinary outbox keys stay unchanged. Reconciliation attempts have a distinct durable key bound to the exact lease and epoch. Ordinary replay is fenced before receipt lookup. The recovery snapshot must prove continuity with the latest accepted head, even if an older receipt matches it. Archive and delete remain terminal throughout recovery.
+
 The service verifies the original source bytes, bounds and authenticated session route before staging through public Root. It retains the original epoch timestamp in the copied digest and converts its decimal value once to the native nanosecond field. An append requires an exact overlap with the previously accepted tail. The Root extension separately checks its completed predecessor receipt, current branch head and new logical IDs. A duplicate returns its recorded native receipt. A changed or unverifiable prefix fences the source as unreconciled.
 
 A durable response binds `session_id`, `generation`, `idempotency_key` and `receipt` and carries `durable=true`. It records native staging for snapshots and the persisted fence for invalidation. A terminal reply requires the native tombstone when an accepted copy exists. The host fences the session before attempting that tombstone, so the older snapshot cannot replay while an open native epoch delays terminal publication.
 
 ## Required HP04 host-only invalidation gate
+
+The [stable host audit](host-audit.md) pins HP04 verification to Hermes `v0.23.0` at `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19`. The source-copy, tombstone, replay and runtime recovery gates use that exact checkout.
 
 A `snapshot_submit` request carries a copied view. Source lifecycle authority belongs to the authenticated adapter. At the pinned Hermes revision the public plugin observer receives `on_session_delete` after a delete or an explicit archive commits, distinguished by the reason. HP04 must bind the event to trusted profile and logical session identity, reconcile affected source bindings before serving evidence, and handle retries or restarts without replaying stale jobs. See the [pinned host audit](host-audit.md) for the precise observer coverage.
 
