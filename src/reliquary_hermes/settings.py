@@ -3,10 +3,12 @@
 from dataclasses import dataclass
 from pathlib import Path
 from stat import S_ISREG
+from threading import local
 
 from .validation import MAX_WIRE_BYTES, canonical, decode, identifier, obj, require, text
 
 TOKEN_VAR = "RELIQUARY_HERMES_TOKEN"
+_SETUP_LOCK_HOLDER = local()
 OWNER_FIELDS = {"profile_id", "principal_id", "main_rel", "projects", "active_phy"}
 
 
@@ -23,6 +25,15 @@ def profile_home(value) -> Path:
     path = Path(value)
     require(path.is_absolute() and path.is_dir(), "invalid_profile_home")
     return path.resolve()
+
+
+def profile_setup_lock(home: Path):
+    """Serialize setup with provider and dashboard host startup for this profile."""
+    from hermes_cli.auth import _file_lock
+
+    lock = home / ".reliquary-setup.lock"
+    require(lock.resolve() == lock, "invalid_settings_path")
+    return _file_lock(lock, _SETUP_LOCK_HOLDER, 20.0, "reliquary_setup_busy")
 
 
 def _state_dir(home: Path) -> Path:

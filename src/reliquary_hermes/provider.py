@@ -6,7 +6,7 @@ import secrets
 from agent.memory_provider import MemoryProvider, RecallStatus, spawn_context_thread
 
 from .client import HostClient, HostUnavailable
-from .settings import profile_home, read_settings, read_token
+from .settings import profile_home, profile_setup_lock, read_settings, read_token
 from .setup import cli_setup
 from .source_capture import capture_snapshot
 from .source_worker import SourceWorker
@@ -30,6 +30,7 @@ class ReliquaryMemoryProvider(MemoryProvider):
     def __init__(self):
         self._lock = Lock()
         self._client = None
+        self._home = None
         self._source = self._source_profile = None
         self._binding = None
         self._session_id = None
@@ -104,8 +105,10 @@ class ReliquaryMemoryProvider(MemoryProvider):
                 return
             try:
                 home = profile_home(kwargs.get("hermes_home"))
-                settings = read_settings(home)
-                token = read_token(home)
+                with profile_setup_lock(home):
+                    settings = read_settings(home)
+                    token = read_token(home)
+                self._home = home
                 self._client = HostClient(
                     settings.state_dir, settings.profile_id, settings.principal_id, token, binary=settings.binary,
                 )
@@ -162,7 +165,8 @@ class ReliquaryMemoryProvider(MemoryProvider):
                 lease_missing = self._runtime_lease_id is None
             lease_id = None
             try:
-                binding = client.attach(session_id)
+                with profile_setup_lock(self._home):
+                    binding = client.attach(session_id)
                 with self._lock:
                     if self._status == "stopped":
                         continue

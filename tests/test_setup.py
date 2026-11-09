@@ -5,8 +5,10 @@ import json
 import pytest
 
 from reliquary_hermes import setup
+from reliquary_hermes.client import HostUnavailable
 from reliquary_hermes.settings import TOKEN_VAR, read_token
 from reliquary_hermes.validation import ContractError
+from test_hp03_host import binaries, install_setup_host, owner, setup_hosts
 from test_hp03_provider import pinned_provider
 
 
@@ -86,3 +88,27 @@ def test_setup_rejects_authority_and_keeps_project_session_mappings(setup_profil
     owner_file.write_text(json.dumps(owners), encoding="utf-8")
     assert setup.apply(home, candidate)["configured"]
     assert json.loads(owner_file.read_bytes()) == owners
+
+
+def test_exited_setup_host_releases_unaccepted_topology(pinned_provider, binaries, setup_hosts, tmp_path):
+    binary, cli = binaries
+    home = tmp_path / "retry-profile"
+    state = home / "reliquary"
+    state.mkdir(parents=True)
+    install_setup_host(home, binary)
+    main, replacement, phy = (home / name for name in ("main.rel", "replacement.rel", "active.phy"))
+    owner(cli, "rel", main, "unspecified")
+    owner(cli, "rel", replacement, "unspecified")
+    owner(cli, "phy", phy)
+    runtime_registry = state / "integration-runtimes-v1.json"
+    runtime_registry.write_bytes(b"corrupt startup state")
+    candidate = {"main_rel": str(main), "active_phy": str(phy)}
+
+    with pytest.raises(HostUnavailable):
+        setup.apply(home, candidate)
+    assert setup_hosts[0]._process.poll() is not None
+    assert not setup.status(home)["configured"]
+    assert not (state / "topology-v1.json").exists()
+
+    runtime_registry.unlink()
+    assert setup.apply(home, {**candidate, "main_rel": str(replacement)})["configured"]

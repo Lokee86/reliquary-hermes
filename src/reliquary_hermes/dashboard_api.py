@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from .client import HostClient, HostUnavailable
-from .settings import Settings, profile_home, read_settings, read_token
+from .settings import Settings, profile_home, profile_setup_lock, read_settings, read_token
 from .ui_contract import UIRequest, UIResponse, VerifiedUIContext
 from .ui_schema import MUTATIONS, OP_CAPABILITY
 from .validation import ContractError, MAX_WIRE_BYTES, canonical, decode, require
@@ -192,13 +192,14 @@ def _verified_context(settings: Settings, topology: dict, *, same_origin: bool =
 def _service_owner_sessions(home: Path, browser_request: UIRequest) -> UIResponse:
     """Blocking settings, socket transport, and response validation run off the ASGI loop."""
     try:
-        settings = read_settings(home)
-        token = read_token(home)
-        client = HostClient(settings.state_dir, settings.profile_id, settings.principal_id, token,
-                            binary=settings.binary)
-        # The requested session is only a selector. The signed host resolves it against its own
-        # configured/durable map and returns 403 for unknown IDs. Null preserves owner-level scope.
-        topology = client.connect_dashboard(browser_request.session_id)
+        with profile_setup_lock(home):
+            settings = read_settings(home)
+            token = read_token(home)
+            client = HostClient(settings.state_dir, settings.profile_id, settings.principal_id, token,
+                                binary=settings.binary)
+            # The signed host resolves the selector against its own configured/durable map.
+            # Null preserves owner-level scope.
+            topology = client.connect_dashboard(browser_request.session_id)
         context = _verified_context(settings, topology)
         request_value = browser_request.value
         request_value["profile_id"] = settings.profile_id

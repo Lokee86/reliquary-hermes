@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import sys
 import types
 from dataclasses import dataclass
@@ -60,6 +61,7 @@ def request_payload(*, session_id=None, profile="browser-profile", principal="br
 def install_route(monkeypatch):
     home = Path("C:/hermes/profile-a")
     monkeypatch.setattr(api, "_host_home", lambda request: home)
+    monkeypatch.setattr(api, "profile_setup_lock", lambda _: nullcontext())
     monkeypatch.setattr(api, "read_settings", lambda selected: Settings())
     monkeypatch.setattr(api, "read_token", lambda selected: "secret")
     monkeypatch.setattr(api, "HostClient", FakeClient)

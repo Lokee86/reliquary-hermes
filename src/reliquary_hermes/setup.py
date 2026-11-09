@@ -4,15 +4,14 @@ import hashlib
 import os
 from pathlib import Path
 import subprocess
-from threading import local
 
 from .client import HostClient, HostUnavailable
 from .settings import (
-    _read_object, _state_dir, ensure_setup_token, profile_home, read_settings, read_token, save_settings,
+    _read_object, _state_dir, ensure_setup_token, profile_home, profile_setup_lock, read_settings, read_token,
+    save_settings,
 )
 from .validation import ContractError, MAX_WIRE_BYTES, canonical, decode, identifier, obj, require, text
 
-_LOCK_HOLDER = local()
 _OWNER_REPORT_FIELDS = {"accepted", "opened", "kind", "owner_id", "scope", "error"}
 
 
@@ -162,7 +161,6 @@ def _activate(home):
 
 
 def apply(home, candidate):
-    from hermes_cli.auth import _file_lock
     from hermes_cli.config import is_managed
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     from utils import atomic_json_write
@@ -172,9 +170,7 @@ def apply(home, candidate):
     scope = set_hermes_home_override(home)
     try:
         require(not is_managed(), "managed_setup")
-        lock = home / ".reliquary-setup.lock"
-        require(lock.resolve() == lock, "invalid_settings_path")
-        with _file_lock(lock, _LOCK_HOLDER, 20.0, "reliquary_setup_busy"):
+        with profile_setup_lock(home):
             prior, processing, binary, defaults = _defaults(home)
             request = _candidate(home, candidate, prior, defaults)
             processing_path = state / "processing.json"
@@ -212,9 +208,9 @@ def apply(home, candidate):
             ensure_setup_token(home)
             client = None
             try:
-                save_settings(home, {**request["owners"], "binary": str(binary)})
                 if config_changed:
                     atomic_json_write(processing_path, {"config_path": config_path}, mode=0o600, fsync_dir=True)
+                save_settings(home, {**request["owners"], "binary": str(binary)})
                 settings = read_settings(home)
                 client = HostClient(settings.state_dir, settings.profile_id, settings.principal_id,
                                     read_token(home), binary=settings.binary)
