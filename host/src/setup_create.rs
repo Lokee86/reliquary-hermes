@@ -35,12 +35,16 @@ fn create(role: Role, path: &Path) -> Result<OwnerCheck, &'static str> {
         Err(_) => return Err(CREATE_FAILED),
     }
 
-    // Root requires a new path. Create in a private sibling directory so an interrupted
-    // initialization cannot leave a partial owner at the requested destination.
-    let stage = Builder::new()
-        .prefix(".reliquary-owner-")
-        .tempdir_in(parent)
-        .map_err(|_| CREATE_FAILED)?;
+    // Root requires a new path. Stage beside the destination so an interrupted
+    // initialization cannot leave a partial owner at the requested path.
+    let mut staging = Builder::new();
+    staging.prefix(".reliquary-owner-");
+    #[cfg(unix)]
+    {
+        use std::{fs::Permissions, os::unix::fs::PermissionsExt};
+        staging.permissions(Permissions::from_mode(0o700));
+    }
+    let stage = staging.tempdir_in(parent).map_err(|_| CREATE_FAILED)?;
     let staged = TempPath::try_from_path(stage.path().join("owner")).map_err(|_| CREATE_FAILED)?;
     let owner_id = match role {
         Role::MainRel => {
