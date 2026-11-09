@@ -132,6 +132,11 @@ fn detects_and_opens_real_owners_and_config_without_creating_state_or_leases() {
         gateway.mount_rel(&project, true).unwrap(),
         project.owner_id()
     );
+    let busy = fixture.report(&fixture.request());
+    assert_eq!(busy["valid"], false);
+    assert_eq!(busy["main_rel"]["error"], "owner_writer_conflict");
+    assert_eq!(busy["main_rel"]["opened"], false);
+    drop(gateway);
     assert_eq!(fixture.report(&fixture.request())["valid"], true);
 }
 
