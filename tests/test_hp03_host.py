@@ -1,4 +1,5 @@
 from contextlib import ExitStack
+from hashlib import sha256
 import os
 from pathlib import Path
 from shutil import copyfile
@@ -110,6 +111,19 @@ def test_live_host_start_attach_scope_leases_outage_and_restart(tmp_path, binari
         project = existing.attach("session-project", project_id="lantern")
         assert (project.rel_id, project.user_id) == (project_id, user_id)
         assert existing._process is None
+
+        owners_path = state / "owners.json"
+        loaded_owners = owners_path.read_bytes()
+        fingerprint = sha256(loaded_owners).hexdigest()
+        assert existing.read_dashboard_topology(None, owners_fingerprint=fingerprint)["active_phy_id"] == user_id
+        owners_path.write_bytes(loaded_owners + b"\n")
+        try:
+            edited = sha256(owners_path.read_bytes()).hexdigest()
+            with pytest.raises(HostUnavailable, match="^service_restart_required$"):
+                existing.read_dashboard_topology(None, owners_fingerprint=edited)
+            assert existing.read_dashboard_topology(None)["active_phy_id"] == user_id
+        finally:
+            owners_path.write_bytes(loaded_owners)
 
         assert first_discovery["hermes_revision"] == "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
         discovery_path = state / "discovery.json"

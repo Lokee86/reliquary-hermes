@@ -20,6 +20,7 @@ use crate::{
 use reliquary_memory::Instance;
 use serde::Deserialize;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
@@ -53,6 +54,7 @@ struct Service {
     expected_host: String,
     discovery: Discovery,
     principal_id: String,
+    owners_fingerprint: String,
     key: TransportKey,
     sources: Mutex<SourceService>,
     retrieval: Mutex<RetrievalService>,
@@ -223,6 +225,7 @@ impl Service {
             principal_id: String,
             #[serde(deserialize_with = "required_nullable")]
             session_id: Option<String>,
+            owners_fingerprint: Option<String>,
         }
         fn required_nullable<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
         where
@@ -235,6 +238,18 @@ impl Service {
             || request.principal_id != self.principal_id
         {
             return Err(FORBIDDEN);
+        }
+        if let Some(fingerprint) = request.owners_fingerprint {
+            if fingerprint.len() != 64
+                || !fingerprint
+                    .bytes()
+                    .all(|byte| b"0123456789abcdef".contains(&byte))
+            {
+                return Err(INVALID);
+            }
+            if fingerprint != self.owners_fingerprint {
+                return Err(HttpError::new(409, "service_restart_required", false));
+            }
         }
         let registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
         let body = registry
@@ -524,7 +539,7 @@ fn bootstrap() -> Result<Bootstrap, &'static str> {
     Ok(bootstrap)
 }
 
-fn config(state_dir: &Path) -> Result<OwnerConfig, &'static str> {
+fn config(state_dir: &Path) -> Result<(OwnerConfig, String), &'static str> {
     if !state_dir.is_absolute() || !state_dir.symlink_metadata().is_ok_and(|meta| meta.is_dir()) {
         return Err("invalid_state_directory");
     }
@@ -534,7 +549,8 @@ fn config(state_dir: &Path) -> Result<OwnerConfig, &'static str> {
     }
     let file = File::open(path).map_err(|_| "invalid_owner_config")?;
     let bytes = read_bounded(file, MAX_WIRE_BYTES)?;
-    decode(&bytes).map_err(|_| "invalid_owner_config")
+    let owners = decode(&bytes).map_err(|_| "invalid_owner_config")?;
+    Ok((owners, hex(&Sha256::digest(&bytes))))
 }
 
 fn new_id() -> Result<String, &'static str> {
@@ -572,7 +588,7 @@ fn publish_discovery(state_dir: &Path, discovery: &Discovery) -> Result<(), &'st
 }
 
 pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
-    let config = config(state_dir)?;
+    let (config, owners_fingerprint) = config(state_dir)?;
     let bootstrap = bootstrap()?;
     // Opening the registry takes its service lease before mounting any REL.
     let registry =
@@ -604,6 +620,7 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
         expected_host,
         discovery,
         principal_id: registry.principal_id().to_owned(),
+        owners_fingerprint,
         key,
         registry: Mutex::new(registry),
         sources: Mutex::new(SourceService::open(state_dir)?),

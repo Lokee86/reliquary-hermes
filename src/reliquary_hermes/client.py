@@ -252,6 +252,12 @@ class HostClient:
                     code = identifier(error["code"])
                 except ContractError:
                     code = None
+            if path == "/v1/dashboard/topology" and status == 409:
+                try:
+                    if decode(reply).get("code") == "service_restart_required":
+                        code = "service_restart_required"
+                except ContractError:
+                    pass
             raise HostUnavailable(code or "invalid_host_response")
         return reply
 
@@ -325,9 +331,11 @@ class HostClient:
                 return exchange(current, deadline)
             time.sleep(min(0.03, remaining))
 
-    def connect_dashboard(self, session_id: str | None) -> dict:
+    def connect_dashboard(self, session_id: str | None, *, owners_fingerprint: str | None = None) -> dict:
         """Start or reuse the profile host, then verify its signed owner topology."""
-        return self._connect(lambda discovery, deadline: self._dashboard_topology(discovery, session_id, deadline))
+        return self._connect(lambda discovery, deadline: self._dashboard_topology(
+            discovery, session_id, deadline, owners_fingerprint,
+        ))
 
     def cancel_startup(self) -> bool:
         """Stop only a process this client launched while applying setup."""
@@ -339,19 +347,25 @@ class HostClient:
         # A child that exited before discovery can still have published topology.
         return True
 
-    def read_dashboard_topology(self, session_id: str | None) -> dict:
+    def read_dashboard_topology(self, session_id: str | None, *, owners_fingerprint: str | None = None) -> dict:
         """Read signed server-owned topology without attaching or starting the host."""
         discovery = self._read_discovery()
         if discovery is None:
             raise HostUnavailable("host_unavailable")
         deadline = time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS
-        return self._dashboard_topology(discovery, session_id, deadline)
+        return self._dashboard_topology(discovery, session_id, deadline, owners_fingerprint)
 
-    def _dashboard_topology(self, discovery: Discovery, session_id: str | None, deadline: float) -> dict:
+    def _dashboard_topology(
+        self, discovery: Discovery, session_id: str | None, deadline: float, owners_fingerprint: str | None,
+    ) -> dict:
         if session_id is not None:
             identifier(session_id)
-        body = canonical({"profile_id": self._profile_id, "principal_id": self._principal_id,
-                          "session_id": session_id})
+        request = {"profile_id": self._profile_id, "principal_id": self._principal_id, "session_id": session_id}
+        if owners_fingerprint is not None:
+            require(len(identifier(owners_fingerprint)) == 64
+                    and all(char in "0123456789abcdef" for char in owners_fingerprint), "invalid_owners_fingerprint")
+            request["owners_fingerprint"] = owners_fingerprint
+        body = canonical(request)
         reply = self._exchange(discovery, "/v1/dashboard/topology", body, deadline)
         try:
             result = obj(decode(reply), {"owners", "active_phy_id", "session_id", "session_owner_id"})
