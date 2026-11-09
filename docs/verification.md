@@ -299,6 +299,14 @@ Install the rebuilt host in a fresh isolated Hermes profile and select the exist
 
 The isolated Windows proof used HU05 `e5be550`, Root `244d10ec`, and the original pinned Hermes provider backend. It started with an empty REL. Real extraction produced one grounded Memory with zero rejected episodes. The staged import resumed to `completed` under the same configuration. Two real recall sessions returned that Memory and its original source snapshot digest across distinct host instances. The tool and dashboard receipts agreed, foreign-profile access was denied, and both shutdowns released the owner lease.
 
+## HU05 sealed import replay
+
+Apply the [sealed replay patch](../patches/reliquary-244d10ec-sealed-import-replay.patch) after the chronological extraction patch, then use the same locked offline build layout. Sealed replay verifies the live endpoint against the active profile already bound to the import. REL and routed PHY vector coverage use that exact profile ID. The frozen route binding, dimensional and normalization checks, bounded probes, cosine threshold, and import write guards still apply. An older seal without a processing binding keeps the exact-profile lookup.
+
+The detached `operational_processing` suite checks that compatible drift changes the fresh probe hash while replay preserves the completed receipt, processing report, and REL and PHY bytes across a fresh mount. Incompatible vectors and changes to the bound routes still return typed conflicts.
+
+The Windows live proof used an isolated copy of the fresh HU05 sealed import. The old CLI reproduced the conflict with the original real configuration. The patched CLI replayed that import before and after restarting the signed host. Both returned the same completed receipt and report, with byte-identical owners and source receipts. The original fixture, development config, and credential-key file retained their hashes.
+
 ## HU05 isolated Desktop mutation checks
 
 Use an isolated Hermes worktree based on `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19`. Apply [the hosted native admission patch](../patches/hermes-v0.23.0-hosted-native-admission.patch) there. Set `HU05_HERMES_HOSTED_CHECKOUT` to that worktree, then run `tests/test_hosted_desktop_api.py` with the process-test binaries and pytest environment above. The probe creates separate launch and secondary profiles, drives the real gateway ticket checks and plugin workers, and verifies native setup and a persisted Memory mutation in each. It also checks cross-profile, replay, Origin, and spoofed-header denial.

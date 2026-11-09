@@ -12,7 +12,7 @@ Each configured profile has a separate local service and credential. Multiple se
 
 ## Configuration and setup
 
-1. Install the standalone Reliquary plugin and its built host in the active Hermes profile. The default executable is `plugins/reliquary/host/reliquary-hermes-host.exe` under that profile. Build it from the Root revision and the HU05 extraction patch recorded in the [verification guide](verification.md#hu05-fresh-real-model-verification).
+1. Install the standalone Reliquary plugin and its built host in the active Hermes profile. The default executable is `plugins/reliquary/host/reliquary-hermes-host.exe` under that profile. Build it from the Root revision and the HU05 patches recorded in the [verification guide](verification.md#hu05-fresh-real-model-verification).
 2. Identify an existing main REL with a non-project scope, an active PHY, and a project-scoped REL for each optional project. Create owners with the Reliquary CLI if needed.
 3. Choose these paths in Reliquary setup or run `hermes memory setup reliquary` for headless setup. Setup derives profile and service identity, validates the paths through the Rust host, provisions a random credential in Hermes secret storage, and checks the signed host topology before selecting the provider.
 4. Start a new Hermes session to attach the provider. Set any explicit session-to-project mapping in the private `owners.json` before the session first attaches.

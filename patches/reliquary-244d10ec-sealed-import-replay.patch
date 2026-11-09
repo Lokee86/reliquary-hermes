@@ -1,0 +1,294 @@
+diff --git a/crates/reliquary-owner-session/src/session/native_import_plan.rs b/crates/reliquary-owner-session/src/session/native_import_plan.rs
+index 2d4eb9e9..243b19cc 100644
+--- a/crates/reliquary-owner-session/src/session/native_import_plan.rs
++++ b/crates/reliquary-owner-session/src/session/native_import_plan.rs
+@@ -85,31 +85,6 @@ impl RelWriter {
+         }
+     }
+ 
+-    /// Return the profile already pinned to this open import processing plan.
+-    /// Retries must reuse this identity rather than deriving a second profile
+-    /// from another live compatibility probe.
+-    pub fn native_import_processing_profile(
+-        &self,
+-        import_id: &str,
+-    ) -> Result<Option<CompatibilityProfile>, OwnerSessionError> {
+-        self.ensure_import_scope(import_id)?;
+-        let Some(profile) = self
+-            .session
+-            .imports
+-            .processing_binding(import_id)
+-            .and_then(|binding| binding.profile)
+-        else {
+-            return Ok(None);
+-        };
+-        self.session
+-            .active_compatibility_profile(CompatibilityProfileId(profile))
+-            .cloned()
+-            .map(Some)
+-            .ok_or_else(|| {
+-                OwnerSessionError::Record("import processing profile is missing or retired".into())
+-            })
+-    }
+-
+     pub fn require_native_import_profile(
+         &self,
+         import_id: &str,
+@@ -157,3 +132,27 @@ impl RelWriter {
+         Ok(())
+     }
+ }
++
++impl RelSession {
++    /// Read the active profile pinned to the import, including after settlement.
++    pub fn native_import_processing_profile(
++        &self,
++        import_id: &str,
++    ) -> Result<Option<CompatibilityProfile>, OwnerSessionError> {
++        let Some(binding) = self.imports.processing_binding(import_id) else {
++            return Ok(None);
++        };
++        let Some(profile) = binding.profile else {
++            if self.imports.settlement(import_id).is_some() {
++                return Err(OwnerSessionError::ManagementConflict);
++            }
++            return Ok(None);
++        };
++        self.active_compatibility_profile(CompatibilityProfileId(profile))
++            .cloned()
++            .map(Some)
++            .ok_or_else(|| {
++                OwnerSessionError::Record("import processing profile is missing or retired".into())
++            })
++    }
++}
+diff --git a/crates/reliquary-runtime-gateway/src/instance_import_postprocessing.rs b/crates/reliquary-runtime-gateway/src/instance_import_postprocessing.rs
+index 991b1baa..d5ecce8b 100644
+--- a/crates/reliquary-runtime-gateway/src/instance_import_postprocessing.rs
++++ b/crates/reliquary-runtime-gateway/src/instance_import_postprocessing.rs
+@@ -120,7 +120,9 @@ impl Instance {
+     ) -> Result<CompatibilityProfileId, GatewayError> {
+         let accepted = self.with_rel_writer(owner, |writer| {
+             writer.validate_native_import_postprocessing(import_id)?;
+-            writer.native_import_processing_profile(import_id)
++            writer
++                .read_session()
++                .native_import_processing_profile(import_id)
+         })??;
+         if let Some(profile) = accepted {
+             verify_compatibility_profile(&profile, endpoint).map_err(postprocessing_error)?;
+diff --git a/crates/reliquary-runtime-gateway/src/processing_stages.rs b/crates/reliquary-runtime-gateway/src/processing_stages.rs
+index ced14652..6a9cff10 100644
+--- a/crates/reliquary-runtime-gateway/src/processing_stages.rs
++++ b/crates/reliquary-runtime-gateway/src/processing_stages.rs
+@@ -5,12 +5,14 @@ use crate::{
+ };
+ use reliquary_application::{
+     DreamClassifier, DreamVerificationPolicy, DreamVerifier, SwitchboardEmbeddingEndpoint,
++    VectorWorkflowError,
+     import_entity_work::accepted_import_entity_work,
+     native_import_workflow::{NativeImportDreamCandidates, NativeImportPostprocessingPlan},
+     prepare_compatibility_profile,
+     processing_plan::{
+         ImportStage, ImportStageOutcome, ImportStageRun, StageState, coordinate_import_stages,
+     },
++    verify_compatibility_profile,
+ };
+ use reliquary_owner_session::{InsomniaWorkState, model::MemoryId};
+ use reliquary_switchboard::{EmbeddingEndpoint, GeneralEndpoint};
+@@ -233,12 +235,27 @@ pub(crate) fn verify_import_seal(
+     embedding: Arc<dyn EmbeddingEndpoint>,
+     mut report: impl FnMut(ImportStage, StageState, usize),
+ ) -> Result<ProcessingState, GatewayError> {
++    let bounded = embedding.supports_bounded_embedding();
+     let endpoint = SwitchboardEmbeddingEndpoint::new(embedding);
+-    let profile = prepare_compatibility_profile(&endpoint)
+-        .map_err(|_| {
+-            GatewayError::RetrievalUnavailable("configured embedding profile could not be verified")
+-        })?
+-        .id;
++    let accepted = instance.with_writable_reliquary(owner, |session| {
++        session.native_import_processing_profile(import_id)
++    })??;
++    let probe_failed =
++        || GatewayError::RetrievalUnavailable("configured embedding profile could not be verified");
++    let profile = if let Some(accepted) = accepted {
++        verify_compatibility_profile(&accepted, &endpoint).map_err(|error| match error {
++            VectorWorkflowError::IncompatibleEndpoint if bounded => {
++                OwnerSessionError::ManagementConflict.into()
++            }
++            _ => probe_failed(),
++        })?;
++        accepted.id
++    } else {
++        // Seals written before the processing binding still require an exact active profile.
++        prepare_compatibility_profile(&endpoint)
++            .map_err(|_| probe_failed())?
++            .id
++    };
+     if !instance
+         .native_import_missing_memory_vectors(owner, import_id, profile)?
+         .is_empty()
+diff --git a/tests/external-consumer/tests/operational_processing.rs b/tests/external-consumer/tests/operational_processing.rs
+index 675819e6..e376c916 100644
+--- a/tests/external-consumer/tests/operational_processing.rs
++++ b/tests/external-consumer/tests/operational_processing.rs
+@@ -34,10 +34,6 @@ struct Fixture {
+     server: Option<thread::JoinHandle<()>>,
+ }
+ impl Fixture {
+-    fn start() -> Self {
+-        Self::start_with(fixture_reply)
+-    }
+-
+     fn start_with(reply: impl Fn(&Value, bool) -> Value + Send + 'static) -> Self {
+         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+         let address = listener.local_addr().unwrap();
+@@ -195,7 +191,21 @@ fn configured_fixture(
+ 
+ #[test]
+ fn configured_import_processes_rel_and_phy_and_reopens_without_republication() {
+-    let fixture = Fixture::start();
++    let compatible_drift = Arc::new(AtomicBool::new(false));
++    let fixture = Fixture::start_with({
++        let compatible_drift = Arc::clone(&compatible_drift);
++        move |request, changed_profile| {
++            let mut reply = fixture_reply(request, changed_profile);
++            if !changed_profile && compatible_drift.load(Ordering::Acquire) {
++                if let Some(data) = reply["data"].as_array_mut() {
++                    for row in data {
++                        row["embedding"] = json!([0.99995, 0.01]);
++                    }
++                }
++            }
++            reply
++        }
++    });
+     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+         .join(".test-tmp")
+         .join(format!("operational-{}", std::process::id()));
+@@ -229,22 +239,26 @@ fn configured_import_processes_rel_and_phy_and_reopens_without_republication() {
+     );
+     let rel = Rel::create(&rel_path, OwnerScope::Project).unwrap();
+     let phy = Phylactery::create(&phy_path).unwrap();
+-    let gateway = Gateway::new();
+-    let owner = gateway.mount_rel(&rel, true).unwrap();
+-    let destination = gateway.mount_phylactery(&phy, true).unwrap();
+     let token = "external-fixture-operator-admission-credential";
+-    let (admission, _) = TrustedHostAdmission::new([HostCredentialBinding::new(
+-        "operator",
+-        token,
+-        [
+-            OwnerGrant::ManageRel(owner),
+-            OwnerGrant::OperateRel(owner),
+-            OwnerGrant::OperatePhylactery(destination),
+-        ],
+-    )])
+-    .install(&gateway)
+-    .unwrap();
+-    let instance = admission.authenticate(token).unwrap();
++    let mount = |rel: &Rel, phy: &Phylactery| {
++        let gateway = Gateway::new();
++        let owner = gateway.mount_rel(rel, true).unwrap();
++        let destination = gateway.mount_phylactery(phy, true).unwrap();
++        let (admission, _) = TrustedHostAdmission::new([HostCredentialBinding::new(
++            "operator",
++            token,
++            [
++                OwnerGrant::ManageRel(owner),
++                OwnerGrant::OperateRel(owner),
++                OwnerGrant::OperatePhylactery(destination),
++            ],
++        )])
++        .install(&gateway)
++        .unwrap();
++        let instance = admission.authenticate(token).unwrap();
++        (gateway, admission, instance, owner, destination)
++    };
++    let (gateway, admission, instance, owner, destination) = mount(&rel, &phy);
+     let plan = NativeImportPlan::from_path(&input, NativeImportFormat::ChatGpt, None).unwrap();
+     let stage = instance.stage_native_import(owner, plan).unwrap();
+     for selection in [
+@@ -330,23 +344,66 @@ fn configured_import_processes_rel_and_phy_and_reopens_without_republication() {
+     management.quiesce().unwrap();
+     assert_eq!(management.verify_quiesced().unwrap().memory_count, 1);
+     management.reopen().unwrap();
+-    fixture.changed_profile.store(true, Ordering::Release);
+-    assert_eq!(
+-        instance
+-            .process_and_drain(owner, &runtime, options.clone())
+-            .unwrap_err()
+-            .kind(),
+-        ProductErrorKind::Conflict
+-    );
+-    fixture.changed_profile.store(false, Ordering::Release);
+-    assert_eq!(
+-        instance
+-            .process_and_drain(owner, &runtime, options)
+-            .unwrap()
+-            .state,
+-        ProcessingState::Ready
+-    );
++    let sealed = instance
++        .native_import_status(owner, &stage.import_id)
++        .unwrap()
++        .unwrap();
++    assert_eq!(sealed.state, reliquary_memory::NativeImportState::Completed);
++    assert_eq!(sealed.receipt_digest, Some(stage.receipt_digest));
++    let original_probe = runtime.probe_embedding_profile().unwrap().unwrap().id;
+     drop((management, instance, admission, gateway, rel, phy));
++
++    // Read both files after releasing their writer leases so this also works on Windows.
++    let sealed_rel = fs::read(&rel_path).unwrap();
++    let sealed_phy = fs::read(&phy_path).unwrap();
++    compatible_drift.store(true, Ordering::Release);
++    let drifted_probe = runtime.probe_embedding_profile().unwrap().unwrap().id;
++    assert_ne!(
++        original_probe, drifted_probe,
++        "drift must change the raw probe hash"
++    );
++
++    let replay = |runtime: &ConfiguredRuntime| {
++        let rel = Rel::open(&rel_path).unwrap();
++        let phy = Phylactery::open(&phy_path).unwrap();
++        let (gateway, admission, instance, reopened_owner, reopened_destination) =
++            mount(&rel, &phy);
++        assert_eq!((reopened_owner, reopened_destination), (owner, destination));
++        assert_eq!(
++            instance
++                .process_and_drain(owner, &other_runtime, options.clone())
++                .unwrap_err()
++                .kind(),
++            ProductErrorKind::Conflict
++        );
++        fixture.changed_profile.store(true, Ordering::Release);
++        assert_eq!(
++            instance
++                .process_and_drain(owner, runtime, options.clone())
++                .unwrap_err()
++                .kind(),
++            ProductErrorKind::Conflict
++        );
++        fixture.changed_profile.store(false, Ordering::Release);
++        let report = instance
++            .process_and_drain(owner, runtime, options.clone())
++            .unwrap();
++        assert_eq!(report.state, ProcessingState::Ready, "{report:?}");
++        assert_eq!(
++            instance
++                .native_import_status(owner, &stage.import_id)
++                .unwrap(),
++            Some(sealed.clone())
++        );
++        drop((instance, admission, gateway, rel, phy));
++        assert_eq!(fs::read(&rel_path).unwrap(), sealed_rel);
++        assert_eq!(fs::read(&phy_path).unwrap(), sealed_phy);
++        serde_json::to_value(report).unwrap()
++    };
++    let before_restart = replay(&runtime);
++    drop(runtime);
++    let restarted_runtime = ConfiguredRuntime::from_path(&config).unwrap();
++    assert_eq!(replay(&restarted_runtime), before_restart);
+     assert_eq!(Rel::verify(&rel_path).unwrap().memory_count, 1);
+     assert_eq!(Phylactery::verify(&phy_path).unwrap().memory_count, 1);
+     drop(fixture);
