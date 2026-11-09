@@ -24,7 +24,7 @@ function buildLiveBundle() {
   return `function createReliquarySurface(options) {
   const { React, hooks = React, components } = options;
   const runtime = { crypto: globalThis.crypto, ReliquaryDashboardHost: { React, hooks, components } };
-  ${scopedSources(["client.js", "live_transport.js", ...views, "setup_client.js", "onboarding.js", "surface.js"])}
+  ${scopedSources(["client.js", "live_transport.js", ...views, "sources.js", "setup_client.js", "onboarding.js", "surface.js"])}
   return runtime.ReliquaryDashboardSurface(options);
 }`;
 }

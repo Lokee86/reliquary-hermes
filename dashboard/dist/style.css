@@ -100,3 +100,13 @@
 .rly-setup-entries { display: grid; gap: .4rem; max-height: 16rem; overflow: auto; padding-inline-start: 0; list-style: none; }
 .rly-setup-entries button { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
 .rly-setup-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .65rem; }
+.rly-sources { display: grid; gap: 1rem; min-width: 0; }
+.rly-sources h2, .rly-sources h3, .rly-sources p { margin-block: .25rem; }
+.rly-import-list { display: grid; gap: .65rem; list-style: none; margin: 0; padding: 0; }
+.rly-import-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: .8rem; padding: .85rem; }
+.rly-import-row > div { min-width: 0; }
+.rly-import-row .rly-detail-meta { grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .2rem .75rem; }
+.rly-import-row .rly-detail-meta > div { display: flex; gap: .4rem; min-width: 0; }
+.rly-import-row dt { font-weight: 600; }
+.rly-import-row dd { margin: 0; overflow-wrap: anywhere; }
+.rly-import-review { padding: 1rem; }

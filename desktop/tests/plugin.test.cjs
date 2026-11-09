@@ -145,6 +145,28 @@ test("uses the SDK profile scope for status, project inventory, creation, valida
   assert.equal(calls.length, 6);
 });
 
+test("allows only the scoped Sources history and import routes through the SDK REST bridge", async () => {
+  const calls = [];
+  const { render } = await load({ rest: async (path, options) => {
+    calls.push({ path, method: options.method, body: options.body });
+    return { available: true, destinations: [], sessions: [], next_offset: null };
+  } });
+  const { surface } = render();
+  const list = await surface.authedFetch(url("/sources-v1/sessions?offset=0&q=design"));
+  assert.equal(list.ok, true);
+  await surface.authedFetch(url("/sources-v1/status"), { method: "POST", body: JSON.stringify({ session_ids: ["s1"] }) });
+  await surface.authedFetch(url("/sources-v1/import"), { method: "POST", body: JSON.stringify({ session_ids: ["s1"], owner_id: "rel1", confirm: true }) });
+  assert.deepEqual(calls.map(({ path, method }) => [path, method]), [
+    ["/sources-v1/sessions?offset=0&q=design", "GET"],
+    ["/sources-v1/status", "POST"],
+    ["/sources-v1/import", "POST"],
+  ]);
+  assert.equal(JSON.stringify(calls[2].body), JSON.stringify({ session_ids: ["s1"], owner_id: "rel1", confirm: true }));
+  await assert.rejects(surface.authedFetch(url("/sources-v1/sessions?offset=-1&q=x")), /Unsupported Reliquary API request/);
+  await assert.rejects(surface.authedFetch(url("/sources-v1/import")), /Unsupported Reliquary API request/);
+  assert.equal(calls.length, 3);
+});
+
 test("uses the native picker for REL, PHY and config and keeps cancel inert", async () => {
   const calls = [];
   const selections = ["C:/work/main.rel", null, "C:/work/local.cfg"];

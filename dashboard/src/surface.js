@@ -9,6 +9,7 @@
     const { useState, useEffect } = hooks;
     const { useRead, useCursor } = root.ReliquaryDashboardState;
     const { meta, readContent, select, pager, Status } = root.ReliquaryDashboardViews;
+    const { ImportSessions } = root.ReliquaryDashboardSources;
     const { OwnerContent } = root.ReliquaryDashboardOwner;
     const { createLiveMutation } = root.ReliquaryDashboardLive;
 
@@ -17,6 +18,7 @@
     function DashboardTab({ client, configPath, blockReason, onManageSetup }) {
       const [write] = useState(() => blockReason ? undefined : createLiveMutation(authedFetch));
       const [sessionId, setSessionId] = useState(/** @type {string | null} */ (null));
+      const [section, setSection] = useState("dashboard");
       const [sessionInput, setSessionInput] = useState("");
       const [selectedOwnerId, setSelectedOwnerId] = useState(/** @type {string | null} */ (null));
       const [lastGood, setLastGood] = useState(/** @type {{sessionId:string|null,cursor:string|null,value:import("../types").ReadResults["ui.owner_sessions"]}|null} */ (null));
@@ -61,6 +63,11 @@
           h("p", { className: "rly-subtitle" }, "Configured owners in this Hermes profile")),
           h(Button, { type: "button", onClick: onManageSetup }, "Manage memory setup")),
         blockReason && h("p", { className: "rly-live-notice", role: "note" }, blockReason),
+        h("nav", { className: "rly-view-switch", "aria-label": "Reliquary sections" },
+          h(Button, { type: "button", "aria-pressed": section === "dashboard", onClick: () => setSection("dashboard") }, "Dashboard"),
+          h(Button, { type: "button", "aria-pressed": section === "sources", onClick: () => setSection("sources") }, "Sources")),
+        section === "sources" && h(ImportSessions, { authedFetch, mutationBlocked: blockReason }),
+        section === "dashboard" && h(React.Fragment, null,
         refreshing && h("p", { className: "rly-refreshing", role: "status" },
           write ? "Refreshing owner binding. Writes are paused until it completes." : "Refreshing owner binding."),
         readContent("owner and session bindings", visibleDiscovery, (data) => {
@@ -112,7 +119,7 @@
             owner ? h(OwnerContent, { key: scopeKey, client, write, onRefresh: refreshOwnerData, refreshing,
               scope: /** @type {import("../types").ReadScope & {owner:import("../types").OwnerBinding}} */ (scope) })
               : h("p", { className: "rly-empty" }, "No authorized owner is available for this scope."));
-        }, ownerCursor.reset));
+        }, ownerCursor.reset)));
     }
 
 

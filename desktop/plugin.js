@@ -1,5 +1,5 @@
 /* Generated from dashboard/src and desktop/src. Rebuild with node desktop/scripts/build.cjs. */
-const reliquaryStyles = ".rly-dashboard {\n  display: flex;\n  flex-direction: column;\n  gap: 1rem;\n  margin: 0 auto;\n  max-width: 1680px;\n  min-height: 75vh;\n  padding: 1.25rem;\n}\n.rly-header, .rly-view-switch, .rly-memory-button, .rly-fixture-pill {\n  align-items: center;\n  display: flex;\n}\n.rly-header, .rly-toolbar { justify-content: space-between; gap: 1rem; }\n.rly-header h1 { margin: 0; }\n.rly-eyebrow { margin: 0 0 .35rem; }\n.rly-subtitle { margin: .3rem 0 0; }\n.rly-fixture-pill, .rly-live-notice { padding: .45rem .75rem; }\n.rly-layout { display: grid; gap: 1rem; grid-template-columns: minmax(180px, 220px) minmax(0, 1fr); align-items: start; }\n.rly-sidebar, .rly-main, .rly-inspector { min-width: 0; padding: 1rem; }\n.rly-sidebar h2, .rly-inspector h2 { margin-top: 0; }\n.rly-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: .35rem; margin-bottom: .75rem; }\n.rly-field :is(input, textarea, [role=\"combobox\"]) { min-width: 0; width: 100%; }\n.rly-owner-meta, .rly-detail-meta { display: grid; gap: .4rem; margin: 1rem 0; }\n.rly-meta-row { display: flex; gap: .75rem; justify-content: space-between; padding: .35rem 0; }\n.rly-meta-row dd { margin: 0; max-width: 65%; overflow-wrap: anywhere; text-align: right; }\n.rly-status-card { display: grid; gap: .3rem; margin-top: 1rem; padding: .75rem; }\n.rly-view-switch { gap: .35rem; margin-bottom: 1rem; }\n.rly-memory-list, .rly-provenance-list { display: grid; gap: .6rem; list-style: none; margin: 0; padding: 0; }\n.rly-memory-button { align-items: flex-start; flex-direction: column; }\n.rly-memory-button, .rly-community-button, .rly-community-members button {\n  line-height: normal;\n  overflow-wrap: anywhere;\n  text-align: left;\n  white-space: normal;\n  width: 100%;\n}\n.rly-empty { padding: 2rem; text-align: center; }\n.rly-owner-label { overflow-wrap: anywhere; }\n.rly-inspector h3 { margin-bottom: .4rem; }\n.rly-body { overflow-wrap: anywhere; white-space: pre-wrap; }\n.rly-provenance-list li { display: grid; gap: .3rem; overflow-wrap: anywhere; padding-left: .65rem; }\n.rly-provenance-list blockquote { margin: .2rem 0; padding-left: .6rem; white-space: pre-wrap; }\n\n.rly-owner-content { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 1rem; align-items: start; min-width: 0; }\n.rly-pager { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }\n.rly-history { list-style: none; display: grid; gap: .4rem; padding: 0; }\n.rly-filters { margin-bottom: 1rem; }\n.rly-filter-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .5rem; padding-top: .5rem; }\n.rly-communities { margin-top: 1rem; padding-top: 1rem; }\n.rly-read-message { overflow-wrap: anywhere; }\n\n@media (max-width: 1180px) {\n  .rly-owner-content { grid-template-columns: minmax(0, 1fr); }\n}\n@media (max-width: 730px) {\n  .rly-layout { grid-template-columns: minmax(0, 1fr); }\n}\n\n.rly-graph-view, .rly-community-view { min-width: 0; }\n.rly-graph-canvas { overflow: auto; }\n.rly-graph-canvas svg { display: block; width: 100%; min-width: 34rem; height: auto; }\n.rly-graph-edge-line { stroke: currentColor; stroke-opacity: .4; stroke-width: 2; }\n.rly-graph-edge.is-selected .rly-graph-edge-line { stroke-opacity: 1; stroke-width: 4; }\n.rly-graph-edge-hit, .rly-graph-node { cursor: pointer; }\n.rly-graph-edge-hit:focus { stroke: currentColor; stroke-opacity: .35; }\n.rly-graph-node rect { fill: var(--ui-bg-primary, var(--background-base, transparent)); stroke: currentColor; stroke-width: 2; }\n.rly-graph-node text { fill: currentColor; font-size: 13px; pointer-events: none; }\n.rly-graph-node:hover rect,\n.rly-graph-node:focus rect,\n.rly-graph-node.is-selected rect { stroke-width: 3; }\n\n.rly-graph-inspector { margin-top: .8rem; padding: .85rem 1rem; }\n.rly-graph-inspector h3 { margin: 0 0 .6rem; }\n.rly-graph-inspector dl { display: grid; grid-template-columns: minmax(7rem, auto) 1fr; gap: .3rem .8rem; margin: 0; }\n.rly-graph-inspector dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }\n\n.rly-community-layout { display: grid; grid-template-columns: minmax(14rem, .8fr) minmax(16rem, 1.2fr); gap: 1rem; }\n.rly-community-list-pane, .rly-community-members-pane { min-width: 0; }\n.rly-community-list, .rly-community-members { display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none; }\n.rly-community-button { display: grid; gap: .25rem; }\n\n@media (max-width: 700px) {\n  .rly-community-layout { grid-template-columns: 1fr; }\n}\n\n.rly-session-lookup { display: flex; align-items: end; gap: .75rem; flex-wrap: wrap; }\n.rly-session-lookup .rly-field { width: min(100%, 24rem); margin-bottom: 0; }\n.rly-sidebar .rly-session-lookup { margin: .75rem 0; }\n.rly-memory-write-form { margin-top: 1rem; padding-top: .75rem; }\n.rly-confirmation { display: flex; align-items: center; gap: .5rem; }\n.rly-write-success, .rly-write-error { overflow-wrap: anywhere; }\n\n.rly-setup-form { width: min(100%, 46rem); }\n.rly-setup-form fieldset { border: 0; margin: 0; min-width: 0; padding: 0; }\n.rly-setup-form h2 { margin: 1rem 0 .6rem; }\n.rly-setup-card, .rly-setup-picker { margin-block: 1rem; }\n.rly-setup-card .rly-setup-card { padding-inline-start: 1rem; }\n.rly-setup-check, .rly-setup-value { overflow-wrap: anywhere; }\n.rly-setup-entries { display: grid; gap: .4rem; max-height: 16rem; overflow: auto; padding-inline-start: 0; list-style: none; }\n.rly-setup-entries button { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }\n.rly-setup-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .65rem; }\n";
+const reliquaryStyles = ".rly-dashboard {\n  display: flex;\n  flex-direction: column;\n  gap: 1rem;\n  margin: 0 auto;\n  max-width: 1680px;\n  min-height: 75vh;\n  padding: 1.25rem;\n}\n.rly-header, .rly-view-switch, .rly-memory-button, .rly-fixture-pill {\n  align-items: center;\n  display: flex;\n}\n.rly-header, .rly-toolbar { justify-content: space-between; gap: 1rem; }\n.rly-header h1 { margin: 0; }\n.rly-eyebrow { margin: 0 0 .35rem; }\n.rly-subtitle { margin: .3rem 0 0; }\n.rly-fixture-pill, .rly-live-notice { padding: .45rem .75rem; }\n.rly-layout { display: grid; gap: 1rem; grid-template-columns: minmax(180px, 220px) minmax(0, 1fr); align-items: start; }\n.rly-sidebar, .rly-main, .rly-inspector { min-width: 0; padding: 1rem; }\n.rly-sidebar h2, .rly-inspector h2 { margin-top: 0; }\n.rly-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: .35rem; margin-bottom: .75rem; }\n.rly-field :is(input, textarea, [role=\"combobox\"]) { min-width: 0; width: 100%; }\n.rly-owner-meta, .rly-detail-meta { display: grid; gap: .4rem; margin: 1rem 0; }\n.rly-meta-row { display: flex; gap: .75rem; justify-content: space-between; padding: .35rem 0; }\n.rly-meta-row dd { margin: 0; max-width: 65%; overflow-wrap: anywhere; text-align: right; }\n.rly-status-card { display: grid; gap: .3rem; margin-top: 1rem; padding: .75rem; }\n.rly-view-switch { gap: .35rem; margin-bottom: 1rem; }\n.rly-memory-list, .rly-provenance-list { display: grid; gap: .6rem; list-style: none; margin: 0; padding: 0; }\n.rly-memory-button { align-items: flex-start; flex-direction: column; }\n.rly-memory-button, .rly-community-button, .rly-community-members button {\n  line-height: normal;\n  overflow-wrap: anywhere;\n  text-align: left;\n  white-space: normal;\n  width: 100%;\n}\n.rly-empty { padding: 2rem; text-align: center; }\n.rly-owner-label { overflow-wrap: anywhere; }\n.rly-inspector h3 { margin-bottom: .4rem; }\n.rly-body { overflow-wrap: anywhere; white-space: pre-wrap; }\n.rly-provenance-list li { display: grid; gap: .3rem; overflow-wrap: anywhere; padding-left: .65rem; }\n.rly-provenance-list blockquote { margin: .2rem 0; padding-left: .6rem; white-space: pre-wrap; }\n\n.rly-owner-content { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 1rem; align-items: start; min-width: 0; }\n.rly-pager { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }\n.rly-history { list-style: none; display: grid; gap: .4rem; padding: 0; }\n.rly-filters { margin-bottom: 1rem; }\n.rly-filter-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .5rem; padding-top: .5rem; }\n.rly-communities { margin-top: 1rem; padding-top: 1rem; }\n.rly-read-message { overflow-wrap: anywhere; }\n\n@media (max-width: 1180px) {\n  .rly-owner-content { grid-template-columns: minmax(0, 1fr); }\n}\n@media (max-width: 730px) {\n  .rly-layout { grid-template-columns: minmax(0, 1fr); }\n}\n\n.rly-graph-view, .rly-community-view { min-width: 0; }\n.rly-graph-canvas { overflow: auto; }\n.rly-graph-canvas svg { display: block; width: 100%; min-width: 34rem; height: auto; }\n.rly-graph-edge-line { stroke: currentColor; stroke-opacity: .4; stroke-width: 2; }\n.rly-graph-edge.is-selected .rly-graph-edge-line { stroke-opacity: 1; stroke-width: 4; }\n.rly-graph-edge-hit, .rly-graph-node { cursor: pointer; }\n.rly-graph-edge-hit:focus { stroke: currentColor; stroke-opacity: .35; }\n.rly-graph-node rect { fill: var(--ui-bg-primary, var(--background-base, transparent)); stroke: currentColor; stroke-width: 2; }\n.rly-graph-node text { fill: currentColor; font-size: 13px; pointer-events: none; }\n.rly-graph-node:hover rect,\n.rly-graph-node:focus rect,\n.rly-graph-node.is-selected rect { stroke-width: 3; }\n\n.rly-graph-inspector { margin-top: .8rem; padding: .85rem 1rem; }\n.rly-graph-inspector h3 { margin: 0 0 .6rem; }\n.rly-graph-inspector dl { display: grid; grid-template-columns: minmax(7rem, auto) 1fr; gap: .3rem .8rem; margin: 0; }\n.rly-graph-inspector dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }\n\n.rly-community-layout { display: grid; grid-template-columns: minmax(14rem, .8fr) minmax(16rem, 1.2fr); gap: 1rem; }\n.rly-community-list-pane, .rly-community-members-pane { min-width: 0; }\n.rly-community-list, .rly-community-members { display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none; }\n.rly-community-button { display: grid; gap: .25rem; }\n\n@media (max-width: 700px) {\n  .rly-community-layout { grid-template-columns: 1fr; }\n}\n\n.rly-session-lookup { display: flex; align-items: end; gap: .75rem; flex-wrap: wrap; }\n.rly-session-lookup .rly-field { width: min(100%, 24rem); margin-bottom: 0; }\n.rly-sidebar .rly-session-lookup { margin: .75rem 0; }\n.rly-memory-write-form { margin-top: 1rem; padding-top: .75rem; }\n.rly-confirmation { display: flex; align-items: center; gap: .5rem; }\n.rly-write-success, .rly-write-error { overflow-wrap: anywhere; }\n\n.rly-setup-form { width: min(100%, 46rem); }\n.rly-setup-form fieldset { border: 0; margin: 0; min-width: 0; padding: 0; }\n.rly-setup-form h2 { margin: 1rem 0 .6rem; }\n.rly-setup-card, .rly-setup-picker { margin-block: 1rem; }\n.rly-setup-card .rly-setup-card { padding-inline-start: 1rem; }\n.rly-setup-check, .rly-setup-value { overflow-wrap: anywhere; }\n.rly-setup-entries { display: grid; gap: .4rem; max-height: 16rem; overflow: auto; padding-inline-start: 0; list-style: none; }\n.rly-setup-entries button { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }\n.rly-setup-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .65rem; }\n.rly-sources { display: grid; gap: 1rem; min-width: 0; }\n.rly-sources h2, .rly-sources h3, .rly-sources p { margin-block: .25rem; }\n.rly-import-list { display: grid; gap: .65rem; list-style: none; margin: 0; padding: 0; }\n.rly-import-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: .8rem; padding: .85rem; }\n.rly-import-row > div { min-width: 0; }\n.rly-import-row .rly-detail-meta { grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .2rem .75rem; }\n.rly-import-row .rly-detail-meta > div { display: flex; gap: .4rem; min-width: 0; }\n.rly-import-row dt { font-weight: 600; }\n.rly-import-row dd { margin: 0; overflow-wrap: anywhere; }\n.rly-import-review { padding: 1rem; }\n";
 function createReliquarySurface(options) {
   const { React, hooks = React, components } = options;
   const runtime = { crypto: globalThis.crypto, ReliquaryDashboardHost: { React, hooks, components } };
@@ -1234,6 +1234,174 @@ function createReliquarySurface(options) {
 (function (root) {
   "use strict";
 
+  const h = root.ReliquaryDashboardHost.React.createElement;
+  const { useState, useEffect } = root.ReliquaryDashboardHost.hooks;
+  const { Button, Input, Select, Checkbox } = root.ReliquaryDashboardHost.components;
+  const endpoint = "/api/plugins/reliquary-hermes/sources-v1";
+  const statuses = new Set(["available", "queued", "staged", "processing", "complete", "failed", "already_imported", "unavailable"]);
+  const activeStatuses = new Set(["queued", "staged", "processing"]);
+  const statusLabels = { available: "Available", queued: "Queued", staged: "Staged", processing: "Processing",
+    complete: "Complete", failed: "Failed", already_imported: "Already imported", unavailable: "Unavailable" };
+
+  function safeSession(value) {
+    if (!value || typeof value !== "object" || typeof value.session_id !== "string" || !value.session_id ||
+      typeof value.title !== "string" || !Number.isFinite(value.started_at) || !Number.isFinite(value.last_activity_at) ||
+      !Number.isInteger(value.message_count) || value.message_count < 0 ||
+      !(value.project_name === null || typeof value.project_name === "string") || typeof value.status !== "string" ||
+      !statuses.has(value.status) || !(value.reason === null || typeof value.reason === "string") || typeof value.retryable !== "boolean") return null;
+    return value;
+  }
+
+  function safeStatuses(value, expectedIds) {
+    if (!value || !Array.isArray(value.sessions)) return null;
+    const seen = new Set();
+    const rows = [];
+    for (const item of value.sessions) {
+      if (!item || typeof item.session_id !== "string" || !expectedIds.includes(item.session_id) || seen.has(item.session_id) ||
+        !statuses.has(item.status) || typeof item.retryable !== "boolean" || !(item.reason === null || typeof item.reason === "string")) return null;
+      seen.add(item.session_id); rows.push(item);
+    }
+    return seen.size === expectedIds.length ? rows : null;
+  }
+
+  async function request(authedFetch, path, method, body) {
+    const response = await authedFetch(endpoint + path, { method,
+      headers: { "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    if (!response.ok) throw new Error("request_failed");
+    return response.json();
+  }
+
+  function ImportSessions({ authedFetch, mutationBlocked }) {
+    const [open, setOpen] = useState(false);
+    const [query, setQuery] = useState("");
+    const [submittedQuery, setSubmittedQuery] = useState("");
+    const [offset, setOffset] = useState(0);
+    const [page, setPage] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState("");
+    const [selected, setSelected] = useState([]);
+    const [ownerId, setOwnerId] = useState("");
+    const [review, setReview] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const [statusById, setStatusById] = useState({});
+    const [polling, setPolling] = useState(0);
+
+    async function loadPage(nextOffset = offset, q = submittedQuery) {
+      setLoading(true); setError("");
+      try {
+        const value = await request(authedFetch, "/sessions?offset=" + nextOffset + "&q=" + encodeURIComponent(q), "GET");
+        if (!value || typeof value.available !== "boolean" || !Array.isArray(value.destinations) || !Array.isArray(value.sessions) ||
+          !(value.next_offset === null || (Number.isInteger(value.next_offset) && value.next_offset >= 0))) throw new Error("invalid_response");
+        const destinations = value.destinations.filter((item) => item && typeof item.owner_id === "string" && item.owner_id && typeof item.label === "string");
+        const sessions = value.sessions.map(safeSession);
+        if (destinations.length !== value.destinations.length || sessions.some((item) => !item)) throw new Error("invalid_response");
+        setPage({ ...value, destinations, sessions });
+        setSelected([]); setReview(false);
+        if (!destinations.some((item) => item.owner_id === ownerId)) setOwnerId(destinations[0]?.owner_id ?? "");
+      } catch { setPage(null); setError("Could not load session history. Retry to check availability."); }
+      finally { setLoading(false); }
+    }
+
+    useEffect(() => { if (open) loadPage(0, submittedQuery); }, [open]);
+    useEffect(() => {
+      if (!polling) return undefined;
+      const timer = setTimeout(async () => {
+        try {
+          const ids = Object.entries(statusById).filter(([, item]) => item && activeStatuses.has(item.status)).map(([id]) => id);
+          if (!ids.length) { setPolling(0); return; }
+          const value = await request(authedFetch, "/status", "POST", { session_ids: ids });
+          const updates = safeStatuses(value, ids);
+          if (!updates) throw new Error("invalid_response");
+          setStatusById((old) => ({ ...old, ...Object.fromEntries(updates.map((item) => [item.session_id, item])) }));
+          setPolling((count) => count < 29 ? count + 1 : 0);
+        } catch { setPolling((count) => count < 29 ? count + 1 : 0); }
+      }, 2000);
+      return () => clearTimeout(timer);
+    }, [polling, statusById]);
+
+    async function importIds(ids) {
+      if (mutationBlocked || !ownerId || !ids.length || ids.length > 8) return;
+      setBusy(true); setError("");
+      try {
+        const value = await request(authedFetch, "/import", "POST", { session_ids: ids, owner_id: ownerId, confirm: true });
+        const updates = safeStatuses(value, ids);
+        if (!updates) throw new Error("invalid_response");
+        setStatusById((old) => ({ ...old, ...Object.fromEntries(updates.map((item) => [item.session_id, item])) }));
+        setSelected([]); setReview(false);
+        if (updates.some((item) => activeStatuses.has(item.status))) setPolling(1);
+      } catch { setError("Import could not be confirmed. Refresh status before retrying."); }
+      finally { setBusy(false); }
+    }
+
+    if (!open) return h("section", { className: "rly-sources", "aria-label": "Sources" },
+      h("h2", null, "Sources"),
+      h("p", { className: "rly-muted" }, "Browse existing Hermes conversations and choose exactly which ones to import."),
+      h(Button, { type: "button", onClick: () => setOpen(true) }, "Import Existing Sessions"));
+
+    const current = page?.sessions ?? [];
+    const checked = (id) => selected.includes(id);
+    function toggle(id) { setSelected((old) => old.includes(id) ? old.filter((item) => item !== id) : old.length < 8 ? [...old, id] : old); }
+    const destination = page?.destinations.find((item) => item.owner_id === ownerId);
+    function sessionRow(item) {
+      const status = statusById[item.session_id] ?? { status: item.status, reason: item.reason, retryable: item.retryable };
+      const retry = status.retryable && ["failed", "unavailable"].includes(status.status) && !review
+        ? h(Button, { type: "button", disabled: busy || mutationBlocked,
+            onClick: () => importIds([item.session_id]) }, "Retry import") : null;
+      return h("li", { key: item.session_id, className: "rly-import-row" },
+        !review && h(Checkbox, { checked: checked(item.session_id), disabled: busy || status.status === "unavailable" ||
+          status.status === "already_imported" || status.status === "complete", "aria-label": "Select " + item.title,
+          onCheckedChange: () => toggle(item.session_id) }),
+        h("div", null,
+          h("strong", null, item.title),
+          h("dl", { className: "rly-detail-meta" },
+            h("div", null, h("dt", null, "Session ID"), h("dd", null, item.session_id)),
+            h("div", null, h("dt", null, "Created"), h("dd", null, new Date(item.started_at * 1000).toLocaleString())),
+            h("div", null, h("dt", null, "Last activity"), h("dd", null, new Date(item.last_activity_at * 1000).toLocaleString())),
+            h("div", null, h("dt", null, "Messages"), h("dd", null, item.message_count)),
+            item.project_name && h("div", null, h("dt", null, "Hermes project"), h("dd", null, item.project_name)),
+            h("div", null, h("dt", null, "Import status"), h("dd", null, statusLabels[status.status]))),
+          status.reason && h("p", { className: "rly-muted" }, status.reason), retry));
+    }
+    return h("section", { className: "rly-sources", "aria-label": "Import Existing Sessions" },
+      h("div", { className: "rly-toolbar" }, h("div", null, h("h2", null, "Import Existing Sessions"),
+        h("p", { className: "rly-muted" }, "No conversations are selected automatically. Select up to 8 conversations per import.")),
+        h(Button, { type: "button", onClick: () => { setOpen(false); setSelected([]); setReview(false); } }, "Close")),
+      mutationBlocked && h("p", { className: "rly-live-notice", role: "note" }, mutationBlocked),
+      error && h("p", { role: "alert" }, error),
+      loading && h("p", { role: "status" }, "Loading session history…"),
+      page && !page.available && h("p", { role: "status", className: "rly-live-notice" }, "Session import is unavailable on this Hermes build."),
+      page?.available && h("div", null,
+        h("form", { className: "rly-session-lookup", onSubmit: (event) => {
+          event.preventDefault(); setOffset(0); setSubmittedQuery(query.trim()); loadPage(0, query.trim());
+        } },
+          h("label", { className: "rly-field" }, h("span", null, "Search conversations"), h(Input, { value: query, maxLength: 200,
+            onChange: (event) => setQuery(event.currentTarget.value) })),
+          h(Button, { type: "submit" }, "Search"), h(Button, { type: "button", onClick: () => loadPage() }, "Refresh")),
+        h("div", { className: "rly-field" }, h("label", { htmlFor: "rly-import-destination" }, "Import destination"),
+          h(Select, { label: "Import destination", value: ownerId, disabled: review || busy,
+            options: page.destinations.map((item) => ({ value: item.owner_id, label: item.label })), onValueChange: setOwnerId })),
+        current.length ? h("ul", { className: "rly-import-list" }, ...current.map(sessionRow))
+          : h("p", { className: "rly-empty" }, "No conversations on this page."),
+        h("div", { className: "rly-pager" },
+          h(Button, { type: "button", disabled: offset === 0 || loading || review, onClick: () => { const next = Math.max(0, offset - 16); setOffset(next); loadPage(next); } }, "Previous page"),
+          h(Button, { type: "button", disabled: page.next_offset === null || loading || review, onClick: () => { setOffset(page.next_offset); loadPage(page.next_offset); } }, "Next page")),
+        review && h("div", { className: "rly-import-review", role: "group", "aria-label": "Review import" },
+          h("h3", null, "Review import"), h("p", null, "Import " + selected.length + " selected conversation" + (selected.length === 1 ? "" : "s") + " into " + (destination?.label ?? "the selected REL") + "?"),
+          h("ul", null, ...current.filter((item) => selected.includes(item.session_id)).map((item) => h("li", { key: item.session_id }, item.title))),
+          h(Button, { type: "button", disabled: busy, onClick: () => setReview(false) }, "Cancel"),
+          h(Button, { type: "button", disabled: busy || mutationBlocked || !destination, onClick: () => importIds(selected) }, busy ? "Importing…" : "Import selected")),
+        !review && h("div", { className: "rly-setup-actions" },
+          h(Button, { type: "button", disabled: selected.length === 0 || !ownerId || mutationBlocked || busy, onClick: () => setReview(true) }, "Review selected (" + selected.length + ")"),
+          polling > 0 && h("span", { role: "status" }, "Refreshing import status…"))));
+  }
+
+  root.ReliquaryDashboardSources = { ImportSessions };
+})(globalThis);
+
+
+(function (root) {
+  "use strict";
+
   const endpoint = "/api/plugins/reliquary-hermes/setup-v1";
   const messages = new Map([
     ["runtime_unavailable", "The Reliquary host is unavailable. Check the plugin installation."],
@@ -1244,6 +1412,7 @@ function createReliquarySurface(options) {
     ["invalid_setup_request", "Check the selected owner paths and refresh the Hermes projects list."],
     ["setup_denied", "Hermes did not authorize setup in this profile."],
     ["setup_unavailable", "Could not reach Reliquary setup. Try again."],
+    ["source_capture_setup_required", "Check this profile's Reliquary capture enrollment file, then retry setup."],
     ["invalid_setup_response", "Reliquary returned an invalid setup response."],
     ["picker_failed", "Hermes Desktop could not open the file picker."],
     ["main_path", "Enter an absolute local path for the main REL."],
@@ -1774,6 +1943,7 @@ function createReliquarySurface(options) {
     const { useState, useEffect } = hooks;
     const { useRead, useCursor } = root.ReliquaryDashboardState;
     const { meta, readContent, select, pager, Status } = root.ReliquaryDashboardViews;
+    const { ImportSessions } = root.ReliquaryDashboardSources;
     const { OwnerContent } = root.ReliquaryDashboardOwner;
     const { createLiveMutation } = root.ReliquaryDashboardLive;
 
@@ -1782,6 +1952,7 @@ function createReliquarySurface(options) {
     function DashboardTab({ client, configPath, blockReason, onManageSetup }) {
       const [write] = useState(() => blockReason ? undefined : createLiveMutation(authedFetch));
       const [sessionId, setSessionId] = useState(/** @type {string | null} */ (null));
+      const [section, setSection] = useState("dashboard");
       const [sessionInput, setSessionInput] = useState("");
       const [selectedOwnerId, setSelectedOwnerId] = useState(/** @type {string | null} */ (null));
       const [lastGood, setLastGood] = useState(/** @type {{sessionId:string|null,cursor:string|null,value:import("../types").ReadResults["ui.owner_sessions"]}|null} */ (null));
@@ -1826,6 +1997,11 @@ function createReliquarySurface(options) {
           h("p", { className: "rly-subtitle" }, "Configured owners in this Hermes profile")),
           h(Button, { type: "button", onClick: onManageSetup }, "Manage memory setup")),
         blockReason && h("p", { className: "rly-live-notice", role: "note" }, blockReason),
+        h("nav", { className: "rly-view-switch", "aria-label": "Reliquary sections" },
+          h(Button, { type: "button", "aria-pressed": section === "dashboard", onClick: () => setSection("dashboard") }, "Dashboard"),
+          h(Button, { type: "button", "aria-pressed": section === "sources", onClick: () => setSection("sources") }, "Sources")),
+        section === "sources" && h(ImportSessions, { authedFetch, mutationBlocked: blockReason }),
+        section === "dashboard" && h(React.Fragment, null,
         refreshing && h("p", { className: "rly-refreshing", role: "status" },
           write ? "Refreshing owner binding. Writes are paused until it completes." : "Refreshing owner binding."),
         readContent("owner and session bindings", visibleDiscovery, (data) => {
@@ -1877,7 +2053,7 @@ function createReliquarySurface(options) {
             owner ? h(OwnerContent, { key: scopeKey, client, write, onRefresh: refreshOwnerData, refreshing,
               scope: /** @type {import("../types").ReadScope & {owner:import("../types").OwnerBinding}} */ (scope) })
               : h("p", { className: "rly-empty" }, "No authorized owner is available for this scope."));
-        }, ownerCursor.reset));
+        }, ownerCursor.reset)));
     }
 
 
@@ -1951,6 +2127,9 @@ const methods = new Map([
   ["/setup-v1/validate", "POST"],
   ["/setup-v1/apply", "POST"],
   ["/dashboard-v1", "POST"],
+  ["/sources-v1/sessions", "GET"],
+  ["/sources-v1/import", "POST"],
+  ["/sources-v1/status", "POST"],
 ]);
 const pickers = {
   REL: { title: "Choose a Reliquary REL", filters: [{ name: "Reliquary REL", extensions: ["rel"] }] },
@@ -1989,7 +2168,9 @@ function dashboardTransport(ctx, current) {
 
     checkScope();
     const suffix = url.slice(endpoint.length);
-    if (!url.startsWith(endpoint + "/") || methods.get(suffix) !== method) {
+    const routePath = suffix.split("?", 1)[0];
+    if (!url.startsWith(endpoint + "/") || methods.get(routePath) !== method ||
+      (routePath === "/sources-v1/sessions" && !/^\?offset=\d+&q=/.test(suffix.slice(routePath.length)))) {
       throw new Error("Unsupported Reliquary API request.");
     }
     const options = { method, body: body === undefined ? undefined : JSON.parse(body) };

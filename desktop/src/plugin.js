@@ -16,6 +16,9 @@ const methods = new Map([
   ["/setup-v1/validate", "POST"],
   ["/setup-v1/apply", "POST"],
   ["/dashboard-v1", "POST"],
+  ["/sources-v1/sessions", "GET"],
+  ["/sources-v1/import", "POST"],
+  ["/sources-v1/status", "POST"],
 ]);
 const pickers = {
   REL: { title: "Choose a Reliquary REL", filters: [{ name: "Reliquary REL", extensions: ["rel"] }] },
@@ -54,7 +57,9 @@ function dashboardTransport(ctx, current) {
 
     checkScope();
     const suffix = url.slice(endpoint.length);
-    if (!url.startsWith(endpoint + "/") || methods.get(suffix) !== method) {
+    const routePath = suffix.split("?", 1)[0];
+    if (!url.startsWith(endpoint + "/") || methods.get(routePath) !== method ||
+      (routePath === "/sources-v1/sessions" && !/^\?offset=\d+&q=/.test(suffix.slice(routePath.length)))) {
       throw new Error("Unsupported Reliquary API request.");
     }
     const options = { method, body: body === undefined ? undefined : JSON.parse(body) };

@@ -363,6 +363,7 @@ function renderHostSurface(status, mutationBlockReason, owner = general, invento
       useCursor: () => ({ current: null }),
     },
     ReliquaryDashboardViews: { meta() {}, select() {}, pager() {}, readContent: (_label, read, show) => show(read.state.value) },
+    ReliquaryDashboardSources: { ImportSessions() {} },
     ReliquaryDashboardOwner: { OwnerContent },
     ReliquaryDashboardLive: {
       createLiveClient: () => ({ invalidate() {} }),
