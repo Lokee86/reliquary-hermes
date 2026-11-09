@@ -6,6 +6,8 @@ import { pathToFileURL } from "node:url";
 const [fixturePath] = process.argv.slice(2);
 assert(fixturePath, "Pass the isolated Desktop acceptance fixture JSON path.");
 const fixture = JSON.parse(await readFile(fixturePath, "utf8"));
+const readOnly = fixture.expectDesktopReadOnly === true;
+assert(!readOnly || !fixture.verifyMemoryWrite, "A read-only fixture cannot request native writes.");
 const { HU05_DESKTOP_EXE, HU05_DESKTOP_APP, HU05_PLAYWRIGHT, HP01_HERMES_CHECKOUT,
   HU05_DESKTOP_PYTHON } = process.env;
 assert(HU05_DESKTOP_EXE && HU05_PLAYWRIGHT && HP01_HERMES_CHECKOUT && HU05_DESKTOP_PYTHON,
@@ -104,6 +106,10 @@ try {
   await root.waitFor();
 
   const connect = root.getByRole("button", { name: "Connect Reliquary", exact: true });
+  const compatibilityNotice = root.getByRole("note").filter({
+    hasText: "Use the Reliquary web dashboard for setup and write management.",
+  });
+  if (readOnly) await compatibilityNotice.waitFor();
   if (fixture.candidate) {
     const { mainRel, activePhy, configPath } = fixture.candidate;
     const browse = (label) => root.getByRole("button", { name: "Browse for " + label, exact: true });
@@ -119,11 +125,27 @@ try {
       await browse("Reliquary config path (optional)").click();
       assert.equal(await input("Reliquary config path (optional)").inputValue(), configPath);
     }
-    await root.getByRole("button", { name: "Validate", exact: true }).click();
-    for (const id of fixture.ownerIds) await root.getByText(id, { exact: false }).first().waitFor();
-    await connect.click();
+    const validate = root.getByRole("button", { name: "Validate", exact: true });
+    if (readOnly) {
+      assert(await validate.isDisabled());
+      assert(await connect.isDisabled());
+    } else {
+      await validate.click();
+      for (const id of fixture.ownerIds) await root.getByText(id, { exact: false }).first().waitFor();
+      await connect.click();
+    }
   }
 
+  if (readOnly && fixture.candidate) {
+    console.log("Desktop setup and picker remained visible with Validate and Connect disabled.");
+  } else {
+    await browseOwners(root, page, connect, compatibilityNotice);
+  }
+} finally {
+  await app.close();
+}
+
+async function browseOwners(root, page, connect, compatibilityNotice) {
   const owners = root.getByRole("combobox", { name: "Browse authorized owner" });
   await owners.waitFor({ timeout: 45_000 });
   const ids = await owners.locator("option").evaluateAll((options) => options.map((option) => option.value));
@@ -131,6 +153,21 @@ try {
   assert.equal(await connect.count(), 0);
   if (fixture.expectedConfigPath) {
     await root.locator(".rly-owner-meta").getByText(fixture.expectedConfigPath, { exact: true }).waitFor();
+  }
+  if (readOnly) {
+    await owners.selectOption(fixture.ownerIds[0]);
+    const list = root.getByRole("list", { name: "Memories in this page" });
+    await root.getByRole("button", { name: "List page", exact: true }).click();
+    await list.waitFor();
+    if (fixture.expectedMemory) {
+      await list.getByRole("button", { name: new RegExp(fixture.expectedMemory.title) }).click();
+      await root.locator(".rly-inspector").getByText(fixture.expectedMemory.body, { exact: true }).waitFor();
+    }
+    assert.equal(await root.locator(".rly-memory-write-form, .rly-graph-write-panel, .rly-community-rename").count(), 0);
+    await compatibilityNotice.waitFor();
+    console.log("Desktop read the web-configured profile and Memories without a mutation writer.");
+  } else {
+    assert.equal(await compatibilityNotice.count(), 0);
   }
   if (fixture.verifyMemoryWrite) {
     assert(fixture.candidate, "The write probe requires fresh isolated owners.");
@@ -185,6 +222,4 @@ try {
   assert.equal(await root.getByRole("button", { name: "Create Memory", exact: true }).count(), 0);
   console.log(fixture.candidate ? "Desktop first-run setup and owner management passed."
     : "Desktop reopened the configured profile and browsed the same owners.");
-} finally {
-  await app.close();
 }
