@@ -377,6 +377,9 @@ async def _setup_request(request: Request, operation: str):
         raise HTTPException(status_code=status, detail=detail) from None
     except Exception:
         raise HTTPException(status_code=503, detail="setup_unavailable") from None
+    if operation == "status":
+        # Without an Origin, the existing guard only admits verified native requests.
+        result = {**result, "desktop_native_mutations": "origin" not in request.headers and _same_origin(request)}
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 

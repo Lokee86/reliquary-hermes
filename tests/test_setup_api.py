@@ -91,13 +91,25 @@ with TestClient(loopback_app) as client:
     response = client.get(path + "/status", headers=auth)
     assert response.status_code == 200, response.text
     assert response.headers["Cache-Control"] == "no-store"
-    assert response.json() == status(home)
+    assert response.json() == {**status(home), "desktop_native_mutations": False}
+    assert client.get(path + "/status", headers=same).json()["desktop_native_mutations"] is False
+    assert client.request("GET", path + "/status",
+                          headers={**auth, "hosted_native_http_authenticated": "true"},
+                          params={"desktop_native_mutations": "true"},
+                          json={"desktop_native_mutations": True}).json() == response.json()
+    status_ticket = grant()
+    native_status = client.get(path + "/status", headers=status_ticket)
+    assert native_status.status_code == 200, native_status.text
+    assert native_status.json() == {**status(home), "desktop_native_mutations": True}
+    assert client.get(path + "/status", headers=status_ticket).status_code == 401
+    assert client.get(path + "/status", headers={**grant(), "Origin": ""}).status_code == 401
+    assert client.get(path + "/status", headers=grant(), params={"profile": "foreign"}).status_code == 403
     assert client.get(path + "/status", headers=auth, params={"profile": "disabled"}).status_code == 404
     assert client.get(path + "/status", headers=auth, params={"profile": "missing"}).status_code == 404
     for bad in (auth, {**same, "Origin": "http://other"}, {**same, "Origin": "null"}):
         assert client.post(path + "/apply", headers=bad, json=candidate).status_code == 403
     assert client.post(path + "/apply", headers={**auth, HEADER: "fake"}, json=candidate).status_code == 401
-    for authority in ("profile", "profile_id", "principal_id", "token", "binary"):
+    for authority in ("profile", "profile_id", "principal_id", "token", "binary", "desktop_native_mutations"):
         response = client.post(path + "/apply", headers=same, json={**candidate, authority: "foreign"})
         assert response.status_code == 400 and response.json() == {"detail": "invalid_setup_request"}
     assert client.post(path + "/apply", headers=same, data=candidate).status_code == 415
