@@ -23,7 +23,7 @@
   }
 
   /** @type {typeof root.ReliquaryOnboarding.Onboarding} */
-  function Onboarding({ status, setup, pickOpenPath, onConnected }) {
+  function Onboarding({ status, setup, pickOpenPath, mutationsEnabled, onConnected }) {
     const [main, setMain] = useState(status.defaults.main_rel ?? "");
     const [phy, setPhy] = useState(status.defaults.active_phy ?? "");
     const [config, setConfig] = useState(status.defaults.config_path ?? "");
@@ -35,6 +35,7 @@
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
     const [report, setReport] = useState(/** @type {import("../types").SetupReport | null} */ (null));
+    const canSubmit = mutationsEnabled && status.runtime_detected;
 
     useEffect(() => () => pending.current?.abort(), []);
 
@@ -45,7 +46,7 @@
 
     /** @param {"validate"|"apply"} action */
     async function submit(action) {
-      if (pending.current) return;
+      if (!canSubmit || pending.current) return;
       clearResult();
       let selected;
       try {
@@ -125,7 +126,7 @@
         root.ReliquaryDashboardViews.meta("Reliquary config", status.config_path ?? "No config detected")),
       h("form", { noValidate: true, onSubmit: (/** @type {{preventDefault():void}} */ event) => {
         event.preventDefault();
-        if (status.runtime_detected) void submit("apply");
+        void submit("apply");
       } },
       h("fieldset", { disabled: busy },
         h("legend", null, "Local Reliquary files"),
@@ -151,8 +152,8 @@
           setProjects((current) => [...current, { key, id: "", path: "" }]);
         } }, "Add project REL"),
         h("div", { className: "rly-setup-actions" },
-          h("button", { type: "button", disabled: !status.runtime_detected, onClick: () => submit("validate") }, "Validate"),
-          h("button", { type: "submit", disabled: !status.runtime_detected }, "Connect Reliquary")))),
+          h("button", { type: "button", disabled: !canSubmit, onClick: () => submit("validate") }, "Validate"),
+          h("button", { type: "submit", disabled: !canSubmit }, "Connect Reliquary")))),
       busy && h("p", { role: "status" }, "Working…"),
       error && h("p", { role: "alert" }, error),
       report && h("p", { role: report.valid ? "status" : "alert" },

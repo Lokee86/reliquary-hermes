@@ -87,7 +87,9 @@
       if (operation === "status") {
         if (typeof data?.configured !== "boolean" || typeof data.runtime_detected !== "boolean" ||
             !data.defaults || !data.defaults.projects) throw new Error("invalid_setup_response");
-      } else if (!(operation === "apply" && data?.valid === true && data.configured === true)) {
+        return { ...data, desktop_native_mutations: data.desktop_native_mutations === true };
+      }
+      if (!(operation === "apply" && data?.valid === true && data.configured === true)) {
         if (typeof data?.valid !== "boolean" || !data.main_rel || !data.active_phy || !data.projects || !data.config ||
             (operation === "apply" && data.configured !== false)) throw new Error("invalid_setup_response");
       }

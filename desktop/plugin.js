@@ -1336,7 +1336,9 @@ function createReliquarySurface(options) {
       if (operation === "status") {
         if (typeof data?.configured !== "boolean" || typeof data.runtime_detected !== "boolean" ||
             !data.defaults || !data.defaults.projects) throw new Error("invalid_setup_response");
-      } else if (!(operation === "apply" && data?.valid === true && data.configured === true)) {
+        return { ...data, desktop_native_mutations: data.desktop_native_mutations === true };
+      }
+      if (!(operation === "apply" && data?.valid === true && data.configured === true)) {
         if (typeof data?.valid !== "boolean" || !data.main_rel || !data.active_phy || !data.projects || !data.config ||
             (operation === "apply" && data.configured !== false)) throw new Error("invalid_setup_response");
       }
@@ -1381,7 +1383,7 @@ function createReliquarySurface(options) {
   }
 
   /** @type {typeof root.ReliquaryOnboarding.Onboarding} */
-  function Onboarding({ status, setup, pickOpenPath, onConnected }) {
+  function Onboarding({ status, setup, pickOpenPath, mutationsEnabled, onConnected }) {
     const [main, setMain] = useState(status.defaults.main_rel ?? "");
     const [phy, setPhy] = useState(status.defaults.active_phy ?? "");
     const [config, setConfig] = useState(status.defaults.config_path ?? "");
@@ -1393,6 +1395,7 @@ function createReliquarySurface(options) {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
     const [report, setReport] = useState(/** @type {import("../types").SetupReport | null} */ (null));
+    const canSubmit = mutationsEnabled && status.runtime_detected;
 
     useEffect(() => () => pending.current?.abort(), []);
 
@@ -1403,7 +1406,7 @@ function createReliquarySurface(options) {
 
     /** @param {"validate"|"apply"} action */
     async function submit(action) {
-      if (pending.current) return;
+      if (!canSubmit || pending.current) return;
       clearResult();
       let selected;
       try {
@@ -1483,7 +1486,7 @@ function createReliquarySurface(options) {
         root.ReliquaryDashboardViews.meta("Reliquary config", status.config_path ?? "No config detected")),
       h("form", { noValidate: true, onSubmit: (/** @type {{preventDefault():void}} */ event) => {
         event.preventDefault();
-        if (status.runtime_detected) void submit("apply");
+        void submit("apply");
       } },
       h("fieldset", { disabled: busy },
         h("legend", null, "Local Reliquary files"),
@@ -1509,8 +1512,8 @@ function createReliquarySurface(options) {
           setProjects((current) => [...current, { key, id: "", path: "" }]);
         } }, "Add project REL"),
         h("div", { className: "rly-setup-actions" },
-          h("button", { type: "button", disabled: !status.runtime_detected, onClick: () => submit("validate") }, "Validate"),
-          h("button", { type: "submit", disabled: !status.runtime_detected }, "Connect Reliquary")))),
+          h("button", { type: "button", disabled: !canSubmit, onClick: () => submit("validate") }, "Validate"),
+          h("button", { type: "submit", disabled: !canSubmit }, "Connect Reliquary")))),
       busy && h("p", { role: "status" }, "Working…"),
       error && h("p", { role: "alert" }, error),
       report && h("p", { role: report.valid ? "status" : "alert" },
@@ -1527,7 +1530,7 @@ function createReliquarySurface(options) {
   "use strict";
 
   /** @type {import("../types").CreateReliquarySurface} */
-  function createSurface({ authedFetch, pickOpenPath, surfaceLabel }) {
+  function createSurface({ authedFetch, pickOpenPath, mutationBlockReason, surfaceLabel }) {
     const { React, hooks } = root.ReliquaryDashboardHost;
     const h = React.createElement;
     const { useState, useEffect } = hooks;
@@ -1536,9 +1539,9 @@ function createReliquarySurface(options) {
     const { OwnerContent } = root.ReliquaryDashboardOwner;
     const { createLiveMutation } = root.ReliquaryDashboardLive;
 
-    /** @param {{client: import("../types").DashboardClient, configPath: string | null}} props */
-    function DashboardTab({ client, configPath }) {
-      const [write] = useState(() => createLiveMutation(authedFetch));
+    /** @param {{client: import("../types").DashboardClient, configPath: string | null, blockReason?: string}} props */
+    function DashboardTab({ client, configPath, blockReason }) {
+      const [write] = useState(() => blockReason ? undefined : createLiveMutation(authedFetch));
       const [sessionId, setSessionId] = useState(/** @type {string | null} */ (null));
       const [sessionInput, setSessionInput] = useState("");
       const [selectedOwnerId, setSelectedOwnerId] = useState(/** @type {string | null} */ (null));
@@ -1582,7 +1585,9 @@ function createReliquarySurface(options) {
           h("p", { className: "rly-eyebrow" }, surfaceLabel),
           h("h1", null, "Reliquary Memory"),
           h("p", { className: "rly-subtitle" }, "Configured owners in this Hermes profile"))),
-        refreshing && h("p", { className: "rly-refreshing", role: "status" }, "Refreshing owner binding. Writes are paused until it completes."),
+        blockReason && h("p", { className: "rly-live-notice", role: "note" }, blockReason),
+        refreshing && h("p", { className: "rly-refreshing", role: "status" },
+          write ? "Refreshing owner binding. Writes are paused until it completes." : "Refreshing owner binding."),
         readContent("owner and session bindings", visibleDiscovery, (data) => {
           const owners = data.owners.items.filter((owner) => owner.capabilities.view &&
             (owner.owner_kind === "REL" || owner.owner_id === data.active_phy_id));
@@ -1661,13 +1666,16 @@ function createReliquarySurface(options) {
       }
 
       const current = snapshot?.attempt === attempt ? snapshot : null;
-      if (current?.status?.configured) return h(DashboardTab, { client, configPath: current.status.config_path });
+      const blockReason = current?.status && mutationBlockReason?.(current.status);
+      if (current?.status?.configured) return h(DashboardTab, { client, configPath: current.status.config_path, blockReason });
       return h("section", { className: "rly-dashboard", "aria-label": current?.status ? "Reliquary setup" : "Reliquary" },
         h("header", { className: "rly-header" }, h("div", null,
           h("p", { className: "rly-eyebrow" }, surfaceLabel),
           h("h1", null, current?.status ? "Set up Reliquary" : "Reliquary Memory"),
           current?.status && h("p", { className: "rly-subtitle" }, "Connect existing Reliquary owners to this Hermes profile."))),
-        current?.status ? h(Onboarding, { status: current.status, setup, pickOpenPath, onConnected: refresh }) :
+        blockReason && h("p", { className: "rly-live-notice", role: "note" }, blockReason),
+        current?.status ? h(Onboarding, { status: current.status, setup, pickOpenPath,
+          mutationsEnabled: !blockReason, onConnected: refresh }) :
           current?.error ? h("div", { role: "alert" },
             h("p", null, current.error), h("button", { type: "button", onClick: refresh }, "Retry setup status")) :
             h("p", { role: "status" }, "Checking Reliquary setup…"));
@@ -1688,6 +1696,8 @@ import {
 
 const endpoint = "/api/plugins/reliquary-hermes";
 const route = "/reliquary";
+const nativeWriteNotice = "This Hermes build does not yet support secure Desktop writes for isolated plugins. " +
+  "Use the Reliquary web dashboard for setup and write management.";
 const methods = new Map([
   ["/setup-v1/status", "GET"],
   ["/setup-v1/validate", "POST"],
@@ -1758,6 +1768,7 @@ function ReliquaryPane({ ctx }) {
         const path = await ctx.os.pickOpenPath(pickers[kind]);
         return current() ? path : null;
       },
+      mutationBlockReason: (status) => status.desktop_native_mutations === true ? undefined : nativeWriteNotice,
       surfaceLabel: "HERMES DESKTOP PLUGIN",
     });
   }, [ctx, epoch, profile]);

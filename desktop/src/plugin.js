@@ -6,6 +6,8 @@ import {
 
 const endpoint = "/api/plugins/reliquary-hermes";
 const route = "/reliquary";
+const nativeWriteNotice = "This Hermes build does not yet support secure Desktop writes for isolated plugins. " +
+  "Use the Reliquary web dashboard for setup and write management.";
 const methods = new Map([
   ["/setup-v1/status", "GET"],
   ["/setup-v1/validate", "POST"],
@@ -76,6 +78,7 @@ function ReliquaryPane({ ctx }) {
         const path = await ctx.os.pickOpenPath(pickers[kind]);
         return current() ? path : null;
       },
+      mutationBlockReason: (status) => status.desktop_native_mutations === true ? undefined : nativeWriteNotice,
       surfaceLabel: "HERMES DESKTOP PLUGIN",
     });
   }, [ctx, epoch, profile]);

@@ -2,7 +2,7 @@
   "use strict";
 
   /** @type {import("../types").CreateReliquarySurface} */
-  function createSurface({ authedFetch, pickOpenPath, surfaceLabel }) {
+  function createSurface({ authedFetch, pickOpenPath, mutationBlockReason, surfaceLabel }) {
     const { React, hooks } = root.ReliquaryDashboardHost;
     const h = React.createElement;
     const { useState, useEffect } = hooks;
@@ -11,9 +11,9 @@
     const { OwnerContent } = root.ReliquaryDashboardOwner;
     const { createLiveMutation } = root.ReliquaryDashboardLive;
 
-    /** @param {{client: import("../types").DashboardClient, configPath: string | null}} props */
-    function DashboardTab({ client, configPath }) {
-      const [write] = useState(() => createLiveMutation(authedFetch));
+    /** @param {{client: import("../types").DashboardClient, configPath: string | null, blockReason?: string}} props */
+    function DashboardTab({ client, configPath, blockReason }) {
+      const [write] = useState(() => blockReason ? undefined : createLiveMutation(authedFetch));
       const [sessionId, setSessionId] = useState(/** @type {string | null} */ (null));
       const [sessionInput, setSessionInput] = useState("");
       const [selectedOwnerId, setSelectedOwnerId] = useState(/** @type {string | null} */ (null));
@@ -57,7 +57,9 @@
           h("p", { className: "rly-eyebrow" }, surfaceLabel),
           h("h1", null, "Reliquary Memory"),
           h("p", { className: "rly-subtitle" }, "Configured owners in this Hermes profile"))),
-        refreshing && h("p", { className: "rly-refreshing", role: "status" }, "Refreshing owner binding. Writes are paused until it completes."),
+        blockReason && h("p", { className: "rly-live-notice", role: "note" }, blockReason),
+        refreshing && h("p", { className: "rly-refreshing", role: "status" },
+          write ? "Refreshing owner binding. Writes are paused until it completes." : "Refreshing owner binding."),
         readContent("owner and session bindings", visibleDiscovery, (data) => {
           const owners = data.owners.items.filter((owner) => owner.capabilities.view &&
             (owner.owner_kind === "REL" || owner.owner_id === data.active_phy_id));
@@ -136,13 +138,16 @@
       }
 
       const current = snapshot?.attempt === attempt ? snapshot : null;
-      if (current?.status?.configured) return h(DashboardTab, { client, configPath: current.status.config_path });
+      const blockReason = current?.status && mutationBlockReason?.(current.status);
+      if (current?.status?.configured) return h(DashboardTab, { client, configPath: current.status.config_path, blockReason });
       return h("section", { className: "rly-dashboard", "aria-label": current?.status ? "Reliquary setup" : "Reliquary" },
         h("header", { className: "rly-header" }, h("div", null,
           h("p", { className: "rly-eyebrow" }, surfaceLabel),
           h("h1", null, current?.status ? "Set up Reliquary" : "Reliquary Memory"),
           current?.status && h("p", { className: "rly-subtitle" }, "Connect existing Reliquary owners to this Hermes profile."))),
-        current?.status ? h(Onboarding, { status: current.status, setup, pickOpenPath, onConnected: refresh }) :
+        blockReason && h("p", { className: "rly-live-notice", role: "note" }, blockReason),
+        current?.status ? h(Onboarding, { status: current.status, setup, pickOpenPath,
+          mutationsEnabled: !blockReason, onConnected: refresh }) :
           current?.error ? h("div", { role: "alert" },
             h("p", null, current.error), h("button", { type: "button", onClick: refresh }, "Retry setup status")) :
             h("p", { role: "status" }, "Checking Reliquary setup…"));

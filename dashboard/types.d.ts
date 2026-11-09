@@ -344,6 +344,7 @@ export interface SetupCandidate {
 export interface SetupStatus {
   configured: boolean;
   runtime_detected: boolean;
+  desktop_native_mutations: boolean;
   config_path: string | null;
   defaults: Omit<SetupCandidate, "main_rel" | "active_phy"> & { main_rel: string | null; active_phy: string | null };
 }
@@ -385,6 +386,7 @@ export interface CreateReliquarySurface {
     hooks?: HermesDashboardSDK["hooks"];
     authedFetch: HermesDashboardSDK["authedFetch"];
     pickOpenPath?: SetupPicker;
+    mutationBlockReason?(status: SetupStatus): string | undefined;
     surfaceLabel: string;
   }): () => unknown;
 }
@@ -407,7 +409,8 @@ declare global {
     message(error: unknown): string;
   };
   var ReliquaryOnboarding: {
-    Onboarding(props: { status: SetupStatus; setup: SetupClient; pickOpenPath?: SetupPicker; onConnected(): void }): unknown;
+    Onboarding(props: { status: SetupStatus; setup: SetupClient; pickOpenPath?: SetupPicker;
+      mutationsEnabled: boolean; onConnected(): void }): unknown;
   };
   var ReliquaryDashboardClient: {
     createClient(transport: DashboardTransport, sessions?: SessionChoice[], phys?: PhyChoice[], resetTransport?: () => void): DashboardClient;

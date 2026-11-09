@@ -71,6 +71,17 @@ test("registers the Reliquary route and sidebar, and renders the shared surface"
   assert.equal(surface.surfaceLabel, "HERMES DESKTOP PLUGIN");
 });
 
+test("only verified native support enables Desktop writes", async () => {
+  const { render } = await load();
+  const { mutationBlockReason } = render().surface;
+  for (const value of [false, undefined, "true", 1]) {
+    const notice = mutationBlockReason({ desktop_native_mutations: value });
+    assert.match(notice, /secure Desktop writes for isolated plugins/);
+    assert.match(notice, /web dashboard for setup and write management/);
+  }
+  assert.equal(mutationBlockReason({ desktop_native_mutations: true }), undefined);
+});
+
 test("uses the SDK profile scope for status, validate, apply and management", async () => {
   const calls = [];
   const { render, routing } = await load({

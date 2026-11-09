@@ -241,7 +241,7 @@ test("setup candidate carries only validated owner and config paths", () => {
 });
 
 test("setup client uses the admitted Hermes transport and redacts unknown failures", async () => {
-  const initial = { configured: false, runtime_detected: true, config_path: null,
+  const initial = { configured: false, runtime_detected: true, desktop_native_mutations: true, config_path: null,
     defaults: { main_rel: null, active_phy: null, projects: {}, config_path: null } };
   const selection = candidate("C:/test/main.rel", "C:/test/active.phy", "", []);
   const replies = [Response.json(initial), Response.json({ valid: true, configured: true }),
@@ -259,6 +259,104 @@ test("setup client uses the admitted Hermes transport and redacts unknown failur
   ]);
   assert.deepEqual(JSON.parse(calls[1][1].body), selection);
   assert.equal(calls[0][1].signal, signal);
+});
+
+test("a missing or non-boolean Desktop capability preserves setup status and fails closed", async () => {
+  const status = { configured: true, runtime_detected: true, config_path: null, defaults: { projects: {} } };
+  for (const value of [undefined, false, "true", 1]) {
+    const setup = createSetupClient(async () => Response.json({ ...status, desktop_native_mutations: value }));
+    assert.deepEqual(await setup.status(signal), { ...status, desktop_native_mutations: false });
+  }
+});
+
+function renderHostSurface(status, mutationBlockReason, owner = general) {
+  const calls = [];
+  let snapshot = { attempt: 0, status };
+  const setup = {
+    async validate() { calls.push("validate"); return { valid: true }; },
+    async apply() { calls.push("apply"); return { valid: true, configured: true }; },
+  };
+  function OwnerContent() {}
+  const runtime = {
+    AbortController,
+    ReliquaryDashboardHost: {
+      React: { createElement: (type, props, ...children) => ({ type, props, children }) },
+      hooks: {
+        useState(initial) {
+          if (initial === null && snapshot) {
+            const current = snapshot;
+            snapshot = null;
+            return [current, () => {}];
+          }
+          return [typeof initial === "function" ? initial() : initial, () => {}];
+        },
+        useRef: (current) => ({ current }),
+        useEffect() {},
+      },
+    },
+    ReliquaryDashboardState: {
+      useRead: () => ({ state: { status: "ok", value: { owners: { items: [owner] } } } }),
+      useCursor: () => ({ current: null }),
+    },
+    ReliquaryDashboardViews: { meta() {}, select() {}, pager() {}, readContent: (_label, read, show) => show(read.state.value) },
+    ReliquaryDashboardOwner: { OwnerContent },
+    ReliquaryDashboardLive: {
+      createLiveClient: () => ({ invalidate() {} }),
+      createLiveMutation() { calls.push("createWriter"); return async () => {}; },
+    },
+    ReliquarySetupClient: { createSetupClient: () => setup, candidate, message },
+  };
+  for (const name of ["onboarding.js", "surface.js"]) {
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../src", name), "utf8"), runtime);
+  }
+  const Surface = runtime.ReliquaryDashboardSurface({ mutationBlockReason,
+    pickOpenPath: async (kind) => { calls.push(kind); return "C:/work/selected.rel"; } });
+  const surface = Surface();
+  return { surface, dashboard: status.configured ? surface.type(surface.props) : null, calls, OwnerContent };
+}
+
+function findElement(tree, match) {
+  if (typeof tree !== "object" || tree === null) return undefined;
+  if (match(tree)) return tree;
+  return (tree.children ?? []).map((child) => findElement(child, match)).find(Boolean);
+}
+
+const hostPolicy = (status) => status.desktop_native_mutations ? undefined : "Use the web dashboard";
+const setupStatus = { configured: false, runtime_detected: true, desktop_native_mutations: false, config_path: null,
+  defaults: { projects: {}, main_rel: "C:/work/main.rel", active_phy: "C:/work/active.phy", config_path: null } };
+const notice = (element) => element.props?.className === "rly-live-notice";
+
+test("Desktop setup keeps browsing available but disables unsupported validation and apply", async () => {
+  for (const [status, policy] of [[setupStatus, hostPolicy],
+    [{ ...setupStatus, desktop_native_mutations: true }, hostPolicy], [setupStatus, undefined]]) {
+    const { surface, calls } = renderHostSurface(status, policy);
+    const blocked = policy === hostPolicy && !status.desktop_native_mutations;
+    assert.equal(!!findElement(surface, notice), blocked);
+    const onboarding = findElement(surface, (element) => element.type?.name === "Onboarding");
+    const form = onboarding.type(onboarding.props);
+    const button = (label) => findElement(form, (element) => element.type === "button" && element.children[0] === label);
+    assert.equal(button("Validate").props.disabled, blocked);
+    assert.equal(button("Connect Reliquary").props.disabled, blocked);
+    await findElement(form, (element) => element.props?.["aria-label"] === "Browse for Main REL path").props.onClick();
+    await button("Validate").props.onClick();
+    findElement(form, (element) => element.type === "form").props.onSubmit({ preventDefault() {} });
+    assert.deepEqual(calls, blocked ? ["REL"] : ["REL", "validate", "apply"]);
+  }
+});
+
+test("only the host gate removes the writer and leaves owner reads and permissions intact", () => {
+  const readOnly = { ...general, capabilities: { ...general.capabilities, manage: false } };
+  for (const [enabled, policy, owner] of [[false, hostPolicy, general], [true, hostPolicy, general],
+    [true, hostPolicy, readOnly], [false, undefined, general]]) {
+    const { dashboard, calls, OwnerContent } = renderHostSurface({ ...setupStatus, configured: true,
+      desktop_native_mutations: enabled }, policy, owner);
+    const blocked = policy === hostPolicy && !enabled;
+    assert.equal(!!findElement(dashboard, notice), blocked);
+    const content = findElement(dashboard, (element) => element.type === OwnerContent);
+    assert.equal(content.props.scope.owner, owner);
+    assert.equal(typeof content.props.write, blocked ? "undefined" : "function");
+    assert.deepEqual(calls, blocked ? [] : ["createWriter"]);
+  }
 });
 
 test("the common live surface installs no globals when another shell injects React", () => {
