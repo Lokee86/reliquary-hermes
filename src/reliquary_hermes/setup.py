@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 from threading import local
 
-from .client import HostClient
+from .client import HostClient, HostUnavailable
 from .settings import (
     _read_object, _state_dir, ensure_setup_token, profile_home, read_settings, read_token, save_settings,
 )
@@ -27,7 +27,7 @@ def _local_path(value):
     value = text(value)
     path = Path(value)
     require(path.is_absolute() and "\0" not in value and not value.startswith(("\\\\", "//")), "invalid_local_path")
-    return str(path)
+    return value
 
 
 def _defaults(home):
@@ -175,16 +175,29 @@ def apply(home, candidate):
         with _file_lock(lock, _LOCK_HOLDER, 20.0, "reliquary_setup_busy"):
             prior, processing, binary, defaults = _defaults(home)
             request = _candidate(home, candidate, prior, defaults)
-            report = _preflight(home, binary, request)
-            if not report["valid"]:
-                return {**report, "configured": False}
-
             processing_path = state / "processing.json"
             config_path = request["config_path"]
             prior_config = processing.get("config_path")
             config_changed = config_path is not None and (
                 prior_config is None or Path(prior_config) != Path(config_path)
             )
+            if request["owners"] == prior and not config_changed and (state / "discovery.json").is_file():
+                # A running host holds the writer leases. Authenticate its accepted topology
+                # for an unchanged setup instead of trying to reopen its owner files.
+                try:
+                    settings = read_settings(home)
+                    client = HostClient(state, settings.profile_id, settings.principal_id, read_token(home))
+                    client.read_dashboard_topology(None)
+                except (OSError, ValueError, HostUnavailable):
+                    pass
+                else:
+                    _activate(home)
+                    return {"valid": True, "configured": True}
+
+            report = _preflight(home, binary, request)
+            if not report["valid"]:
+                return {**report, "configured": False}
+
             if config_changed:
                 require(not (state / "discovery.json").exists(), "service_restart_required")
             paths = [state / "owners.json", state / "provider.json"]
@@ -214,7 +227,7 @@ def apply(home, candidate):
                     else:
                         path.unlink(missing_ok=True)
                 raise
-            return {**report, "configured": True}
+            return {"valid": True, "configured": True}
     finally:
         reset_hermes_home_override(scope)
 
