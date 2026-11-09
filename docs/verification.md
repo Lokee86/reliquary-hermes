@@ -272,6 +272,23 @@ Use Hermes `v0.23.0` at `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19` and the accep
 
 Run `tests/test_setup.py` and `tests/test_setup_api.py` with the pinned Python environment. The service proof covers default resolution, activation, failure rollback, stable credentials and project-session mappings. The installed API proof loads the active profile's provider through Hermes and checks the actual Hermes token gate, origin admission, one-use native tickets, foreign profile denial and the request bound before any owners exist.
 
+## HU05 web and Desktop checks
+
+Build the web and Desktop entries and check the shared surface with the local Node.js and TypeScript toolchain.
+
+```powershell
+node dashboard/scripts/build.cjs
+node dashboard/scripts/build.cjs --fixture
+node --test dashboard/tests/dashboard.test.cjs
+node desktop/scripts/build.cjs
+node --experimental-vm-modules --test desktop/tests/plugin.test.cjs
+tsc --noEmit -p dashboard/tsconfig.json
+```
+
+Use distinct isolated Hermes profile homes for web-first and Desktop-first setup. Install the same directory package with the rebuilt host in each profile. The Chrome probe is `dashboard/tests/hu05-web-smoke.mjs`. Pass the pinned web address, local Playwright module, and a fixture JSON containing the real owner `paths` and `ids`. Pass `--configured` when reopening the Desktop-first profile.
+
+The Electron probe is `desktop/tests/live-smoke.mjs`. Pass an isolated fixture JSON with `home`, `ownerIds`, an optional `candidate` containing `mainRel`, `activePhy`, and `configPath`, and an optional `expectedConfigPath`. Set `HU05_DESKTOP_EXE`, `HU05_PLAYWRIGHT`, `HU05_DESKTOP_PYTHON`, and `HP01_HERMES_CHECKOUT`. With `HU05_DESKTOP_APP`, the harness supplies isolated Electron paths before importing the unchanged compiled app. The probe supplies deterministic file choices at the Electron dialog boundary and exercises the real picker bridge and profile REST transport.
+
 ## Related docs
 
 - [Documentation policy and ownership](documentation-policy.md)
