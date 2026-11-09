@@ -369,11 +369,12 @@ sleep(120)
             "message_uid": "appended", "role": "user", "timestamp": 1700000001.25,
             "content": TEXT["appended"],
         }]
+        from hermes_cli.config import load_config
         from hermes_cli.memory_setup import _post_setup_hook
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
         provider = pinned_provider.ReliquaryMemoryProvider()
-        installed = install_setup_host(state.parent, binary)
+        install_setup_host(state.parent, binary)
         prompts = iter(("", "", "", ""))
         monkeypatch.setattr("builtins.input", lambda _: next(prompts))
         scope = set_hermes_home_override(state.parent)
@@ -381,7 +382,8 @@ sleep(120)
             assert _post_setup_hook(provider, {})
             settings = read_settings(state.parent)
             assert (settings.profile_id, settings.principal_id) == (PROFILE, PRINCIPAL)
-            assert settings.binary == installed
+            assert settings.binary == binary
+            assert load_config()["memory"]["provider"] == "reliquary"
             provider.initialize(SESSION, hermes_home=str(state.parent))
             deadline = monotonic() + 10
             while provider.lifecycle_status == "connecting" and monotonic() < deadline:
