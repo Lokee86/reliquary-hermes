@@ -6,27 +6,26 @@ from hashlib import file_digest
 import json
 import os
 from pathlib import Path
-from shutil import copytree
+from shutil import copyfile, copytree
 import subprocess
 import sys
 from types import SimpleNamespace
 
 import pytest
 
-from hu04_harness import REPO, SERVICE_PRINCIPAL, start_dashboard, start_profile
+from hu04_harness import REPO, start_dashboard, start_profile
 from hu04_seed import _settle
 from reliquary_hermes import HERMES_REVISION
 from reliquary_hermes.client import HostClient, HostUnavailable
 from reliquary_hermes.outbox import SourceOutbox
-from reliquary_hermes.settings import TOKEN_VAR, read_token
+from reliquary_hermes.settings import TOKEN_VAR, read_settings, read_token
 from reliquary_hermes.validation import canonical, decode
-from test_hp03_host import binaries, owner, stop
+from test_hp03_host import binaries, install_setup_host, owner, stop
 from test_hp03_provider import pinned_provider
 from test_hp04_host import TEXT, _cli
 from test_hp05_retrieval import _configure, _retrieval_fixture_model, _wait
 from test_hu03_dashboard import _stage_plugin
 
-PROFILE = "primary"
 SOURCE = "hu04-native-source"
 RECALL = "hu04-native-recall"
 USER_TEXTS = (
@@ -48,7 +47,7 @@ def _require_path(name, *, directory=False):
     return path
 
 
-def _install(home, checkout, binary, rel, phy, project):
+def _install(home, checkout, binary, rel, phy, project, ids):
     artifact = _require_path("HP06_PLUGIN_DIR", directory=True)
     manifest = decode((artifact / "host-pin.json").read_bytes())
     assert manifest["hermes_revision"] == HERMES_REVISION
@@ -57,11 +56,16 @@ def _install(home, checkout, binary, rel, phy, project):
     _stage_plugin(home)
     installed = home / "plugins/reliquary"
     copytree(artifact, installed)
+    # Preserve the HP06 directory registration and update its implementation.
+    for module in (REPO / "src/reliquary_hermes").glob("*.py"):
+        if module.name != "__init__.py":
+            copyfile(module, installed / module.name)
+    installed_host = install_setup_host(home, binary)
     copytree(REPO / "dashboard/dist", home / "plugins/reliquary-hermes/dashboard/dist")
     env = {key: value for key, value in os.environ.items()
            if key.upper() in {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR"}}
     env.update(
-        HERMES_HOME=str(home), PYTHONPATH=str(checkout), USERPROFILE=str(home),
+        HERMES_HOME=str(home), HOME=str(home), PYTHONPATH=str(checkout), USERPROFILE=str(home),
         APPDATA=str(home), LOCALAPPDATA=str(home), TEMP=str(home), TMP=str(home), TMPDIR=str(home),
         PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1", PYTHONUTF8="1",
         HERMES_DISABLE_LAZY_INSTALLS="1", UV_OFFLINE="1", GIT_ALLOW_PROTOCOL="file",
@@ -70,18 +74,28 @@ def _install(home, checkout, binary, rel, phy, project):
     )
     setup = subprocess.run(
         [sys.executable, "-B", "-m", "hermes_cli.main", "memory", "setup", "reliquary"],
-        cwd=home, env=env, input=f"{PROFILE}\n{SERVICE_PRINCIPAL}\n{rel}\n{phy}\n{binary}\n",
+        cwd=home, env=env, input=f"{rel}\n{phy}\n\nlantern\n{project}\n\n",
         encoding="utf-8", capture_output=True, timeout=45,
     )
-    assert setup.returncode == 0, "Pinned Hermes memory setup failed"
-    state = home / "reliquary"
-    assert Path(decode((state / "provider.json").read_bytes())["binary"]).resolve() == binary
-    owners_path = state / "owners.json"
+    assert setup.returncode == 0 and "Reliquary configured." in setup.stdout, "Pinned Hermes memory setup failed"
+    settings = read_settings(home)
+    assert settings.binary == installed_host
+    client = HostClient(settings.state_dir, settings.profile_id, settings.principal_id, read_token(home))
+    # Prove the CLI started the host, then close it cleanly so the provider can start it again.
+    client.attach_runtime("hu04-setup-probe")
+    try:
+        topology = client.read_dashboard_topology(None)
+        assert {row["owner_id"] for row in topology["owners"]} == set(ids.values())
+    finally:
+        client.detach_runtime()
+        _wait(lambda: not (settings.state_dir / "discovery.json").exists(), seconds=15)
+
+    owners_path = settings.state_dir / "owners.json"
     owners = decode(owners_path.read_bytes())
-    assert owners["profile_id"] == PROFILE and owners["principal_id"] == SERVICE_PRINCIPAL
-    owners.update(projects={"lantern": str(project)}, session_projects={"session-project": "lantern"})
+    assert owners["projects"] == {"lantern": str(project)}
+    owners["session_projects"] = {"session-project": "lantern"}
     owners_path.write_bytes(canonical(owners))
-    return installed
+    return installed, settings
 
 
 def _conversation(home):
@@ -169,7 +183,7 @@ def _dashboard_phase(primary, foreign, checkout, scratch, memory, result, *, arc
 
         fixture = scratch / "browser-evidence.json"
         fixture.write_bytes(canonical({
-            "profileId": PROFILE, "owners": primary.ids, "sourceSession": SOURCE, "recallSession": RECALL,
+            "profileId": primary.profile_id, "owners": primary.ids, "sourceSession": SOURCE, "recallSession": RECALL,
             "memoryTitle": memory["title"], "messageUid": memory["message_uid"],
             "returnedIds": result["memory_ids"], "archived": archived,
         }))
@@ -199,14 +213,15 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
     rel, phy, project = home / "main.rel", home / "active.phy", home / "project.rel"
     ids = {"main": owner(cli, "rel", rel, "unspecified"), "phy": owner(cli, "phy", phy),
            "project": owner(cli, "rel", project, "project")}
-    installed = _install(home, pinned_checkout, binary, rel, phy, project)
-    state = home / "reliquary"
+    installed, settings = _install(home, pinned_checkout, binary, rel, phy, project, ids)
+    state = settings.state_dir
     with _retrieval_fixture_model() as (url, calls, _), ExitStack() as cleanup:
         scope = set_hermes_home_override(home)
         cleanup.callback(reset_hermes_home_override, scope)
         cleanup.callback(_reset_plugin_managers_for_tests)
         monkeypatch.delenv(TOKEN_VAR, raising=False)
-        primary = SimpleNamespace(home=home, ids=ids, token=read_token(home))
+        primary = SimpleNamespace(home=home, ids=ids, token=read_token(home), profile_id=settings.profile_id,
+                                  principal_id=settings.principal_id)
         foreign = start_profile(home / "profiles/secondary", "secondary", binaries, cleanup)
         rows = _conversation(home)
         source_times = {
@@ -217,7 +232,7 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
             if row["role"] == "user":
                 monkeypatch.setitem(TEXT, row["message_uid"], row["content"])
         runtime = _configure(cli, state, url)
-        outbox = SourceOutbox(state, PROFILE, SERVICE_PRINCIPAL)
+        outbox = SourceOutbox(state, settings.profile_id, settings.principal_id)
         delivered = []
         with _runtime(home, installed, SOURCE, ids) as (manager, provider):
             send = provider._client.deliver_source_job
@@ -286,7 +301,7 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
                 return cursor is not None and cursor.kind == "terminal"
 
             _wait(terminal_acknowledged, seconds=20)
-            replay = HostClient(state, PROFILE, SERVICE_PRINCIPAL, primary.token)
+            replay = HostClient(state, settings.profile_id, settings.principal_id, primary.token)
             with pytest.raises(HostUnavailable, match="^source_terminal$"):
                 replay.deliver_source_job(original_job)
             denied = _query(manager)

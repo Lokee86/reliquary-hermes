@@ -40,6 +40,7 @@ def pinned_provider(monkeypatch, pinned_checkout, tmp_path):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv(TOKEN_VAR, "inherited-credential-must-not-be-used")
+    monkeypatch.delenv("RELIQUARY_CONFIG_PATH", raising=False)
     return importlib.import_module("reliquary_hermes.provider")
 
 
@@ -70,9 +71,27 @@ def test_pinned_setup_activates_and_keeps_token_in_profile_dotenv(
     from hermes_cli.memory_setup import _post_setup_hook
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
+    from reliquary_hermes import setup
+
     home = tmp_path / "setup"
     values = _profile(home, "setup-profile")
-    prompts = iter(values[key] for key, _ in pinned_provider.PROMPTS)
+    installed = home / "plugins/reliquary/host/reliquary-hermes-host.exe"
+    installed.parent.mkdir(parents=True)
+    installed.touch()
+
+    class SetupHost:
+        def __init__(self, state, profile_id, principal_id, token, *, binary):
+            assert state == home / "reliquary"
+            assert principal_id == profile_id + "-operator"
+            assert token == read_token(home)
+            assert binary == installed
+
+        def connect_dashboard(self, session_id):
+            assert session_id is None
+
+    monkeypatch.setattr(setup, "_preflight", lambda *_: {"valid": True})
+    monkeypatch.setattr(setup, "HostClient", SetupHost)
+    prompts = iter((values["main_rel"], values["active_phy"], "", ""))
     monkeypatch.setattr("builtins.input", lambda _: next(prompts))
     provider = pinned_provider.ReliquaryMemoryProvider()
     scope = set_hermes_home_override(home)

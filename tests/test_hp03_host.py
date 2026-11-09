@@ -1,6 +1,7 @@
 from contextlib import ExitStack
 import os
 from pathlib import Path
+from shutil import copyfile
 import subprocess
 
 import pytest
@@ -48,6 +49,32 @@ def stop(process):
     if process.poll() is None:
         process.terminate()
     process.wait(timeout=10)
+
+
+def install_setup_host(home, binary):
+    installed = home / "plugins/reliquary/host/reliquary-hermes-host.exe"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    copyfile(binary, installed)
+    return installed
+
+
+@pytest.fixture
+def setup_hosts(monkeypatch):
+    """Track processes launched by the real setup hook for deterministic cleanup."""
+    from reliquary_hermes import setup
+
+    clients = []
+
+    def client(*args, **kwargs):
+        result = HostClient(*args, **kwargs)
+        clients.append(result)
+        return result
+
+    monkeypatch.setattr(setup, "HostClient", client)
+    yield clients
+    for host in clients:
+        if host._process is not None:
+            stop(host._process)
 
 
 def candidate(binary, state):
@@ -147,7 +174,8 @@ def test_two_profiles_can_explicitly_select_the_same_read_only_phy(tmp_path, bin
         assert bindings[0].user_id == bindings[1].user_id == user_id
 
 
-def test_pinned_setup_provider_attaches_and_recovers_real_process(tmp_path, binaries, pinned_provider, monkeypatch):
+def test_pinned_setup_provider_attaches_and_recovers_real_process(
+        tmp_path, binaries, pinned_provider, monkeypatch, setup_hosts):
     from hermes_cli.memory_setup import _post_setup_hook
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
@@ -159,7 +187,8 @@ def test_pinned_setup_provider_attaches_and_recovers_real_process(tmp_path, bina
     user_id = owner(cli, "phy", active_phy)
     initial_rel = main_rel.read_bytes()
     provider = pinned_provider.ReliquaryMemoryProvider()
-    values = iter(("profile-a", "principal-a", str(main_rel), str(active_phy), str(binary)))
+    install_setup_host(home, binary)
+    values = iter((str(main_rel), str(active_phy), "", ""))
     monkeypatch.setattr("builtins.input", lambda _: next(values))
 
     def settled():
@@ -173,6 +202,9 @@ def test_pinned_setup_provider_attaches_and_recovers_real_process(tmp_path, bina
     scope = set_hermes_home_override(home)
     try:
         assert _post_setup_hook(provider, {})
+        [setup_host] = setup_hosts
+        original = setup_host._process
+        assert original is not None and original.poll() is None
         assert provider.is_available()
         provider.initialize("session-a", hermes_home=str(home), agent_identity="ignored-bot")
         try:
@@ -181,11 +213,12 @@ def test_pinned_setup_provider_attaches_and_recovers_real_process(tmp_path, bina
             assert (initial.rel_id, initial.user_id) == (rel_id, user_id)
             provider.sync_turn("synthetic user", "synthetic assistant", session_id="session-a")
             assert provider.sync_status == "source_ingestion_unavailable"
-            original = provider._client._process
+            assert provider._client._process is None
             stop(original)
             provider.on_turn_start(2, "synthetic follow-up")
             settled()
-            assert provider._client._process is not original
+            restarted = provider._client._process
+            assert restarted is not None and restarted is not original and restarted.poll() is None
             assert provider.binding == initial
         finally:
             if provider._client is not None and provider._client._process is not None:

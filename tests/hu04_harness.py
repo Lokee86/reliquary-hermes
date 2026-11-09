@@ -143,7 +143,8 @@ def start_dashboard(primary, foreign, checkout, scratch, cleanup):
         ready = re.search(rb"^HU04_PORT=(\d+)\r?$", log.read_bytes(), flags=re.MULTILINE)
         if ready:
             port = int(ready[1])
-            private = (primary.token, foreign.token, SERVICE_PRINCIPAL, str(primary.home))
+            private = (primary.token, foreign.token, getattr(primary, "principal_id", SERVICE_PRINCIPAL),
+                       SERVICE_PRINCIPAL, str(primary.home))
             return (DashboardClient(port, token, private, primary.ids, "primary", None),
                     DashboardClient(port, token, private, foreign.ids, "secondary", "secondary"))
         time.sleep(0.05)
