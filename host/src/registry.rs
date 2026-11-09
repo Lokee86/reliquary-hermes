@@ -18,9 +18,14 @@ use std::{
 pub(crate) mod registry_store;
 use registry_store as store;
 
+#[path = "setup_validation.rs"]
+pub(crate) mod setup_validation;
+
 #[cfg(test)]
 #[path = "registry_tests.rs"]
 mod tests;
+
+const TOPOLOGY_FILE: &str = "topology-v1.json";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -140,52 +145,22 @@ impl Registry {
         let lease = acquire_service_lease(&state_dir)?;
         let gateway = Gateway::new();
         let main = open_rel(&config.main_rel)?;
-        if main.info().map_err(owner_error)?.scope == OwnerScope::Project {
-            return Err(RegistryError::Invalid("main_rel_scope"));
-        }
+        validate_rel_scope(main.info().map_err(owner_error)?.scope, false)?;
         let main_rel = main.owner_id();
-        let mut rel_ids = BTreeSet::from([main_rel]);
         let mut rels = vec![main];
         let mut projects = BTreeMap::new();
-        for (project_id, path) in config.projects {
-            let rel = open_rel(&path)?;
-            let rel_id = rel.owner_id();
-            if rel.info().map_err(owner_error)?.scope != OwnerScope::Project {
-                return Err(RegistryError::Invalid("project_rel_scope"));
-            }
-            if !rel_ids.insert(rel_id) {
-                return Err(RegistryError::Invalid("duplicate_owner"));
-            }
-            projects.insert(
-                project_id,
-                ProjectOwner {
-                    parent_id: main_rel,
-                    rel_id,
-                },
-            );
+        for (project_id, path) in &config.projects {
+            let rel = open_rel(path)?;
+            validate_rel_scope(rel.info().map_err(owner_error)?.scope, true)?;
+            projects.insert(project_id.clone(), rel.owner_id());
             rels.push(rel);
         }
         let phy = Phylactery::open(owner_file(&config.active_phy)?).map_err(owner_error)?;
         let active_phy = phy.owner_id();
-        if rel_ids.contains(&active_phy) {
-            return Err(RegistryError::Invalid("duplicate_owner"));
-        }
-        let topology = Topology {
-            version: 1,
-            profile_id: config.profile_id,
-            principal_id: config.principal_id,
-            main_rel,
-            active_phy,
-            projects,
-        };
-        let topology_path = state_dir.join("topology-v1.json");
-        let accepted: Option<Topology> = store::read(&topology_path, store::MAX_TOPOLOGY_BYTES)?;
-        if accepted
-            .as_ref()
-            .is_some_and(|accepted| accepted != &topology)
-        {
-            return Err(RegistryError::Conflict("owner_topology_changed"));
-        }
+        let topology = config.topology(main_rel, active_phy, projects)?;
+        let topology_path = state_dir.join(TOPOLOGY_FILE);
+        let accepted = topology.is_accepted(&topology_path)?;
+        let rel_ids = rels.iter().map(Rel::owner_id).collect::<Vec<_>>();
         for rel in rels {
             if gateway.mount_rel(&rel, true).map_err(owner_error)? != rel.owner_id() {
                 return Err(RegistryError::Conflict("mounted_owner_changed"));
@@ -219,11 +194,11 @@ impl Registry {
         .install(&gateway)
         .map_err(owner_error)?;
         let sessions_dir = state_dir.join("sessions-v1");
-        store::sessions_dir(&sessions_dir, accepted.is_some())?;
-        if accepted.is_none() {
-            store::publish(&topology_path, &topology)?;
-        } else {
+        store::sessions_dir(&sessions_dir, accepted)?;
+        if accepted {
             store::sync_parent(&topology_path)?;
+        } else {
+            store::publish(&topology_path, &topology)?;
         }
         Ok(Self {
             admission,
@@ -557,6 +532,56 @@ impl OwnerConfig {
             return Err(RegistryError::Invalid("invalid_owner_config"));
         }
         Ok(())
+    }
+
+    fn topology(
+        &self,
+        main_rel: OwnerId,
+        active_phy: OwnerId,
+        projects: BTreeMap<String, OwnerId>,
+    ) -> Result<Topology, RegistryError> {
+        let mut ids = BTreeSet::from([main_rel]);
+        if !ids.insert(active_phy) || !projects.values().all(|id| ids.insert(*id)) {
+            return Err(RegistryError::Invalid("duplicate_owner"));
+        }
+        let projects = projects
+            .into_iter()
+            .map(|(project, rel_id)| {
+                (
+                    project,
+                    ProjectOwner {
+                        parent_id: main_rel,
+                        rel_id,
+                    },
+                )
+            })
+            .collect();
+        Ok(Topology {
+            version: 1,
+            profile_id: self.profile_id.clone(),
+            principal_id: self.principal_id.clone(),
+            main_rel,
+            active_phy,
+            projects,
+        })
+    }
+}
+
+impl Topology {
+    fn is_accepted(&self, path: &Path) -> Result<bool, RegistryError> {
+        match store::read::<Self>(path, store::MAX_TOPOLOGY_BYTES)? {
+            Some(ref accepted) if accepted == self => Ok(true),
+            Some(_) => Err(RegistryError::Conflict("owner_topology_changed")),
+            None => Ok(false),
+        }
+    }
+}
+
+fn validate_rel_scope(scope: OwnerScope, project: bool) -> Result<(), RegistryError> {
+    match (scope == OwnerScope::Project, project) {
+        (true, false) => Err(RegistryError::Invalid("main_rel_scope")),
+        (false, true) => Err(RegistryError::Invalid("project_rel_scope")),
+        _ => Ok(()),
     }
 }
 
