@@ -83,12 +83,12 @@
           return h("div", { className: "rly-layout" },
             h("aside", { className: "rly-sidebar", "aria-label": "Owner and scope" },
               h("h2", null, "Owner / scope"),
-              h(Button, { type: "button", onClick: refreshOwnerData }, "Refresh owner data"),
+              h(Button, { type: "button", size: "sm", onClick: refreshOwnerData }, "Refresh owner data"),
               h("form", { onSubmit: findSession, className: "rly-session-lookup" },
                 h("label", { className: "rly-field" }, h("span", null, "Hermes session ID"), h(Input, {
                   value: sessionInput, maxLength: 128, autoComplete: "off",
                   onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => setSessionInput(event.currentTarget.value),
-                })), h(Button, { type: "submit" }, "Look up session")),
+                })), h(Button, { type: "submit", size: "sm" }, "Look up session")),
               ownerOptions.length ? select("Browse authorized owner", owner?.owner_id ?? "", ownerOptions, (id) => {
                 if (id !== selectedOwnerId) {
                   client.invalidate();
