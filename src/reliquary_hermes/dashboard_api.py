@@ -1,4 +1,4 @@
-"""Live dashboard-v1 requests admitted by the pinned Hermes plugin host."""
+"""Profile-scoped Reliquary APIs admitted by the pinned Hermes plugin host."""
 
 from __future__ import annotations
 
@@ -19,9 +19,18 @@ from reliquary_hermes.client import HostClient, HostUnavailable
 from reliquary_hermes.settings import Settings, profile_home, read_settings, read_token
 from reliquary_hermes.ui_contract import UIRequest, UIResponse, VerifiedUIContext
 from reliquary_hermes.ui_schema import MUTATIONS, OP_CAPABILITY
-from reliquary_hermes.validation import ContractError, MAX_WIRE_BYTES, canonical, require
+from reliquary_hermes.validation import ContractError, MAX_WIRE_BYTES, canonical, decode, require
 
 router = APIRouter()
+_SETUP_REQUIRED_FIELDS = frozenset({"main_rel", "active_phy"})
+_SETUP_FIELDS = _SETUP_REQUIRED_FIELDS | {"projects", "config_path"}
+_SETUP_ERRORS = {
+    "runtime_unavailable": (503, "runtime_unavailable"),
+    "preflight_unavailable": (503, "preflight_unavailable"),
+    "service_restart_required": (409, "service_restart_required"),
+    "managed_setup": (403, "managed_setup"),
+    "setup_request_too_large": (413, "setup_request_too_large"),
+}
 _CURSOR_TTL = 300.0
 _CURSOR_CAP = 256
 _cursors: OrderedDict[str, tuple[float, str, int]] = OrderedDict()
@@ -284,17 +293,22 @@ def _service_dashboard_request(home: Path, browser_request: UIRequest, same_orig
         return _error(browser_request, "unavailable", "unavailable", retryable=True)
 
 
-async def _read_bounded_body(request: Request) -> bytes:
+async def _read_bounded_body(request: Request, *, error: str = "dashboard_request_too_large") -> bytes:
     body = bytearray()
     async for part in request.stream():
         if len(body) + len(part) > MAX_WIRE_BYTES:
-            raise HTTPException(status_code=413, detail="dashboard_request_too_large")
+            raise HTTPException(status_code=413, detail=error)
         body.extend(part)
     return bytes(body)
 
 
 def _same_origin(request: Request) -> bool:
     origins = request.headers.getlist("origin")
+    native = getattr(request.state, "native_http_principal", None)
+    if native is not None:
+        # Hermes redeems a private same-user ticket on loopback and rejects
+        # any Origin before setting this request-local principal.
+        return native.get("purpose") == "native-http" and not origins
     if len(origins) != 1:
         return False
 
@@ -319,12 +333,65 @@ def _same_origin(request: Request) -> bool:
         return False
 
 
-@router.post("/dashboard-v1")
-async def dashboard_v1(request: Request):
-    """Authenticated plugin API; the browser never selects profile or principal authority."""
+def _require_hermes_auth(request: Request, error: str) -> None:
     try:
         from hermes_cli.web_server import _require_token
         _require_token(request)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=403, detail=error) from None
+
+
+async def _setup_request(request: Request, operation: str):
+    _require_hermes_auth(request, "setup_admission_failed")
+    home = _host_home(request)
+    args = (home,)
+    if operation != "status":
+        if not _same_origin(request):
+            raise HTTPException(status_code=403, detail="same_origin_required")
+        content_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
+        if content_type != "application/json":
+            raise HTTPException(status_code=415, detail="setup_json_required")
+        try:
+            candidate = decode(await _read_bounded_body(request, error="setup_request_too_large"))
+            require(_SETUP_REQUIRED_FIELDS <= set(candidate) <= _SETUP_FIELDS, "invalid_setup_candidate")
+        except ContractError:
+            raise HTTPException(status_code=400, detail="invalid_setup_request") from None
+        args = (home, candidate)
+
+    try:
+        from reliquary_hermes import setup
+
+        result = await run_in_threadpool(getattr(setup, operation), *args)
+    except ContractError as exc:
+        status, detail = _SETUP_ERRORS.get(str(exc), (400, "invalid_setup_request"))
+        raise HTTPException(status_code=status, detail=detail) from None
+    except Exception:
+        raise HTTPException(status_code=503, detail="setup_unavailable") from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/setup-v1/status")
+async def setup_status(request: Request):
+    return await _setup_request(request, "status")
+
+
+@router.post("/setup-v1/validate")
+async def setup_validate(request: Request):
+    return await _setup_request(request, "validate")
+
+
+@router.post("/setup-v1/apply")
+async def setup_apply(request: Request):
+    return await _setup_request(request, "apply")
+
+
+@router.post("/dashboard-v1")
+async def dashboard_v1(request: Request):
+    """Authenticated plugin API; the browser never selects profile or principal authority."""
+    _require_hermes_auth(request, "dashboard_admission_failed")
+    try:
         browser_request = UIRequest.parse(await _read_bounded_body(request))
     except HTTPException:
         raise
