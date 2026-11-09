@@ -346,9 +346,8 @@ def test_hp04_pinned_provider_delivers_and_fences_late_same_session_callback(
             assert provider.sync_status == "source_reconciliation_required"
             assert outbox.next_job(SESSION) is None
         finally:
-            if provider._client is not None and provider._client._process is not None:
-                stop(provider._client._process)
             provider.shutdown()
+            stop(setup_host._process)
     finally:
         reset_hermes_home_override(scope)
     info = _cli(cli, "rel", "info", rel)["owner"]
