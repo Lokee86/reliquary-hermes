@@ -153,7 +153,9 @@ def _activate(home):
     config = _activation(home)
     plugins = config.get("plugins") or {}
     enabled = list(plugins.get("enabled") or ())
-    observer = "reliquary-source-observer"
+    # The directory package registers its own cold hook. The Python package uses an entry point.
+    directory_package = (home / "plugins/reliquary/host-pin.json").is_file()
+    observer = "reliquary" if directory_package else "reliquary-source-observer"
     if observer not in (plugins.get("disabled") or ()) and observer not in enabled:
         enabled.append(observer)
     save_config({"memory": {"provider": "reliquary"}, "plugins": {"enabled": enabled}}, merge_existing=True)
