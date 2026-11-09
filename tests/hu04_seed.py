@@ -17,7 +17,7 @@ from reliquary_hermes.outbox import SourceOutbox
 from reliquary_hermes.source_capture import capture_snapshot
 from reliquary_hermes.validation import canonical, decode
 from test_hp03_host import stop
-from test_hp04_host import _cli, _fixture_reply, _when_ready
+from test_hp04_host import _cli, _fixture_reply, _seed_blank_processing_config, _when_ready
 
 
 PROFILE = "primary"
@@ -101,6 +101,7 @@ def _model():
 
 def _configure(cli, state, url):
     runtime = state / "hu04.cfg"
+    _seed_blank_processing_config(runtime)
     flags = ["--config", runtime, "config"]
     _cli(cli, *flags, "credential", "add-api-key", "HU04_FIXTURE", "--stdin",
          stdin=b"synthetic-hu04-model-token\n")

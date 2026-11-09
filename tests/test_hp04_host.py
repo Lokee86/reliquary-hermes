@@ -4,6 +4,8 @@ from contextlib import ExitStack, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from hashlib import sha256
 import json
+from pathlib import Path
+from shutil import copyfile
 import subprocess
 from threading import Thread
 from time import monotonic, sleep
@@ -189,8 +191,15 @@ def _loopback_model():
     assert not errors, errors
 
 
+def _seed_blank_processing_config(path):
+    # Generated with Root's public ReliquaryConfig::new_blank(path).save().
+    # Seed before the CLI adds a key so no standard routes need real credentials.
+    copyfile(Path(__file__).with_name("fixtures") / "blank-processing.cfg", path)
+
+
 def _processing_config(cli, state, url):
     runtime = state / "synthetic.cfg"
+    _seed_blank_processing_config(runtime)
     flags = ["--config", runtime, "config"]
     _cli(cli, *flags, "credential", "add-api-key", "HP04_FIXTURE", "--stdin", stdin=b"synthetic-hp04-fixture\n")
     for route in ("general", "entity-resolution", "embedding"):

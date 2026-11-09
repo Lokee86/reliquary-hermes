@@ -18,7 +18,7 @@ from test_host_client import TOKEN
 from test_hp03_host import binaries, config, owner, stop
 from test_hp03_provider import pinned_provider
 from test_hp04_host import (
-    PRINCIPAL, PROFILE, SESSION, TEXT, _cli, _fixture_reply, _queue, _when_ready,
+    PRINCIPAL, PROFILE, SESSION, TEXT, _cli, _fixture_reply, _queue, _seed_blank_processing_config, _when_ready,
 )
 
 
@@ -128,6 +128,7 @@ def _retrieval_fixture_model(*, slow_query=None):
 
 def _configure(cli, state, url):
     runtime = state / "synthetic.cfg"
+    _seed_blank_processing_config(runtime)
     flags = ["--config", runtime, "config"]
     _cli(cli, *flags, "credential", "add-api-key", "HP05_FIXTURE", "--stdin",
          stdin=b"synthetic-hp05-fixture\n")
