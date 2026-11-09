@@ -122,3 +122,59 @@ def test_wrong_profile_and_invalid_discovery_fail_before_contact(tmp_path, monke
     (tmp_path / "discovery.json").write_text('{"instance_id":"one","instance_id":"two"}', encoding="utf-8")
     with pytest.raises(HostUnavailable, match="invalid_discovery"):
         client.attach("session-a")
+
+
+def test_add_runtime_scope_returns_reconciliation_fences(tmp_path, monkeypatch):
+    client = HostClient(tmp_path, "profile-a", "principal-a", TOKEN)
+    client._runtime_lease = "lease-a"
+    response = {"reconciliation_required": [
+        {"session_id": "session-b", "fence_epoch": 7},
+        {"session_id": "session-c", "fence_epoch": 9},
+    ]}
+    calls = []
+    monkeypatch.setattr(client, "_runtime_call", lambda path, body: calls.append((path, body)) or response)
+
+    lease, scopes = client.add_runtime_scope("session-b")
+
+    assert lease == "lease-a"
+    assert scopes == {"session-b": 7, "session-c": 9}
+    assert client.runtime_has_scope("session-b")
+    assert calls == [("/v1/runtime/scope", {"lease_id": "lease-a", "session_id": "session-b"})]
+
+
+def test_add_runtime_scope_only_reattaches_for_stale_lease(tmp_path, monkeypatch):
+    client = HostClient(tmp_path, "profile-a", "principal-a", TOKEN)
+    client._runtime_lease = "lease-a"
+    monkeypatch.setattr(client, "_runtime_call", lambda *_: {"unexpected": []})
+    monkeypatch.setattr(client, "attach_runtime", lambda *_: pytest.fail("invalid reply must not attach a new lease"))
+
+    with pytest.raises(HostUnavailable, match="invalid_runtime_response"):
+        client.add_runtime_scope("session-b")
+
+    assert client.runtime_lease_id == "lease-a"
+
+
+def test_add_runtime_scope_retries_registration_after_an_interrupted_reattach(tmp_path, monkeypatch):
+    client = HostClient(tmp_path, "profile-a", "principal-a", TOKEN)
+    client._runtime_lease = "lease-a"
+    client._runtime_scopes = {"session-a"}
+    calls = []
+
+    def runtime_call(path, body):
+        calls.append(path)
+        if path == "/v1/runtime/scope":
+            assert body == {"lease_id": "lease-a", "session_id": "session-b"}
+            raise HostUnavailable("runtime_lease_stale")
+        if len(calls) == 2:
+            raise HostUnavailable("host_unavailable")
+        return {"runtime_lease_id": "lease-b", "reconciliation_required": [
+            {"session_id": "session-b", "fence_epoch": 7},
+        ]}
+
+    monkeypatch.setattr(client, "_runtime_call", runtime_call)
+    with pytest.raises(HostUnavailable, match="host_unavailable"):
+        client.add_runtime_scope("session-b")
+    assert not client.runtime_has_scope("session-a")
+    assert client.add_runtime_scope("session-b") == ("lease-b", {"session-b": 7})
+    assert client.runtime_has_scope("session-b")
+    assert calls == ["/v1/runtime/scope", "/v1/runtime/attach", "/v1/runtime/attach"]

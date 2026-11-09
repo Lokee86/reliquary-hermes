@@ -2,7 +2,7 @@
 
 import importlib
 import json
-from threading import Event
+from threading import Event, Thread
 from time import monotonic, sleep
 from types import SimpleNamespace
 
@@ -57,7 +57,9 @@ def test_pinned_entry_point_produces_fresh_provider_instances(pinned_provider):
     assert isinstance(first, MemoryProvider)
     assert first.name == "reliquary"
     assert first is not second
-    assert first.get_tool_schemas() == []
+    assert {tool["name"] for tool in first.get_tool_schemas()} == {
+        "memory_query", "refine_query", "traverse_graph",
+    }
     assert first.recall_status() is None
 
 
@@ -130,6 +132,21 @@ def test_provider_uses_explicit_profile_and_context_and_discards_stale_attach(
                 assert release.wait(3)
             return SimpleNamespace(session_id=session_id, rel_id=session_id + "-rel", user_id="stable-phy")
 
+        runtime_lease_id = None
+
+        def attach_runtime(self, session_id):
+            self.runtime_lease_id = "runtime-lease"
+            return self.runtime_lease_id, {}
+
+        def add_runtime_scope(self, session_id):
+            return self.runtime_lease_id or "runtime-lease", {}
+
+        def heartbeat_runtime(self):
+            pass
+
+        def detach_runtime(self):
+            self.runtime_lease_id = None
+
     monkeypatch.setattr(pinned_provider, "HostClient", Client)
     collector = SimpleNamespace(register_memory_provider=lambda provider: setattr(collector, "provider", provider))
     register(collector)
@@ -185,6 +202,21 @@ def test_provider_outage_isolated_and_nonprimary_does_not_bind(pinned_provider, 
             if len(calls) in {1, 3}:
                 raise pinned_provider.HostUnavailable("host_unavailable")
             return SimpleNamespace(session_id=session_id, rel_id="existing-rel", user_id="existing-phy")
+
+        runtime_lease_id = None
+
+        def attach_runtime(self, session_id):
+            self.runtime_lease_id = "runtime-lease"
+            return self.runtime_lease_id, {}
+
+        def add_runtime_scope(self, session_id):
+            return self.runtime_lease_id or "runtime-lease", {}
+
+        def heartbeat_runtime(self):
+            pass
+
+        def detach_runtime(self):
+            self.runtime_lease_id = None
 
     monkeypatch.setattr(pinned_provider, "HostClient", Client)
     try:
@@ -267,6 +299,21 @@ def test_shutdown_drops_an_in_flight_attachment(pinned_provider, monkeypatch, tm
             assert release.wait(3)
             return SimpleNamespace(session_id=session_id, rel_id="late-rel", user_id="late-phy")
 
+        runtime_lease_id = None
+
+        def attach_runtime(self, session_id):
+            self.runtime_lease_id = "runtime-lease"
+            return self.runtime_lease_id, {}
+
+        def add_runtime_scope(self, session_id):
+            return self.runtime_lease_id or "runtime-lease", {}
+
+        def heartbeat_runtime(self):
+            pass
+
+        def detach_runtime(self):
+            self.runtime_lease_id = None
+
     spawn = pinned_provider.spawn_context_thread
 
     def capture_worker(*args, **kwargs):
@@ -325,6 +372,21 @@ def test_hermes_manager_keeps_profile_workers_and_hooks_isolated(pinned_provider
             assert release.wait(5)
             return SimpleNamespace(session_id=session_id)
 
+        runtime_lease_id = None
+
+        def attach_runtime(self, session_id):
+            self.runtime_lease_id = "runtime-lease-" + self.profile_id
+            return self.runtime_lease_id, {}
+
+        def add_runtime_scope(self, session_id):
+            return self.runtime_lease_id or "runtime-lease-" + self.profile_id, {}
+
+        def heartbeat_runtime(self):
+            pass
+
+        def detach_runtime(self):
+            self.runtime_lease_id = None
+
     @contextmanager
     def profile_scope(name):
         home = set_hermes_home_override(homes[name])
@@ -376,3 +438,56 @@ def test_hermes_manager_keeps_profile_workers_and_hooks_isolated(pinned_provider
         set_multiplex_active(was_multiplexed)
     for provider in providers.values():
         assert provider.lifecycle_status == "stopped"
+
+
+def test_inflight_prefetch_discards_old_session_result(pinned_provider, monkeypatch, tmp_path):
+    from reliquary_hermes.validation import canonical
+
+    home = tmp_path / "recall"
+    save_settings(home, _profile(home, "recall-profile"))
+    (home / ".env").write_text(f"{TOKEN_VAR}=isolated-recall-test-credential-value\n", encoding="utf-8")
+    entered, release = Event(), Event()
+
+    class Client:
+        _principal_id = "recall-profile-operator"
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def attach(self, session_id):
+            return SimpleNamespace(session_id=session_id)
+
+        def attach_runtime(self, session_id):
+            return "runtime-lease", {}
+
+        def add_runtime_scope(self, session_id):
+            return self.attach_runtime(session_id)
+
+        def detach_runtime(self):
+            pass
+
+        def request(self, _raw):
+            entered.set()
+            assert release.wait(3)
+            return SimpleNamespace(status="ok", result_json=canonical({
+                "context": "Old session Memory", "memory_ids": ["memory-a"],
+            }))
+
+    monkeypatch.setattr(pinned_provider, "HostClient", Client)
+    provider = pinned_provider.ReliquaryMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(home))
+    results = []
+    recall = Thread(target=lambda: results.append(provider.prefetch("Find the checklist", session_id="session-a")))
+    try:
+        _settled(provider, "attached")
+        recall.start()
+        assert entered.wait(3)
+        provider.on_session_switch("session-b")
+        _settled(provider, "attached")
+    finally:
+        release.set()
+        if recall.ident is not None:
+            recall.join(3)
+        provider.shutdown()
+    assert results == [""]
+    assert provider.recall_status() is None

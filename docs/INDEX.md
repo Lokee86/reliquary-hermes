@@ -3,6 +3,7 @@
 - [Local service and provider](local-service.md) covers configuration, routing, startup, security and recovery.
 - [Maintainer map](maintainer-map.md) routes changes to their implementation and verification owners.
 
+- [HP04 crash/reconnect lifecycle](hp04-crash-reconnect-lifecycle-2026-11-08.md) defines runtime leases, crash fencing, transcript reconciliation and clean host shutdown.
 - [Host audit](host-audit.md): pinned revision, real lifecycle/message identity and observed capability gaps.
 - [Protocol and authority](protocol.md): strict DTOs, server-owned grants, copied source and bounded model tools.
 - [Web-dashboard typed DTOs](ui-contract.md): complete HU01/HU02 contract, views, user actions, cuts/cursors and owner capabilities.

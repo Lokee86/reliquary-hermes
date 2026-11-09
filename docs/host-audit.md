@@ -31,6 +31,8 @@ The observations below apply to the stable SHA. `Discovery.validate` enforces a 
 
 `agent/memory_provider.py::ctx_bound` and `spawn_context_thread` propagate caller contextvars. The manager uses these for worker/prefetch work. The test suite imports these real helpers from the pinned, dependency-free ABC module and verifies isolation across worker threads. No full Hermes application import is performed.
 
+The pinned `agent/turn_context.py` turn prologue calls `on_turn_start` before `MemoryManager.prefetch_all` and asks the manager to describe the returned recall for the indicator. The manager gives external prefetch an eight-second default budget. Provider tools register OpenAI-style schemas and return a JSON string through the manager's profile-scoped dispatch. Reliquary reserves a shorter loopback retrieval budget and resets recall state when the session or turn changes.
+
 The lifecycle signatures and context helpers remain compatible. The ABC adds optional profile creation and rename hooks and provider-backed dashboard config methods. Reliquary uses its existing setup path and needs no adapter for those additions. The primary context owns ingestion. A delegation result enters through its parent-authorized path. Per-turn author and group metadata describe the source actor. The explicitly active PHY supplies the stable Reliquary `user_id`. Content without trusted attribution to that user stays REL-only, including unknown or unmapped participants.
 
 ## Source identity and copy limitations

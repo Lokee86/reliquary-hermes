@@ -226,6 +226,10 @@ impl Registry {
         &self.topology.principal_id
     }
 
+    pub(crate) fn admission(&self) -> &HostAdmissionAdapter {
+        &self.admission
+    }
+
     pub(crate) fn authenticate(&self, token: &str) -> Result<Instance, RegistryError> {
         self.admission
             .authenticate(token)

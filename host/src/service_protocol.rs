@@ -9,6 +9,45 @@ use std::{collections::BTreeSet, fmt};
 pub(crate) const PROTOCOL_VERSION: u16 = 1;
 pub(crate) const HERMES_REVISION: &str = "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19";
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeAttachRequest {
+    pub(crate) integration_kind: String,
+    pub(crate) runtime_id: String,
+    pub(crate) principal_id: String,
+    #[serde(default)]
+    pub(crate) session_id: Option<String>,
+}
+
+impl RuntimeAttachRequest {
+    pub(crate) fn valid(&self) -> bool {
+        [&self.integration_kind, &self.runtime_id, &self.principal_id]
+            .into_iter()
+            .all(|value| valid_id(value))
+            && self.session_id.as_ref().is_none_or(|value| valid_id(value))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeLeaseRequest {
+    pub(crate) lease_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeDetachRequest {
+    pub(crate) lease_id: String,
+    pub(crate) clean: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeScopeRequest {
+    pub(crate) lease_id: String,
+    pub(crate) session_id: String,
+}
+
 #[derive(Debug)]
 pub(crate) struct InvalidWire;
 
@@ -135,19 +174,32 @@ pub(crate) enum Operation {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProviderRequest {
-    protocol_version: u16,
-    request_id: String,
+    pub(crate) protocol_version: u16,
+    pub(crate) request_id: String,
     pub(crate) operation: Operation,
     pub(crate) profile_id: String,
     pub(crate) principal_id: String,
     pub(crate) session_id: String,
-    turn_id: String,
+    pub(crate) turn_id: String,
     expected_revision: Value,
     idempotency_key: Value,
-    arguments: Value,
+    pub(crate) arguments: Value,
 }
 
 impl ProviderRequest {
+    pub(crate) fn retrieval_scope(&self) -> (&str, &str, &str, &str) {
+        (
+            &self.profile_id,
+            &self.principal_id,
+            &self.session_id,
+            &self.turn_id,
+        )
+    }
+
+    pub(crate) fn retrieval_request_id(&self) -> &str {
+        &self.request_id
+    }
+
     pub(crate) fn valid(&self) -> bool {
         let valid_id_fields = [
             &self.request_id,

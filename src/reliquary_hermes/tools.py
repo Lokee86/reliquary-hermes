@@ -13,6 +13,11 @@ def tool_schemas() -> list[dict]:
         "traverse_graph": {"seed_ids": {**ids, "minItems": 1}, "depth": {"type": "integer", "minimum": 1, "maximum": 3},
                            "limit": limit, "cut": ident},
     }
-    return [{"name": name, "description": "Retrieve source content without confirming consumption.",
+    descriptions = {
+        "memory_query": "Search the current session's REL for relevant Memories.",
+        "refine_query": "Refine a search from this turn using its search ID and returned Memory IDs.",
+        "traverse_graph": "Find Memories one hop from returned seeds at the supplied cut.",
+    }
+    return [{"name": name, "description": descriptions[name],
              "parameters": {"type": "object", "additionalProperties": False,
                             "properties": props, "required": list(props)}} for name, props in properties.items()]

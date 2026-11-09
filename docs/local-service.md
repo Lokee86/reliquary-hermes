@@ -38,7 +38,7 @@ The service takes an exclusive process lease before mounting owners. Each writab
 
 Back up `owners.json`, `provider.json`, `topology-v1.json` and `sessions-v1/` with the matching owners and their usual Reliquary backups. Keep the profile credential in Hermes secret storage. The lock file and `discovery.json` are runtime coordination data. A stale endpoint that refuses the connection permits a new candidate, which must acquire the lease and publish a new authenticated identity. A timeout, malformed discovery, identity mismatch or authentication failure reports unavailable without attempting another launch.
 
-Provider shutdown discards its local binding and leaves the shared service available for other sessions. To stop an operator-managed service, use its process supervisor. The service holds its writer leases until it exits. Configure session-to-project assignments before that session's first attachment, and restart the service to load configuration updates.
+Provider and host lifetime are separated by a generic **integration runtime lease**. Hermes is the first adapter using it, not the lifecycle owner. While attached, each integration runtime renews its authenticated lease. A clean runtime shutdown first makes volatile adapter-owned source captures durable, then cleanly detaches that lease. The shared Rust host remains alive while any integration runtime lease exists; after the **last clean integration runtime exits**, and provided no unclean runtime fence still requires reconciliation, it stops accepting new work, closes Reliquary owners/workers normally and exits. An expired lease without clean detach is recorded as an unclean integration-runtime termination: the host remains running, persists an integration-scoped crash/reconciliation marker and fences only the affected copied-source continuity until that integration reconnects and resynchronizes. See [HP04 crash/reconnect lifecycle](hp04-crash-reconnect-lifecycle-2026-11-08.md). Configure session-to-project assignments before that session's first attachment, and restart the service to load configuration updates.
 
 ## Security and diagnostics
 
@@ -48,13 +48,21 @@ An authenticated `owner_status` request reports the bound REL's processing state
 
 ## Copied-source operation
 
-The provider hands bounded, text-only Hermes egress to a context-bound worker. The worker persists jobs in the private `source-outbox-v1.sqlite3` and delivers them through the authenticated source channel. `source_capture_pending` is volatile. `source_queued_durable` indicates local persistence and `source_accepted_durable` indicates a verified native staging receipt. Processing can still be pending after staging. Preserve the outbox and `sources-v1/` with the service and owner backups.
+The provider hands bounded, text-only Hermes egress to a context-bound worker. The worker persists jobs in the private `source-outbox-v1.sqlite3` and delivers them through the authenticated source channel. `source_capture_pending` is volatile. `source_queued_durable` indicates local persistence and `source_accepted_durable` indicates a verified native staging receipt. Processing can still be pending after staging. Preserve the outbox, `sources-v1/` and `integration-runtimes-v1.json` with the service and owner backups. The runtime registry records unresolved crash fences across host restarts.
 
 Setup enables the ordinary `reliquary-source-observer` companion unless the profile explicitly disables it. The observer records committed deliberate archive and delete notifications even when the service is down. The next running provider worker prioritizes that terminal intent over older copies. An existing native import epoch must settle before Root can write its tombstone. The host still denies replay during that wait. A terminal fence does not schedule new extraction for a stopped import.
 
 To enable native processing, create a private `<hermes_home>/reliquary/processing.json` containing `config_path` set to the absolute path of an existing Reliquary binary configuration. Configure the required processing routes through Reliquary. The host uses those routes for REL-only work. A profile without processing configuration can stage a copy, and its import may remain open.
 
-Recovery replays work that reached the outbox. The audited Hermes export redacts differently from the provider egress and can include rows without a completed text-only callback. Missing callbacks and terminal notifications therefore remain unavailable for catch-up. The pinned Gateway and dashboard deliberate delete paths reach the post-commit observer. Dispatch can fail open, so a delivered notification is the boundary of automatic recovery. Same-session rewind and edited or ambiguous overlaps remain fenced pending authoritative reconciliation.
+Recovery replays work that reached the outbox. If Hermes disappears without a clean detach, the host records an unclean runtime and keeps running rather than claiming the copied source is current. On reconnect, the affected source remains reconciliation-required until a supported provider-authoritative transcript snapshot proves continuity; the next normal `sync_turn(..., messages=...)` can provide that snapshot and is deduplicated by stable source IDs/timestamps. This is intentionally best-effort recovery: a Hermes event committed and then lost before callback delivery may not be exactly reconstructable. Same-session rewind and edited or ambiguous overlaps remain fenced pending authoritative reconciliation.
+
+## Recall and model tools
+
+Configure the `memory-retrieval-decision` model route in the Reliquary configuration selected by `processing.json`. The product CLI exposes `config model set-memory-retrieval-decision`. Restart the host after changing the configuration. Root uses its configured embedding route when available.
+
+Hermes can prefetch relevant Memories at turn start and call `memory_query`, `refine_query` and `traverse_graph` within that turn. The service binds retrieval to the session's REL. Refinement uses the current turn's search ID, and traversal uses the returned Memory IDs and cut. Hermes displays a recall indicator only for context returned by the latest prefetch.
+
+Queued prefetch can stage an exact selection in the host. When Hermes asks for matching context, the host checks the current cut and accepted copied-source evidence before recording the selected return. A source crash fence, rewind or tombstone prevents return of Memories grounded in the affected copied evidence.
 
 ## Dashboard owner discovery
 
@@ -62,7 +70,7 @@ Install the integration Python package in the pinned Hermes environment and stag
 
 ## Limits
 
-Recall, prefetch and model tools begin in HP05. Dashboard mutations require the later authenticated user channel. Setup uses existing Root owners and registry routing. Hermes workspace names, display names and caller-provided owner IDs convey no routing authority.
+Graph retrieval follows Root's one-hop workflow. A selection that exceeds the requested result or wire bounds fails before a retrieval receipt is recorded. Dashboard mutations require the later authenticated user channel. Setup uses existing Root owners and registry routing. Hermes workspace names, display names and caller-provided owner IDs convey no routing authority.
 
 ## Related docs
 

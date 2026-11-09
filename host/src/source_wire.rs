@@ -28,6 +28,11 @@ pub(crate) struct SourceRequest {
     pub(crate) idempotency_key: String,
     pub(crate) operation: SourceAction,
     pub(crate) arguments: Value,
+    // Transport authority is separate from the durable outbox identity.
+    #[serde(default)]
+    pub(crate) lease_id: Option<String>,
+    #[serde(default)]
+    pub(crate) fence_epoch: Option<u64>,
 }
 
 impl SourceRequest {
@@ -39,6 +44,10 @@ impl SourceRequest {
                 .into_iter()
                 .all(|id| valid_id(id))
             || !is_digest(&value.idempotency_key)
+            || value.lease_id.as_ref().is_some_and(|id| !valid_id(id))
+            || value.fence_epoch.is_some_and(|epoch| {
+                epoch == 0 || value.operation != SourceAction::Snapshot || value.lease_id.is_none()
+            })
         {
             return Err(INVALID);
         }

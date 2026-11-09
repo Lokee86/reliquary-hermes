@@ -20,9 +20,12 @@ class SourceWorker:
         self._session = None
         self._generation = None
         self._fenced = set()
+        self._runtime_lease = None
+        self._fence_epochs = {}
         self._stopped = False
+        self._thread = spawn_context_thread(self._run, name="reliquary-source")
         self._status = "source_ingestion_unavailable"
-        spawn_context_thread(self._run, name="reliquary-source").start()
+        self._thread.start()
 
     def _outbox(self):
         return SourceOutbox(self._settings.state_dir, self._settings.profile_id, self._settings.principal_id)
@@ -39,6 +42,18 @@ class SourceWorker:
                 self._status = "source_ingestion_unavailable"
         self._wake.set()
 
+    def set_runtime(self, lease_id, reconciliation, *, queried_scope=None):
+        with self._lock:
+            if lease_id != self._runtime_lease:
+                self._fence_epochs.clear()
+            self._runtime_lease = lease_id
+            if queried_scope is not None:
+                self._fence_epochs.pop(queried_scope, None)
+            for session_id, epoch in reconciliation.items():
+                self._fence_epochs[session_id] = epoch
+                if self._session == session_id:
+                    self._status = "source_reconciliation_required"
+
     def submit(self, snapshot):
         with self._lock:
             if self._stopped or snapshot.session_id != self._session or self._generation is None:
@@ -49,8 +64,10 @@ class SourceWorker:
             if len(self._captures) >= 8:
                 self._status = "source_outbox_full"
                 return
-            self._captures.append((snapshot, self._generation))
-            self._status = "source_capture_pending"
+            epoch = self._fence_epochs.get(snapshot.session_id)
+            candidate = (self._runtime_lease, epoch) if epoch is not None else (None, None)
+            self._captures.append((snapshot, self._generation, *candidate))
+            self._status = "source_reconciliation_required" if epoch is not None else "source_capture_pending"
         self._wake.set()
 
     def pause(self, session_id):
@@ -79,6 +96,9 @@ class SourceWorker:
         with self._lock:
             self._stopped = True
         self._wake.set()
+        self._thread.join(timeout=15)
+        with self._lock:
+            return not self._captures and not self._thread.is_alive()
 
     def _report(self, session, status):
         with self._lock:
@@ -90,9 +110,9 @@ class SourceWorker:
             with self._lock:
                 if not self._captures:
                     return
-                snapshot, generation = self._captures[0]
+                snapshot, generation, lease_id, fence_epoch = self._captures[0]
             try:
-                outbox.enqueue(snapshot, generation=generation)
+                outbox.enqueue(snapshot, generation=generation, lease_id=lease_id, fence_epoch=fence_epoch)
             except (SourceOutboxError, ContractError) as error:
                 self._report(snapshot.session_id, str(error))
                 if str(error) in {"source_outbox_unavailable", "source_outbox_full"}:
@@ -108,9 +128,22 @@ class SourceWorker:
             with self._lock:
                 if self._stopped:
                     return
-            job = outbox.next_job()
+            job = outbox.next_job(fence_only=True)
+            active_session = None
+            if job is None:
+                with self._lock:
+                    active_session = self._session
+                if active_session is not None:
+                    if hasattr(self._client, "runtime_has_scope"):
+                        job = outbox.next_job(active_session, runtime_scope=True,
+                                              runtime_lease_id=self._client.runtime_lease_id)
+                    else:
+                        job = outbox.next_job(active_session)
             if job is None:
                 return
+            if job.kind == "snapshot" and hasattr(self._client, "runtime_has_scope"):
+                if not self._client.runtime_has_scope(job.session_id):
+                    return
             with self._lock:
                 if job.kind == "snapshot" and job.session_id in self._fenced:
                     return
@@ -119,9 +152,19 @@ class SourceWorker:
             try:
                 receipt = self._client.deliver_source_job(job)
             except HostUnavailable as error:
+                if job.lease_id is not None and str(error) in {
+                        "source_revision_unreconciled", "source_fence_epoch_stale",
+                        "source_terminal", "runtime_lease_stale"}:
+                    outbox.discard_candidate(job)
+                    self._report(job.session_id, "source_reconciliation_required")
+                    continue
                 self._report(job.session_id, str(error))
                 return
             if outbox.acknowledge(job, receipt):
+                if job.lease_id is not None:
+                    with self._lock:
+                        if self._fence_epochs.get(job.session_id) == job.fence_epoch:
+                            self._fence_epochs.pop(job.session_id, None)
                 self._report(job.session_id, {
                     "snapshot": "source_accepted_durable",
                     "invalidate": "source_reconciliation_required",
@@ -143,7 +186,8 @@ class SourceWorker:
                     with self._lock:
                         if session == self._session and session not in self._fenced:
                             if self._generation is None:
-                                self._status = "source_reconciliation_required" if generation else "source_ready"
+                                self._status = ("source_reconciliation_required"
+                                                if generation or session in self._fence_epochs else "source_ready")
                             self._generation = generation
                 self._persist(outbox)
                 if not stopped:
