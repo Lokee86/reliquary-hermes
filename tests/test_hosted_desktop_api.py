@@ -233,7 +233,7 @@ with ExitStack() as stack:
                                      params=params, json=candidate))["configured"]
             saved = selected / "reliquary/owners.json"
             raw = saved.read_bytes()
-            saved.write_bytes(raw + b"\n")
+            saved.write_bytes(raw + b"\\n")
             drift = client.post(setup_api + "/apply", headers=writer(profile), params=params, json=candidate)
             assert drift.status_code == 409 and drift.json()["detail"] == "service_restart_required"
             saved.write_bytes(raw)

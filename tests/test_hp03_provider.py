@@ -1,5 +1,6 @@
 """HP03 provider behavior against the pinned Hermes lifecycle and setup APIs."""
 
+from hashlib import sha256
 import importlib
 import json
 from threading import Event, Thread
@@ -86,10 +87,19 @@ def test_pinned_setup_activates_and_keeps_token_in_profile_dotenv(
             assert token == read_token(home)
             assert binary == installed
 
-        def connect_dashboard(self, session_id):
+        def connect_dashboard(self, session_id, *, owners_fingerprint):
             assert session_id is None
+            raw = (home / "reliquary/owners.json").read_bytes()
+            assert owners_fingerprint == sha256(raw).hexdigest()
+            projects = json.loads(raw)["projects"]
+            return {"owners": [{"owner_id": owner} for owner in ("general", "identity", *projects)],
+                    "active_phy_id": "identity"}
 
-    monkeypatch.setattr(setup, "_preflight", lambda *_: {"valid": True})
+    def preflight(home, binary, request):
+        return {"valid": True, "main_rel": {"owner_id": "general"}, "active_phy": {"owner_id": "identity"},
+                "projects": {key: {"owner_id": key} for key in request["owners"]["projects"]}}
+
+    monkeypatch.setattr(setup, "_preflight", preflight)
     monkeypatch.setattr(setup, "HostClient", SetupHost)
     prompts = iter((values["main_rel"], values["active_phy"], "", ""))
     monkeypatch.setattr("builtins.input", lambda _: next(prompts))
