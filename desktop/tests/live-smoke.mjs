@@ -210,9 +210,17 @@ async function browseOwners(root, page, connect, compatibilityNotice) {
     await inspector.getByText(replacementBody, { exact: true }).waitFor();
 
     await list.getByRole("button", { name: new RegExp(title) }).click();
+    await inspector.getByText(body, { exact: true }).waitFor();
     const retire = formFor("Retire superseded Memory");
     await retire.getByRole("checkbox", { name: "Confirm terminal retirement of this revision" }).check();
-    await save(retire, "Retire Memory");
+    await retire.getByRole("button", { name: "Retire Memory", exact: true }).click();
+    const retirementResult = retire.locator(".rly-write-success, .rly-write-error");
+    // The retirement form can unmount when the selected Memory becomes terminal.
+    const receipt = await Promise.race([
+      retirementResult.waitFor({ timeout: 30_000 }).then(() => retirementResult.textContent()),
+      retire.waitFor({ state: "hidden", timeout: 30_000 }).then(() => null),
+    ]);
+    if (receipt !== null) assert.match(receipt, /^Saved\. Receipt /);
     await refresh.click();
     await inspector.getByText("Tombstoned Memory", { exact: true }).waitFor();
     console.log("Desktop Memory create, correction, and retirement passed.");
