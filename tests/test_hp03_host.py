@@ -107,7 +107,7 @@ def test_live_host_start_attach_scope_leases_outage_and_restart(tmp_path, binari
         assert status.status == "ok" and decode(status.result_json)["pending_jobs"] == 0
 
         existing = HostClient(state, "profile-a", "principal-a", TOKEN)
-        project = existing.attach("session-project")
+        project = existing.attach("session-project", project_id="lantern")
         assert (project.rel_id, project.user_id) == (project_id, user_id)
         assert existing._process is None
 

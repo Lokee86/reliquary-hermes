@@ -151,11 +151,14 @@ pub(crate) struct AttachRequest {
     pub(crate) discovery: Discovery,
     pub(crate) principal_id: String,
     pub(crate) session_id: String,
+    pub(crate) project_id: Option<String>,
 }
 
 impl AttachRequest {
     pub(crate) fn valid(&self) -> bool {
-        valid_id(&self.principal_id) && valid_id(&self.session_id)
+        valid_id(&self.principal_id)
+            && valid_id(&self.session_id)
+            && self.project_id.as_deref().is_none_or(valid_id)
     }
 }
 

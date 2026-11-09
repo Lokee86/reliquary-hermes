@@ -50,6 +50,8 @@ def _start_profile(home, profile_id, binaries, cleanup, *, project):
     client = HostClient(state, profile_id, "principal-a", token, binary=binary)
     try:
         client.attach(f"session-{profile_id}")
+        if project_rel:
+            client.attach("session-project", project_id="lantern")
     finally:
         if client._process is not None:
             cleanup.callback(stop, client._process)

@@ -59,7 +59,10 @@ pub(super) fn sessions_dir(path: &Path, accepted_topology: bool) -> Result<(), R
     Ok(())
 }
 
-pub(crate) fn publish(path: &Path, value: &impl Serialize) -> Result<(), RegistryError> {
+fn synced_temporary(
+    path: &Path,
+    value: &impl Serialize,
+) -> Result<tempfile::NamedTempFile, RegistryError> {
     let directory = path.parent().ok_or(UNAVAILABLE)?;
     let mut temporary = tempfile::Builder::new()
         .prefix(".binding-")
@@ -68,13 +71,26 @@ pub(crate) fn publish(path: &Path, value: &impl Serialize) -> Result<(), Registr
     serde_json::to_writer(&mut temporary, value).map_err(|_| UNAVAILABLE)?;
     temporary.write_all(b"\n").map_err(|_| UNAVAILABLE)?;
     temporary.as_file().sync_all().map_err(|_| UNAVAILABLE)?;
-    temporary.persist_noclobber(path).map_err(|error| {
-        if error.error.kind() == ErrorKind::AlreadyExists {
-            RegistryError::Conflict("state_publication_conflict")
-        } else {
-            UNAVAILABLE
-        }
-    })?;
+    Ok(temporary)
+}
+
+pub(super) fn replace(path: &Path, value: &impl Serialize) -> Result<(), RegistryError> {
+    synced_temporary(path, value)?
+        .persist(path)
+        .map_err(|_| UNAVAILABLE)?;
+    sync_parent(path)
+}
+
+pub(crate) fn publish(path: &Path, value: &impl Serialize) -> Result<(), RegistryError> {
+    synced_temporary(path, value)?
+        .persist_noclobber(path)
+        .map_err(|error| {
+            if error.error.kind() == ErrorKind::AlreadyExists {
+                RegistryError::Conflict("state_publication_conflict")
+            } else {
+                UNAVAILABLE
+            }
+        })?;
     sync_parent(path)
 }
 

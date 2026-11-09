@@ -75,7 +75,7 @@ class Profile:
             general = self.client.attach(self.general_session)
             assert (general.rel_id, general.user_id) == (self.ids["main"], self.ids["phy"])
             if "project" in self.ids:
-                project = self.client.attach("session-project")
+                project = self.client.attach("session-project", project_id="lantern")
                 assert (project.rel_id, project.user_id) == (self.ids["project"], self.ids["phy"])
         finally:
             process = self.client._process

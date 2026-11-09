@@ -257,7 +257,7 @@ impl Service {
         let (binding, owner) = {
             let mut registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
             let binding = registry
-                .bind_session(&request.session_id)
+                .bind_session(&request.session_id, request.project_id.as_deref())
                 .map_err(attach_error)?;
             let owner = registry
                 .source_owner(&request.session_id, true)

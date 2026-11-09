@@ -84,6 +84,7 @@ def _install(home, checkout, binary, rel, phy, project, ids):
     # Prove the CLI started the host, then close it cleanly so the provider can start it again.
     client.attach_runtime("hu04-setup-probe")
     try:
+        assert client.attach("session-project", project_id="lantern").rel_id == ids["project"]
         topology = client.read_dashboard_topology(None)
         assert {row["owner_id"] for row in topology["owners"]} == set(ids.values())
     finally:
@@ -93,8 +94,6 @@ def _install(home, checkout, binary, rel, phy, project, ids):
     owners_path = settings.state_dir / "owners.json"
     owners = decode(owners_path.read_bytes())
     assert owners["projects"] == {"lantern": str(project)}
-    owners["session_projects"] = {"session-project": "lantern"}
-    owners_path.write_bytes(canonical(owners))
     return installed, settings
 
 

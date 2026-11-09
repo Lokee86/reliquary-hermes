@@ -39,6 +39,14 @@ The pinned `agent/turn_context.py` turn prologue calls `on_turn_start` before `M
 
 The lifecycle signatures and context helpers remain compatible. The ABC adds optional profile creation and rename hooks and provider-backed dashboard config methods. Reliquary uses its existing setup path and needs no adapter for those additions. The primary context owns ingestion. A delegation result enters through its parent-authorized path. Per-turn author and group metadata describe the source actor. The explicitly active PHY supplies the stable Reliquary `user_id`. Content without trusted attribution to that user stays REL-only, including unknown or unmapped participants.
 
+## Project membership and provider admission
+
+The pinned Hermes v0.23.0 checkout and the installed Hermes backend at `104a7c4158e98719750e32347cd4101a7b35bc8d` expose first-class projects through `hermes_cli.projects_db`. `projects.list` and `projects.create` in the gateway call that same profile-scoped registry. The dashboard workspace-discovery route also probes session-derived Git roots with scanning disabled. Reliquary reads the project registry directly through its Hermes module API.
+
+Neither audited backend supplies a stable project ID for a conversation. Desktop's `desktopSessionCreateParams` and the gateway's `session.create` send and store a working directory. The Desktop project tree projects session placement from that directory and repository state. Moving a session calls `session.workspace.move` with a new directory. The web workspace picker sends only `cwd` to the PTY route. Provider initialization and switching have no canonical project membership to forward.
+
+The project-routing capability requires a Hermes host to persist explicit first-class session membership, verify it against the owning profile's registry and forward its stable ID as `session_project_id` in MemoryProvider `initialize` and `on_session_switch`. A host that implements this contract can expose integer `SESSION_PROJECT_ATTRIBUTION_VERSION = 1` in `agent.memory_provider`. Reliquary accepts the lifecycle field only with that capability and sends it on the signed provider attach call. Both audited hosts lack it, so fresh sessions use General memory on those hosts. Previously accepted routes continue to apply. The project-routing gate requires a host change and live verification through its ordinary project-chat path.
+
 ## Source identity and copy limitations
 
 `agent/message_metadata.py` defines `message_uid` as the durable logical message ID, retained through host copies, rotation, compaction and rewrite, and restored unconditionally. `_row_id` is a physical row ID, reissued per copy and optionally exposed. A content hash is a revision witness, not a replacement message ID. Identical text can belong to different logical messages.

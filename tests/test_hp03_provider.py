@@ -126,9 +126,11 @@ def test_pinned_setup_activates_and_keeps_token_in_profile_dotenv(
 def test_provider_uses_explicit_profile_and_context_and_discards_stale_attach(
     pinned_provider, monkeypatch, tmp_path,
 ):
+    from agent import memory_provider
     from agent.secret_scope import current_secret_scope_home, reset_secret_scope, set_secret_scope
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
+    monkeypatch.setattr(memory_provider, "SESSION_PROJECT_ATTRIBUTION_VERSION", 1, raising=False)
     home = tmp_path / "bound"
     values = _profile(home, "bound-profile")
     save_settings(home, values)
@@ -144,8 +146,8 @@ def test_provider_uses_explicit_profile_and_context_and_discards_stale_attach(
             assert credential == token
             assert str(binary) == values["binary"]
 
-        def attach(self, session_id):
-            captured.append((session_id, current_secret_scope_home()))
+        def attach(self, session_id, *, project_id=None):
+            captured.append((session_id, current_secret_scope_home(), project_id))
             if session_id == "main-session":
                 entered.set()
                 assert release.wait(3)
@@ -178,8 +180,8 @@ def test_provider_uses_explicit_profile_and_context_and_discards_stale_attach(
         provider.initialize("main-session", hermes_home=str(home), agent_identity="bot-a", user_id="untrusted")
         assert entered.wait(3)
         assert provider.binding is None
-        provider.on_session_switch("skipped-session")
-        provider.on_session_switch("project-session", project_id="caller-project")
+        provider.on_session_switch("skipped-session", project_id="caller-project")
+        provider.on_session_switch("project-session", session_project_id="p_abcdef01")
         provider.sync_turn("private source", "private answer", session_id="project-session")
         assert provider.sync_status == "source_ingestion_unavailable"
         assert provider.prefetch("private prompt") == ""
@@ -187,7 +189,19 @@ def test_provider_uses_explicit_profile_and_context_and_discards_stale_attach(
         _settled(provider, "attached")
         assert provider.binding.session_id == "project-session"
         assert provider.binding.user_id == "stable-phy"
-        assert captured == [("main-session", str(home)), ("project-session", str(home))]
+        assert captured == [
+            ("main-session", str(home), None), ("project-session", str(home), "p_abcdef01"),
+        ]
+        provider.on_turn_start(1, "continue project conversation")
+        _settled(provider, "attached")
+        assert captured[-1] == ("project-session", str(home), "p_abcdef01")
+        provider.on_session_switch("general-session", project_id="caller-project")
+        _settled(provider, "attached")
+        assert captured[-1] == ("general-session", str(home), None)
+        monkeypatch.delattr(memory_provider, "SESSION_PROJECT_ATTRIBUTION_VERSION")
+        provider.on_session_switch("stock-session", session_project_id="p_abcdef01")
+        _settled(provider, "attached")
+        assert captured[-1] == ("stock-session", str(home), None)
         provider.shutdown()
         assert provider.binding is None
         assert provider.lifecycle_status == "stopped"
@@ -213,7 +227,7 @@ def test_provider_outage_isolated_and_nonprimary_does_not_bind(pinned_provider, 
         def __init__(self, *args, **kwargs):
             pass
 
-        def attach(self, session_id):
+        def attach(self, session_id, *, project_id=None):
             calls.append(session_id)
             if len(calls) == 3:
                 entered.set()
@@ -313,7 +327,7 @@ def test_shutdown_drops_an_in_flight_attachment(pinned_provider, monkeypatch, tm
         def __init__(self, *args, **kwargs):
             pass
 
-        def attach(self, session_id):
+        def attach(self, session_id, *, project_id=None):
             started.set()
             assert release.wait(3)
             return SimpleNamespace(session_id=session_id, rel_id="late-rel", user_id="late-phy")
@@ -384,7 +398,7 @@ def test_hermes_manager_keeps_profile_workers_and_hooks_isolated(pinned_provider
             self.profile_id = profile_id
             self.credential = credential
 
-        def attach(self, session_id):
+        def attach(self, session_id, *, project_id=None):
             workers[self.profile_id] = (get_hermes_home(), current_secret_scope_home(),
                                         get_secret(TOKEN_VAR), self.credential)
             entered[self.profile_id].set()
@@ -473,7 +487,7 @@ def test_inflight_prefetch_discards_old_session_result(pinned_provider, monkeypa
         def __init__(self, *args, **kwargs):
             pass
 
-        def attach(self, session_id):
+        def attach(self, session_id, *, project_id=None):
             return SimpleNamespace(session_id=session_id)
 
         def attach_runtime(self, session_id):

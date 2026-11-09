@@ -128,7 +128,6 @@ pub(crate) struct Registry {
     dashboard_actor: Instance,
     dashboard_intents: PathBuf,
     topology: Topology,
-    session_projects: BTreeMap<String, String>,
     sessions_dir: PathBuf,
     // Release the process lease after the admission's owner mounts drop.
     _lease: File,
@@ -159,7 +158,7 @@ impl Registry {
         let active_phy = phy.owner_id();
         let topology = config.topology(main_rel, active_phy, projects)?;
         let topology_path = state_dir.join(TOPOLOGY_FILE);
-        let accepted = topology.is_accepted(&topology_path)?;
+        let acceptance = topology.acceptance(&topology_path)?;
         let rel_ids = rels.iter().map(Rel::owner_id).collect::<Vec<_>>();
         for rel in rels {
             if gateway.mount_rel(&rel, true).map_err(owner_error)? != rel.owner_id() {
@@ -194,18 +193,17 @@ impl Registry {
         .install(&gateway)
         .map_err(owner_error)?;
         let sessions_dir = state_dir.join("sessions-v1");
-        store::sessions_dir(&sessions_dir, accepted)?;
-        if accepted {
-            store::sync_parent(&topology_path)?;
-        } else {
-            store::publish(&topology_path, &topology)?;
+        store::sessions_dir(&sessions_dir, acceptance != TopologyAcceptance::New)?;
+        match acceptance {
+            TopologyAcceptance::New => store::publish(&topology_path, &topology)?,
+            TopologyAcceptance::Current => store::sync_parent(&topology_path)?,
+            TopologyAcceptance::Extension => store::replace(&topology_path, &topology)?,
         }
         Ok(Self {
             admission,
             dashboard_actor,
             dashboard_intents: state_dir.join("dashboard-mutations-v1"),
             topology,
-            session_projects: config.session_projects,
             sessions_dir,
             _lease: lease,
         })
@@ -240,26 +238,36 @@ impl Registry {
     pub(crate) fn bind_session(
         &mut self,
         session_id: &str,
+        project_id: Option<&str>,
     ) -> Result<SessionBinding, RegistryError> {
-        let expected = self.route_for(session_id)?;
         let path = self.session_path(session_id);
-        if self.accepted_route(&expected, &path)?.is_none() {
-            store::publish(&path, &expected)?;
-        } else {
+        let route = if let Some(route) = self.accepted_route(session_id)? {
             store::sync_parent(&path)?;
-        }
+            route
+        } else {
+            if project_id.is_some_and(|project| !valid_id(project)) {
+                return Err(RegistryError::Invalid("invalid_project"));
+            }
+            let rel_id = project_id
+                .and_then(|project| self.topology.projects.get(project))
+                .map_or(self.topology.main_rel, |project| project.rel_id);
+            let route = SessionRoute {
+                session_id: session_id.to_owned(),
+                project_id: project_id.map(str::to_owned),
+                rel_id,
+            };
+            store::publish(&path, &route)?;
+            route
+        };
         Ok(SessionBinding {
-            session_id: expected.session_id,
-            rel_id: expected.rel_id.to_string(),
+            session_id: route.session_id,
+            rel_id: route.rel_id.to_string(),
             user_id: self.topology.active_phy.to_string(),
         })
     }
 
     pub(crate) fn is_bound(&self, session_id: &str) -> Result<bool, RegistryError> {
-        let expected = self.route_for(session_id)?;
-        Ok(self
-            .accepted_route(&expected, &self.session_path(session_id))?
-            .is_some())
+        Ok(self.accepted_route(session_id)?.is_some())
     }
 
     pub(crate) fn source_owner(
@@ -267,12 +275,11 @@ impl Registry {
         session_id: &str,
         require_bound: bool,
     ) -> Result<OwnerId, RegistryError> {
-        let route = self.route_for(session_id)?;
-        let known = self.accepted_route(&route, &self.session_path(session_id))?;
-        if require_bound && known.is_none() {
-            return Err(RegistryError::Denied("unbound_session"));
+        match self.accepted_route(session_id)? {
+            Some(route) => Ok(route.rel_id),
+            None if !require_bound => Ok(self.topology.main_rel),
+            None => Err(RegistryError::Denied("unbound_session")),
         }
-        Ok(route.rel_id)
     }
 
     pub(crate) fn owner_status(
@@ -280,15 +287,9 @@ impl Registry {
         instance: &Instance,
         session_id: &str,
     ) -> Result<OwnerStatus, RegistryError> {
-        let route = self.route_for(session_id)?;
-        if self
-            .accepted_route(&route, &self.session_path(session_id))?
-            .is_none()
-        {
-            return Err(RegistryError::Denied("unbound_session"));
-        }
+        let rel_id = self.source_owner(session_id, true)?;
         let progress = instance
-            .processing_status(route.rel_id, None)
+            .processing_status(rel_id, None)
             .map_err(owner_error)?;
         let worker_state = if progress.failed != 0 {
             "failed"
@@ -340,14 +341,9 @@ impl Registry {
         let (bound_session, session_owner_id) = match session_id {
             None => (None, None),
             Some(session) => {
-                let route = self.route_for(session)?;
-                let is_configured = self.session_projects.contains_key(session);
-                let accepted = self
-                    .accepted_route(&route, &self.session_path(session))?
-                    .is_some();
-                if !is_configured && !accepted {
-                    return Err(RegistryError::Denied("unknown_session"));
-                }
+                let route = self
+                    .accepted_route(session)?
+                    .ok_or(RegistryError::Denied("unknown_session"))?;
                 (Some(session.to_owned()), Some(route.rel_id.to_string()))
             }
         };
@@ -387,10 +383,10 @@ impl Registry {
             return Err(RegistryError::Denied("owner_denied"));
         };
         if let Some(session) = session_id {
-            let route = self.route_for(session)?;
             if kind != OwnerKind::Rel
-                || route.rel_id != owner
-                || (!self.session_projects.contains_key(session) && !self.is_bound(session)?)
+                || !self
+                    .accepted_route(session)?
+                    .is_some_and(|route| route.rel_id == owner)
             {
                 return Err(RegistryError::Denied("unknown_session"));
             }
@@ -398,37 +394,28 @@ impl Registry {
         Ok((owner, kind, label))
     }
 
-    fn route_for(&self, session_id: &str) -> Result<SessionRoute, RegistryError> {
-        if !valid_id(session_id) {
-            return Err(RegistryError::Invalid("invalid_session"));
-        }
-        let project_id = self.session_projects.get(session_id);
-        let rel_id = project_id.map_or(self.topology.main_rel, |project| {
-            self.topology.projects[project].rel_id
-        });
-        Ok(SessionRoute {
-            session_id: session_id.to_owned(),
-            project_id: project_id.cloned(),
-            rel_id,
-        })
-    }
-
     fn session_path(&self, session_id: &str) -> PathBuf {
         let digest = Sha256::digest(session_id.as_bytes());
         self.sessions_dir.join(format!("{digest:x}.json"))
     }
 
-    fn accepted_route(
-        &self,
-        expected: &SessionRoute,
-        path: &Path,
-    ) -> Result<Option<SessionRoute>, RegistryError> {
-        let accepted: Option<SessionRoute> = store::read(path, store::MAX_SESSION_BYTES)?;
-        if accepted
-            .as_ref()
-            .is_some_and(|accepted| accepted != expected)
-        {
-            return Err(RegistryError::Conflict("session_binding_changed"));
+    fn accepted_route(&self, session_id: &str) -> Result<Option<SessionRoute>, RegistryError> {
+        if !valid_id(session_id) {
+            return Err(RegistryError::Invalid("invalid_session"));
+        }
+        let path = self.session_path(session_id);
+        let accepted: Option<SessionRoute> = store::read(&path, store::MAX_SESSION_BYTES)?;
+        if let Some(route) = &accepted {
+            let project = route.project_id.as_deref();
+            let dedicated = project
+                .and_then(|project| self.topology.projects.get(project))
+                .is_some_and(|owner| owner.rel_id == route.rel_id);
+            if route.session_id != session_id
+                || project.is_some_and(|project| !valid_id(project))
+                || (!dedicated && route.rel_id != self.topology.main_rel)
+            {
+                return Err(RegistryError::Unavailable("state_corrupt"));
+            }
         }
         Ok(accepted)
     }
@@ -567,13 +554,34 @@ impl OwnerConfig {
     }
 }
 
+#[derive(PartialEq, Eq)]
+enum TopologyAcceptance {
+    New,
+    Current,
+    Extension,
+}
+
 impl Topology {
-    fn is_accepted(&self, path: &Path) -> Result<bool, RegistryError> {
-        match store::read::<Self>(path, store::MAX_TOPOLOGY_BYTES)? {
-            Some(ref accepted) if accepted == self => Ok(true),
-            Some(_) => Err(RegistryError::Conflict("owner_topology_changed")),
-            None => Ok(false),
+    fn acceptance(&self, path: &Path) -> Result<TopologyAcceptance, RegistryError> {
+        let Some(accepted) = store::read::<Self>(path, store::MAX_TOPOLOGY_BYTES)? else {
+            return Ok(TopologyAcceptance::New);
+        };
+        if accepted == *self {
+            return Ok(TopologyAcceptance::Current);
         }
+        if accepted.version == self.version
+            && accepted.profile_id == self.profile_id
+            && accepted.principal_id == self.principal_id
+            && accepted.main_rel == self.main_rel
+            && accepted.active_phy == self.active_phy
+            && accepted
+                .projects
+                .iter()
+                .all(|(id, owner)| self.projects.get(id) == Some(owner))
+        {
+            return Ok(TopologyAcceptance::Extension);
+        }
+        Err(RegistryError::Conflict("owner_topology_changed"))
     }
 }
 

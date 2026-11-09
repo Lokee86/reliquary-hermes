@@ -6,6 +6,7 @@ import secrets
 from agent.memory_provider import MemoryProvider, RecallStatus, spawn_context_thread
 
 from .client import HostClient, HostUnavailable
+from .projects import routing_available
 from .settings import profile_home, profile_setup_lock, read_settings, read_token
 from .setup import cli_setup
 from .source_capture import capture_snapshot
@@ -34,6 +35,7 @@ class ReliquaryMemoryProvider(MemoryProvider):
         self._source = self._source_profile = None
         self._binding = None
         self._session_id = None
+        self._session_project_id = None
         self._status = "uninitialized"
         self._sync_status = "unavailable"
         self._generation = 0
@@ -117,9 +119,10 @@ class ReliquaryMemoryProvider(MemoryProvider):
             except (OSError, HostUnavailable, RuntimeError, ValueError):
                 self._status = "unavailable"
                 return
-            self._queue_attach(session_id)
+            project_id = kwargs.get("session_project_id") if routing_available() else None
+            self._queue_attach(session_id, project_id)
 
-    def _queue_attach(self, session_id):
+    def _queue_attach(self, session_id, project_id):
         """Replace the pending intent. The caller owns the state lock."""
         self._generation += 1
         changed_scope = self._session_id != session_id
@@ -133,15 +136,19 @@ class ReliquaryMemoryProvider(MemoryProvider):
             self._binding = None
         self._pending = None
         self._session_id = None
+        self._session_project_id = None
         self._sync_status = "unavailable"
         try:
+            if project_id is not None:
+                project_id = identifier(project_id)
             self._session_id = identifier(session_id)
         except ContractError:
             self._status = "unavailable"
             return
+        self._session_project_id = project_id
         if self._source is not None:
             self._source.activate(self._session_id)
-        self._pending = (self._generation, self._session_id)
+        self._pending = (self._generation, self._session_id, project_id)
         self._status = "connecting"
         if not self._attaching:
             self._attaching = True
@@ -159,14 +166,14 @@ class ReliquaryMemoryProvider(MemoryProvider):
                 if self._pending is None:
                     self._attaching = False
                     return
-                generation, session_id = self._pending
+                generation, session_id, project_id = self._pending
                 client = self._client
                 self._pending = None
                 lease_missing = self._runtime_lease_id is None
             lease_id = None
             try:
                 with profile_setup_lock(self._home):
-                    binding = client.attach(session_id)
+                    binding = client.attach(session_id, project_id=project_id)
                 with self._lock:
                     if self._status == "stopped":
                         continue
@@ -218,7 +225,10 @@ class ReliquaryMemoryProvider(MemoryProvider):
             self._binding = None
             if fence:
                 source.pause(prior)
-            self._queue_attach(new_session_id)
+            project_id = self._session_project_id if prior == new_session_id else None
+            if routing_available():
+                project_id = kwargs.get("session_project_id", project_id)
+            self._queue_attach(new_session_id, project_id)
         if fence:
             source.invalidate(prior)
 
@@ -230,7 +240,7 @@ class ReliquaryMemoryProvider(MemoryProvider):
             self._recall_status = None
             # Probe every turn so a recovered host can surface fresh crash fences.
             if self._session_id is not None and self._client is not None and not self._attaching:
-                self._queue_attach(self._session_id)
+                self._queue_attach(self._session_id, self._session_project_id)
 
     def _request_bytes(self, operation, arguments, *, session_id, turn_id, request_id=None, current_turn=False):
         with self._lock:

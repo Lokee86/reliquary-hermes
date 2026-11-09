@@ -76,13 +76,18 @@ fn routes_persist_across_restart_and_keep_the_active_phy_independent() {
                 .code(),
             "unbound_session"
         );
-        let general = registry.bind_session("general-session").unwrap();
-        let project = registry.bind_session("project-session").unwrap();
+        let general = registry.bind_session("general-session", None).unwrap();
+        let project = registry
+            .bind_session("project-session", Some("demo"))
+            .unwrap();
         assert_eq!(general.rel_id, fixture.main_id.to_string());
         assert_eq!(project.rel_id, fixture.project_id.to_string());
         assert_eq!(general.user_id, fixture.phy_id.to_string());
         assert_eq!(project.user_id, general.user_id);
-        assert_eq!(registry.bind_session("project-session").unwrap(), project);
+        assert_eq!(
+            registry.bind_session("project-session", None).unwrap(),
+            project
+        );
         let status = registry.owner_status(&client, "project-session").unwrap();
         assert_eq!(
             serde_json::to_value(status).unwrap(),
@@ -100,8 +105,14 @@ fn routes_persist_across_restart_and_keep_the_active_phy_independent() {
     let mut reopened = Registry::open(fixture.config(), &fixture.state, NEW_TOKEN).unwrap();
     assert!(reopened.is_bound("general-session").unwrap());
     assert!(reopened.is_bound("project-session").unwrap());
-    assert_eq!(reopened.bind_session("general-session").unwrap(), general);
-    assert_eq!(reopened.bind_session("project-session").unwrap(), project);
+    assert_eq!(
+        reopened.bind_session("general-session", None).unwrap(),
+        general
+    );
+    assert_eq!(
+        reopened.bind_session("project-session", None).unwrap(),
+        project
+    );
     assert!(reopened.authenticate(TOKEN).is_err());
     assert!(reopened.authenticate(NEW_TOKEN).is_ok());
 }
@@ -109,8 +120,18 @@ fn routes_persist_across_restart_and_keep_the_active_phy_independent() {
 #[test]
 fn dashboard_topology_is_read_only_and_rejects_unbound_unknown_sessions() {
     let fixture = Fixture::new();
-    let registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
+    let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
     let instance = registry.authenticate(TOKEN).unwrap();
+    assert_eq!(
+        registry
+            .dashboard_topology(&instance, Some("project-session"))
+            .unwrap_err()
+            .code(),
+        "unknown_session"
+    );
+    registry
+        .bind_session("project-session", Some("demo"))
+        .unwrap();
     let configured = registry
         .dashboard_topology(&instance, Some("project-session"))
         .unwrap();
@@ -201,14 +222,14 @@ fn separate_profiles_can_share_the_phy_but_cannot_share_the_rel_writer() {
     config.projects.clear();
     config.session_projects.clear();
     let mut second = Registry::open(config, &second_state, NEW_TOKEN).unwrap();
-    let first_binding = first.bind_session("same-session").unwrap();
-    let second_binding = second.bind_session("same-session").unwrap();
+    let first_binding = first.bind_session("same-session", None).unwrap();
+    let second_binding = second.bind_session("same-session", None).unwrap();
     assert_ne!(first_binding.rel_id, second_binding.rel_id);
     assert_eq!(first_binding.user_id, second_binding.user_id);
 }
 
 #[test]
-fn invalid_owner_and_changed_route_do_not_create_fallback_bindings() {
+fn invalid_owner_is_rejected_and_accepted_route_wins_over_new_attribution() {
     let fixture = Fixture::new();
     let mut config = fixture.config();
     config.active_phy = fixture.main.clone();
@@ -222,7 +243,7 @@ fn invalid_owner_and_changed_route_do_not_create_fallback_bindings() {
     assert!(!fixture.state.join("topology-v1.json").exists());
     let original = Registry::open(fixture.config(), &fixture.state, TOKEN)
         .unwrap()
-        .bind_session("general-session")
+        .bind_session("general-session", None)
         .unwrap();
     let mut config = fixture.config();
     config
@@ -230,23 +251,111 @@ fn invalid_owner_and_changed_route_do_not_create_fallback_bindings() {
         .insert("general-session".into(), "demo".into());
     let mut registry = Registry::open(config, &fixture.state, TOKEN).unwrap();
     assert_eq!(
-        registry.bind_session("general-session").unwrap_err().code(),
-        "session_binding_changed"
+        registry
+            .bind_session("general-session", Some("demo"))
+            .unwrap(),
+        original
     );
+    // A persisted legacy hint does not supply authoritative metadata for a new session.
+    let unattributed = registry.bind_session("project-session", None).unwrap();
+    assert_eq!(unattributed.rel_id, fixture.main_id.to_string());
     assert_eq!(
-        registry.bind_session("../foreign").unwrap_err().code(),
+        registry
+            .bind_session("../foreign", None)
+            .unwrap_err()
+            .code(),
         "invalid_session"
     );
     drop(registry);
     let mut reopened = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
-    assert_eq!(reopened.bind_session("general-session").unwrap(), original);
+    assert_eq!(
+        reopened.bind_session("general-session", None).unwrap(),
+        original
+    );
+}
+
+#[test]
+fn extending_topology_preserves_accepted_fallback_and_project_routes() {
+    let fixture = Fixture::new();
+    let second_path = fixture.project.with_file_name("second.rel");
+    let second_id = Rel::create(&second_path, OwnerScope::Project)
+        .unwrap()
+        .owner_id();
+    let (fallback, dedicated, old_route) = {
+        let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
+        let fallback = registry
+            .bind_session("existing-fallback", Some("second"))
+            .unwrap();
+        let dedicated = registry
+            .bind_session("existing-dedicated", Some("demo"))
+            .unwrap();
+        let old_route = std::fs::read(registry.session_path("existing-fallback")).unwrap();
+        assert_eq!(fallback.rel_id, fixture.main_id.to_string());
+        assert_eq!(dedicated.rel_id, fixture.project_id.to_string());
+        (fallback, dedicated, old_route)
+    };
+
+    let mut config = fixture.config();
+    config.projects.insert("second".into(), second_path.clone());
+    let mut registry = Registry::open(config, &fixture.state, TOKEN).unwrap();
+    assert_eq!(
+        registry
+            .bind_session("existing-fallback", Some("second"))
+            .unwrap(),
+        fallback
+    );
+    assert_eq!(
+        registry
+            .bind_session("existing-dedicated", Some("second"))
+            .unwrap(),
+        dedicated
+    );
+    let new_session = registry
+        .bind_session("new-project-session", Some("second"))
+        .unwrap();
+    assert_eq!(new_session.rel_id, second_id.to_string());
+    assert_eq!(
+        registry.source_owner("new-project-session", true).unwrap(),
+        second_id
+    );
+    assert_eq!(
+        std::fs::read(registry.session_path("existing-fallback")).unwrap(),
+        old_route
+    );
+    drop(registry);
+
+    assert_eq!(
+        Registry::open(fixture.config(), &fixture.state, TOKEN)
+            .err()
+            .unwrap()
+            .code(),
+        "owner_topology_changed"
+    );
+    let third_path = fixture.project.with_file_name("third.rel");
+    Rel::create(&third_path, OwnerScope::Project).unwrap();
+    let mut config = fixture.config();
+    config.projects.insert("second".into(), third_path);
+    assert_eq!(
+        Registry::open(config, &fixture.state, TOKEN)
+            .err()
+            .unwrap()
+            .code(),
+        "owner_topology_changed"
+    );
+    let mut config = fixture.config();
+    config.projects.insert("second".into(), second_path);
+    let mut registry = Registry::open(config, &fixture.state, TOKEN).unwrap();
+    assert_eq!(
+        registry.bind_session("new-project-session", None).unwrap(),
+        new_session
+    );
 }
 
 #[test]
 fn malformed_and_missing_durable_state_fail_closed() {
     let fixture = Fixture::new();
     let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
-    registry.bind_session("general-session").unwrap();
+    registry.bind_session("general-session", None).unwrap();
     let path = registry.session_path("general-session");
     std::fs::write(&path, b"truncated").unwrap();
     assert_eq!(

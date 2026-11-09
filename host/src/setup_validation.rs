@@ -152,7 +152,7 @@ fn report(request: Request, state_dir: &Path) -> Result<Report, RegistryError> {
     let topology_error = match owner_ids {
         (Some(main_id), Some(phy_id), Some(project_ids)) => owners
             .topology(main_id, phy_id, project_ids)
-            .and_then(|topology| topology.is_accepted(&state_dir.join(TOPOLOGY_FILE)))
+            .and_then(|topology| topology.acceptance(&state_dir.join(TOPOLOGY_FILE)))
             .err()
             .map(|error| error.code()),
         _ => None,

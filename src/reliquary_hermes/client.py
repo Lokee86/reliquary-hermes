@@ -275,9 +275,11 @@ class HostClient:
         except OSError:
             raise HostUnavailable("host_start_failed") from None
 
-    def _attach(self, discovery: Discovery, session_id: str, deadline: float) -> SessionBinding:
-        body = canonical({"discovery": asdict(discovery), "principal_id": self._principal_id,
-                          "session_id": session_id})
+    def _attach(self, discovery: Discovery, session_id: str, project_id: str | None, deadline: float) -> SessionBinding:
+        request = {"discovery": asdict(discovery), "principal_id": self._principal_id, "session_id": session_id}
+        if project_id is not None:
+            request["project_id"] = project_id
+        body = canonical(request)
         reply = self._exchange(discovery, "/v1/attach", body, deadline)
         try:
             result = obj(decode(reply), {"discovery", "session_id", "rel_id", "user_id"})
@@ -292,19 +294,18 @@ class HostClient:
         self._attached = discovery, binding
         return binding
 
-    def attach(self, session_id: str) -> SessionBinding:
-        """Bind through the live service or start a candidate protected by its lease."""
+    def attach(self, session_id: str, *, project_id: str | None = None) -> SessionBinding:
+        """Bind a session using only trusted Hermes lifecycle attribution."""
         identifier(session_id)
+        if project_id is not None:
+            identifier(project_id)
         if self._attached is not None and self._attached[1].session_id != session_id:
             self._attached = None
         try:
-            return self._connect_session(session_id)
+            return self._connect(lambda discovery, deadline: self._attach(discovery, session_id, project_id, deadline))
         except HostUnavailable:
             self._attached = None
             raise
-
-    def _connect_session(self, session_id: str) -> SessionBinding:
-        return self._connect(lambda discovery, deadline: self._attach(discovery, session_id, deadline))
 
     def _connect(self, exchange):
         previous = self._read_discovery()

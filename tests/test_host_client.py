@@ -80,13 +80,14 @@ def endpoint(state, *, signed=True, request_id="check-a"):
 def test_host_client_authenticates_exact_instance_and_correlates_status(tmp_path):
     with endpoint(tmp_path) as captured:
         client = HostClient(tmp_path, "profile-a", "principal-a", TOKEN)
-        binding = client.attach("session-a")
+        binding = client.attach("session-a", project_id="p_abcdef01")
         assert (binding.session_id, binding.rel_id, binding.user_id) == ("session-a", REL, PHY)
         response = client.request(status_request())
         assert decode(response.result_json) == {"worker_state": "complete", "pending_jobs": 0}
         with pytest.raises(HostUnavailable, match="host_not_attached"):
             client.request(status_request("session-b"))
         assert len(captured) == 2
+        assert decode(captured[0][1])["project_id"] == "p_abcdef01"
         assert captured[0][0]["X-Reliquary-Nonce"] != captured[1][0]["X-Reliquary-Nonce"]
         assert TOKEN not in repr(captured) and TOKEN not in repr(client)
 
