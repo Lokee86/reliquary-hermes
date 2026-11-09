@@ -340,6 +340,16 @@ The Windows Electron 44.9.3 run on stock Hermes passed the fresh setup and picke
 
 The local HU05 regression run passed eight HP04 and HP05 process cases with a synthetic blank processing config and short temporary paths. An isolated run on stock Hermes also passed provider drain/restart and ingestion/recall, using the stock turn-start signature in the test harness. Both runs used deterministic loopback model responses. The unadapted pinned suite had 352 passes, four skips, and four baseline-reproduced failures during synthetic Root CLI credential initialization.
 
+## HU07 Hermes-native presentation
+
+The shared surface receives its controls through the existing host seam. The web live and fixture bundles use Hermes dashboard SDK 1.1.0 controls. Desktop imports the corresponding primitives from `@hermes/plugin-sdk`. Each host adapter translates Select values and options to its SDK contract. Hermes styles the controls and supplies text colors and fonts. The shared stylesheet retains layout, overflow and graph geometry. Web SDK 1.1.0 has no Textarea export, so the web uses a browser textarea for multiline Memory fields.
+
+Run the dashboard, fixture and Desktop builds and the Node and TypeScript checks in [HU05 web and Desktop checks](#hu05-web-and-desktop-checks). The tests check SDK control injection, setup submission and capability gating, select values, and the absence of a Reliquary control theme. The installed probes exercise setup and owner browsing with Hermes themes, native focus and long paths, and the stock Desktop compatibility notice.
+
+The local Chrome smoke passed against Hermes `104a7c4158e98719750e32347cd4101a7b35bc8d` in Hermes Teal dark and Nous Blue light. Keyboard focus was visible and 216- and 218-character owner paths fit the inputs. Validation, connection, owner selection and reload passed. The fixture bundle passed against web SDK 1.1.0 and host React, including graph, list and provenance reads. The configured sidebar uses the SDK's compact action size to keep its labels on one line.
+
+Electron 44.9.3 passed the stock Hermes `b766b76988449e15e3914037d3e03fb96af72774` light-theme check with the native picker, visible keyboard focus and disabled setup writes. On fixed Hermes `104a7c4158e98719750e32347cd4101a7b35bc8d` in dark mode, native setup, owner selection and Memory create, correction and retirement passed through tombstone readback. Both hosts used isolated profiles and scripted native file-picker selections.
+
 ## Related docs
 
 - [Documentation policy and ownership](documentation-policy.md)
