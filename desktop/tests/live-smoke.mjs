@@ -93,9 +93,11 @@ try {
   }
 
   const page = await app.firstWindow({ timeout: 90_000 });
-  // Seed the ordinary plugin opt-in in this test window's isolated renderer data.
-  await page.addInitScript(() => localStorage.setItem("hermes.desktop.pluginDecisions.v2",
-    JSON.stringify({ "reliquary-hermes": true })));
+  // Use the ordinary plugin opt-in and "choose a provider later" in the isolated renderer.
+  await page.addInitScript(() => {
+    localStorage.setItem("hermes.desktop.pluginDecisions.v2", JSON.stringify({ "reliquary-hermes": true }));
+    localStorage.setItem("hermes-onboarding-skipped-v1", "1");
+  });
   await page.reload();
   await page.getByRole("button", { name: "Reliquary", exact: true }).click({ timeout: 90_000 });
   const root = page.locator(".rly-desktop");
@@ -134,17 +136,49 @@ try {
     assert(fixture.candidate, "The write probe requires fresh isolated owners.");
     const title = "Hosted Desktop authority proof";
     const body = "Synthetic worker-verified Memory body.";
-    const form = root.locator(".rly-memory-write-form");
-    await form.getByRole("textbox", { name: "Title" }).fill(title);
-    await form.getByRole("textbox", { name: "Body" }).fill(body);
-    await form.getByRole("button", { name: "Create Memory", exact: true }).click();
-    const result = root.locator(".rly-write-success, .rly-write-error");
-    await result.waitFor({ timeout: 30_000 });
-    assert.match(await result.textContent() ?? "", /^Saved\. Receipt /);
-    await root.getByRole("button", { name: "Refresh owner data", exact: true }).click();
+    const replacementTitle = "Corrected Desktop proof";
+    const replacementBody = "Corrected worker-verified Memory body.";
+    const inspector = root.locator(".rly-inspector");
+    const refresh = root.getByRole("button", { name: "Refresh owner data", exact: true });
+    const list = root.getByRole("list", { name: "Memories in this page" });
+    const formFor = (name) => inspector.locator(".rly-memory-write-form")
+      .filter({ has: page.getByRole("heading", { name, exact: true }) });
+    async function save(form, name) {
+      await form.getByRole("button", { name, exact: true }).click();
+      const result = form.locator(".rly-write-success, .rly-write-error");
+      await result.waitFor({ timeout: 30_000 });
+      assert.match(await result.textContent() ?? "", /^Saved\. Receipt /);
+    }
+
+    const create = formFor("Create user-origin Memory");
+    await create.getByRole("textbox", { name: "Title" }).fill(title);
+    await create.getByRole("textbox", { name: "Body" }).fill(body);
+    await save(create, "Create Memory");
+    await refresh.click();
     await root.getByRole("button", { name: "List page", exact: true }).click();
-    await root.getByRole("button", { name: new RegExp(title) }).click();
-    await root.locator(".rly-inspector").getByText(body, { exact: true }).waitFor();
+    await list.getByRole("button", { name: new RegExp(title) }).click();
+    await inspector.getByText(body, { exact: true }).waitFor();
+
+    const edit = formFor("Correct selected Memory");
+    await edit.getByRole("button", { name: "Save correction", exact: true, disabled: false }).waitFor();
+    const editTitle = edit.getByRole("textbox", { name: "Replacement title" });
+    const editBody = edit.getByRole("textbox", { name: "Replacement body" });
+    await editTitle.fill(replacementTitle);
+    await editBody.fill(replacementBody);
+    assert.equal(await editTitle.inputValue(), replacementTitle);
+    assert.equal(await editBody.inputValue(), replacementBody);
+    await save(edit, "Save correction");
+    await refresh.click();
+    await list.getByRole("button", { name: new RegExp(replacementTitle) }).click();
+    await inspector.getByText(replacementBody, { exact: true }).waitFor();
+
+    await list.getByRole("button", { name: new RegExp(title) }).click();
+    const retire = formFor("Retire superseded Memory");
+    await retire.getByRole("checkbox", { name: "Confirm terminal retirement of this revision" }).check();
+    await save(retire, "Retire Memory");
+    await refresh.click();
+    await inspector.getByText("Tombstoned Memory", { exact: true }).waitFor();
+    console.log("Desktop Memory create, correction, and retirement passed.");
   }
   await owners.selectOption(fixture.ownerIds[1]);
   await root.getByText("PHY", { exact: true }).first().waitFor();

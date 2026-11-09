@@ -309,9 +309,22 @@ The Windows live proof used an isolated copy of the fresh HU05 sealed import. Th
 
 ## HU05 isolated Desktop mutation checks
 
-Use an isolated Hermes worktree based on `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19`. Apply [the hosted native admission patch](../patches/hermes-v0.23.0-hosted-native-admission.patch) there. Set `HU05_HERMES_HOSTED_CHECKOUT` to that worktree, then run `tests/test_hosted_desktop_api.py` with the process-test binaries and pytest environment above. The probe creates separate launch and secondary profiles, drives the real gateway ticket checks and plugin workers, and verifies native setup and a persisted Memory mutation in each. It also checks cross-profile, replay, Origin, and spoofed-header denial.
+The installed Hermes checkout at `b766b76988449e15e3914037d3e03fb96af72774` reproduced the gap in both launch and secondary profiles. Native setup status and owner discovery returned HTTP 200. Native setup validation and apply returned HTTP 403 with `same_origin_required`. After same-origin web setup, native Memory create returned HTTP 200 with a typed `denied` result. Same-origin web Memory create succeeded in both profiles.
 
-For live Electron verification, point `HP01_HERMES_CHECKOUT` at the patched checkout and set `plugins.isolation: host` in the isolated profile. Set `verifyMemoryWrite` to true in the fresh fixture to exercise a real mutation. The launch-profile live proof used the native picker, completed setup, created a REL Memory, and reopened its exact body. The isolated worker was confirmed in the gateway log. The public CLI verified the Memory after shutdown and lease release.
+The hosted Desktop requirement is the Hermes change in `104a7c4158e98719750e32347cd4101a7b35bc8d`, based on the installed revision above. The local installation uses that committed revision and the unchanged Reliquary admission guard. Distribution on stock Hermes requires a release containing the fix.
+
+Set `HU05_HERMES_HOSTED_CHECKOUT` to the Hermes installation under test. Use the process-test binaries and pytest environment above. The probe creates separate launch and secondary profiles in the test workspace, exercises the gateway's real ticket checks and private IPC, and confirms two distinct worker processes. It checks setup, owner discovery, Memory create, correction and retirement, and the exact body and tombstone reads. It also checks cross-profile denial, ticket replay, browser Origin and forged admission headers, and accepts an ordinary same-origin dashboard write.
+
+```powershell
+$env:HU05_HERMES_HOSTED_CHECKOUT = 'C:\path\to\installed\hermes-agent'
+python -B -m pytest -q --basetemp .pytest_tmp tests/test_hosted_desktop_api.py
+```
+
+The installed Windows gateway passed this probe at `104a7c4158e98719750e32347cd4101a7b35bc8d` in both profile workers. The Hermes regression `tests/hermes_cli/test_plugin_host_route_auth.py` passed all five tests on the fix. Its launch and secondary native-admission cases reproduced the lost admission on the stock parent.
+
+For the live Electron probe, point `HP01_HERMES_CHECKOUT` at the same Hermes installation and set `plugins.isolation: host` in the isolated profile. Use a fresh fixture with `verifyMemoryWrite` set to true to exercise the picker, setup, Memory create, correction, and retirement. The probe opens the created and corrected bodies and reads the superseded Memory's tombstone.
+
+The Windows live run used the installed Desktop build from `b766b76988449e15e3914037d3e03fb96af72774` with Electron 44.9.3 and the installed gateway at `104a7c4158e98719750e32347cd4101a7b35bc8d`. The native picker and first-run setup passed in a fresh profile with an isolated worker. The Desktop pane opened both configured owners, created a Memory, showed its exact body, opened its corrected replacement, and confirmed the superseded original's tombstone after retirement.
 
 ## Related docs
 
