@@ -47,7 +47,7 @@ if (HU05_DESKTOP_APP) {
 const app = await _electron.launch({
   executablePath: HU05_DESKTOP_EXE,
   args: [...args, "--user-data-dir=" + userData,
-    "--disable-gpu", "--no-sandbox", "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost"],
+    "--disable-gpu", "--no-sandbox"],
   cwd: scratch,
   env: {
     ...env,
