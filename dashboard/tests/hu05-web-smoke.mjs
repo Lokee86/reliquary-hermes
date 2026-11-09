@@ -114,7 +114,13 @@ try {
       await page.getByRole("button", { name: "Review and connect" }).click();
       await review.waitFor();
     }
+    const applying = page.waitForResponse((response) =>
+      new URL(response.url()).pathname.endsWith("/setup-v1/apply") && response.request().method() === "POST");
     await review.getByRole("button", { name: /^(Continue|Connect Reliquary)$/ }).click();
+    const response = await applying;
+    const result = await response.json();
+    assert(response.ok() && result.configured === true,
+      `Setup apply failed (HTTP ${response.status()}): ${result.detail ?? result.topology_error ?? "invalid response"}`);
   }
   await owner.waitFor();
   assert.equal(await setupHeading.count(), 0);
