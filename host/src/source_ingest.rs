@@ -646,10 +646,12 @@ pub(crate) fn configured_runtime(
     }
     let config: ProcessingConfig =
         crate::service_protocol::decode(&raw).map_err(|_| "invalid_processing_config")?;
-    if !config.config_path.is_absolute() || !config.config_path.is_file() {
+    open_processing_runtime(&config.config_path).map(Some)
+}
+
+pub(crate) fn open_processing_runtime(path: &Path) -> Result<ConfiguredRuntime, &'static str> {
+    if !path.is_absolute() || !path.is_file() {
         return Err("invalid_processing_config");
     }
-    ConfiguredRuntime::from_path(&config.config_path)
-        .map(Some)
-        .map_err(|_| "invalid_processing_config")
+    ConfiguredRuntime::from_path(path).map_err(|_| "invalid_processing_config")
 }
