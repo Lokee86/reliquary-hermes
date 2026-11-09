@@ -261,7 +261,9 @@
           });
         },
       });
-      return { id, name, path, target };
+      const savedPath = Object.hasOwn(status.defaults.projects, id) ? status.defaults.projects[id] : "";
+      const savedRoute = status.configured ? savedPath : path;
+      return { id, name, path, target, savedRoute, draftChanged: status.configured && savedPath !== path };
     });
 
     return h("div", { className: "rly-main rly-setup-form" },
@@ -283,6 +285,7 @@
           ownerButtons(identity, phy), check(report?.active_phy)),
         h("section", { "aria-label": "Project memories", className: "rly-setup-card" },
           h("h2", null, "Project memories"),
+          h("p", null, "Project memory selections apply after connecting."),
           h("div", { className: "rly-setup-actions" },
             h(Button, { type: "button", "aria-expanded": showProjectHelp,
               onClick: () => setShowProjectHelp((show) => !show) }, "Create Hermes project"),
@@ -296,13 +299,15 @@
           currentInventory?.value?.projects.length === 0 && h("p", null, "This profile has no active Hermes projects."),
           currentInventory?.value && !routingAvailable && projects.length > 0 && h("p", { role: "note" },
             "This Hermes host does not supply trusted project membership for sessions. New sessions use General memory."),
-          projectCards.map(({ id, name, path, target }) =>
+          projectCards.map(({ id, name, path, target, savedRoute, draftChanged }) =>
             h("section", { key: id, className: "rly-setup-card", "aria-label": name },
               h("h3", null, name),
-              h("p", null, path && routingAvailable ? "Dedicated REL" : "Using General memory"),
-              path && !routingAvailable && h("p", null, "Dedicated REL selected"),
+              h("p", null, savedRoute && routingAvailable ? "Dedicated REL" : "Using General memory"),
+              path && (!routingAvailable || draftChanged) && h("p", null, "Dedicated REL selected"),
+              !path && draftChanged && h("p", null, "General memory selected"),
               path && h("p", { className: "rly-setup-value" }, path),
-              ownerButtons(target, path), check(report?.projects[id])))),
+              ownerButtons(target, path),
+              check(report && Object.hasOwn(report.projects, id) ? report.projects[id] : undefined)))),
         h("details", null, h("summary", null, "Advanced"),
           pathInput("Main REL path", main, setMain),
           pathInput("Active PHY path", phy, setPhy),
