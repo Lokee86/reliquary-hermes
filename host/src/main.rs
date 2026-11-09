@@ -15,8 +15,10 @@ use std::{env, ffi::OsStr, path::PathBuf, process::ExitCode};
 fn run() -> Result<(), &'static str> {
     let mut arguments = env::args_os().skip(1);
     let first = arguments.next();
-    let validate = first.as_deref() == Some(OsStr::new("setup-validate"));
-    let state_dir_option = if validate { arguments.next() } else { first };
+    let (setup, state_dir_option) = match first.as_deref().and_then(OsStr::to_str) {
+        Some(mode @ ("setup-validate" | "setup-create")) => (Some(mode), arguments.next()),
+        _ => (None, first.clone()),
+    };
     if state_dir_option.as_deref() != Some(OsStr::new("--state-dir")) {
         return Err("invalid_arguments");
     }
@@ -24,10 +26,10 @@ fn run() -> Result<(), &'static str> {
     if arguments.next().is_some() {
         return Err("invalid_arguments");
     }
-    if validate {
-        registry::setup_validation::run(&path)
-    } else {
-        service::run(&path)
+    match setup {
+        Some("setup-validate") => registry::setup_validation::run(&path),
+        Some("setup-create") => registry::setup_validation::run_create(&path),
+        _ => service::run(&path),
     }
 }
 

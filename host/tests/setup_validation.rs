@@ -61,8 +61,12 @@ impl Fixture {
     }
 
     fn run(&self, request: &[u8]) -> Output {
+        self.run_command("setup-validate", request)
+    }
+
+    fn run_command(&self, command: &str, request: &[u8]) -> Output {
         let mut child = Command::new(env!("CARGO_BIN_EXE_reliquary-hermes-host"))
-            .args(["setup-validate", "--state-dir"])
+            .args([command, "--state-dir"])
             .arg(&self.state)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -78,6 +82,13 @@ impl Fixture {
         assert!(output.status.success(), "{:?}", output.stderr);
         assert!(output.stderr.is_empty());
         serde_json::from_slice(&output.stdout).unwrap()
+    }
+
+    fn create(&self, role: &str, path: &Path) -> Output {
+        self.run_command(
+            "setup-create",
+            &serde_json::to_vec(&json!({ "role": role, "path": path })).unwrap(),
+        )
     }
 
     fn files(&self) -> Vec<PathBuf> {
@@ -237,6 +248,120 @@ fn rejects_duplicate_identity_and_mismatched_persisted_topology_without_writes()
     assert_eq!(report["topology_error"], "owner_topology_changed");
     assert_eq!(fs::read(&topology_path).unwrap(), topology);
     assert_eq!(fs::read_dir(&fixture.state).unwrap().count(), 1);
+}
+
+#[test]
+fn creates_all_roles_and_reselects_them_through_setup_validation() {
+    let fixture = Fixture::new();
+    let mut request = fixture.request();
+    let mut checks = Vec::new();
+    for (role, file, kind, scope) in [
+        ("main_rel", "new general.REL", "rel", json!("unspecified")),
+        ("active_phy", "new identity.phy", "phy", Value::Null),
+        ("project_rel", "new project.rel", "rel", json!("project")),
+    ] {
+        let path = fixture.scratch.path().join(file);
+        let output = fixture.create(role, &path);
+        assert!(output.status.success(), "{:?}", output.stderr);
+        assert!(output.stderr.is_empty());
+        let check: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let id = check["owner_id"].as_str().unwrap();
+        assert_eq!(id.len(), 32);
+        assert!(id.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(check["kind"], kind);
+        assert_eq!(check["scope"], scope);
+        assert_eq!(check["accepted"], true);
+        assert_eq!(check["opened"], true);
+        assert_eq!(check["error"], Value::Null);
+        checks.push(check);
+        if role == "project_rel" {
+            request["owners"]["projects"]["demo"] = json!(path);
+        } else {
+            request["owners"][role] = json!(path);
+        }
+    }
+
+    let report = fixture.report(&request);
+    assert_eq!(report["valid"], true);
+    assert_eq!(report["main_rel"], checks[0]);
+    assert_eq!(report["active_phy"], checks[1]);
+    assert_eq!(report["projects"]["demo"], checks[2]);
+    assert!(fixture.files().iter().all(|path| path.is_file()));
+    assert!(!fixture.state.exists());
+}
+
+fn assert_create_error(output: Output, code: &str) {
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap().trim(),
+        format!("reliquary-hermes-host: {code}")
+    );
+}
+
+#[test]
+fn create_never_overwrites_an_existing_or_concurrently_created_path() {
+    let fixture = Fixture::new();
+    let existing = fixture.scratch.path().join("existing.rel");
+    fs::write(&existing, b"original contents").unwrap();
+    assert_create_error(
+        fixture.create("main_rel", &existing),
+        "owner_already_exists",
+    );
+    assert_eq!(fs::read(existing).unwrap(), b"original contents");
+
+    let path = fixture.scratch.path().join("racing.rel");
+    let (first, second) = std::thread::scope(|scope| {
+        let first = scope.spawn(|| fixture.create("main_rel", &path));
+        let second = scope.spawn(|| fixture.create("project_rel", &path));
+        (first.join().unwrap(), second.join().unwrap())
+    });
+    let (success, failure) = if first.status.success() {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    assert!(success.status.success(), "{:?}", success.stderr);
+    assert_create_error(failure, "owner_already_exists");
+    let check: Value = serde_json::from_slice(&success.stdout).unwrap();
+    assert_eq!(
+        check["owner_id"],
+        json!(Rel::verify(&path).unwrap().owner_id)
+    );
+    assert!(fixture.files().iter().all(|path| path.is_file()));
+    assert!(!fixture.state.exists());
+}
+
+#[test]
+fn create_rejects_invalid_paths_and_unknown_request_fields() {
+    let fixture = Fixture::new();
+    let before = fixture.files();
+    for path in [
+        PathBuf::from("relative.rel"),
+        fixture.scratch.path().join("wrong.phy"),
+        fixture.scratch.path().join("missing").join("owner.rel"),
+        fixture.scratch.path().join("..").join("escape.rel"),
+    ] {
+        assert_create_error(fixture.create("main_rel", &path), "invalid_owner_path");
+    }
+    #[cfg(windows)]
+    for path in [
+        PathBuf::from(r"\\server\share\owner.rel"),
+        fixture.scratch.path().join("AUX.rel"),
+        fixture.scratch.path().join("owner:alternate.rel"),
+    ] {
+        assert_create_error(fixture.create("main_rel", &path), "invalid_owner_path");
+    }
+    let request = json!({
+        "role": "main_rel",
+        "path": fixture.scratch.path().join("extra.rel"),
+        "project_id": "untrusted"
+    });
+    assert_create_error(
+        fixture.run_command("setup-create", &serde_json::to_vec(&request).unwrap()),
+        "invalid_setup_request",
+    );
+    assert_eq!(fixture.files(), before);
 }
 
 #[test]

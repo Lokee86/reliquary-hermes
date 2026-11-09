@@ -8,7 +8,7 @@ use crate::{
 use reliquary_memory::{
     OwnerId, OwnerInfo, OwnerKind, OwnerScope, Phylactery, ProductErrorKind, Rel,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::BTreeMap,
     io::{self, Read},
@@ -49,7 +49,12 @@ struct ConfigCheck {
     error: Option<&'static str>,
 }
 
-#[derive(Clone, Copy)]
+#[path = "setup_create.rs"]
+mod create;
+pub(crate) use create::run as run_create;
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum Role {
     MainRel,
     ActivePhy,
@@ -175,7 +180,7 @@ fn report(request: Request, state_dir: &Path) -> Result<Report, RegistryError> {
     })
 }
 
-pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
+fn read_request<T: DeserializeOwned>(state_dir: &Path) -> Result<T, &'static str> {
     if !state_dir.is_absolute() {
         return Err("invalid_state_directory");
     }
@@ -188,7 +193,14 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
     if raw.len() > MAX_WIRE_BYTES {
         return Err("invalid_setup_request");
     }
-    let request = decode(&raw).map_err(|_| "invalid_setup_request")?;
-    let report = report(request, state_dir).map_err(|error| error.code())?;
-    serde_json::to_writer(io::stdout().lock(), &report).map_err(|_| "setup_response_unavailable")
+    decode(&raw).map_err(|_| "invalid_setup_request")
+}
+
+fn write_report(report: &impl Serialize) -> Result<(), &'static str> {
+    serde_json::to_writer(io::stdout().lock(), report).map_err(|_| "setup_response_unavailable")
+}
+
+pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
+    let request = read_request(state_dir)?;
+    write_report(&report(request, state_dir).map_err(|error| error.code())?)
 }
