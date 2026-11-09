@@ -289,6 +289,14 @@ Use distinct isolated Hermes profile homes for web-first and Desktop-first setup
 
 The Electron probe is `desktop/tests/live-smoke.mjs`. Pass an isolated fixture JSON with `home`, `ownerIds`, an optional `candidate` containing `mainRel`, `activePhy`, and `configPath`, and an optional `expectedConfigPath`. Set `HU05_DESKTOP_EXE`, `HU05_PLAYWRIGHT`, `HU05_DESKTOP_PYTHON`, and `HP01_HERMES_CHECKOUT`. With `HU05_DESKTOP_APP`, the harness supplies isolated Electron paths before importing the unchanged compiled app. The probe supplies deterministic file choices at the Electron dialog boundary and exercises the real picker bridge and profile REST transport.
 
+## HU05 fresh real-model verification
+
+Build the HU05 host and CLI with the [chronological extraction ledger patch](../patches/reliquary-6496b888-chronological-extraction-ledger.patch) applied to an isolated Root worktree at `6496b888721588f52b4371f1df92d7b2622872fc`. The patch limits the initial ledger, its repair passes and the wording model to eligible attribution choices for each user turn. The existing chronology, authority, and exact quote checks still validate the result.
+
+The host manifest resolves `../../Reliquary` relative to its crate. To preserve the current product checkout, stage the patched Root as `<scratch>/Reliquary` and copy the HU05 host manifest, lockfile, `src/`, and `tests/` to `<scratch>/integration/host/`. Build and test the staged host with `--locked --offline` and a target directory inside the HU05 worktree. Build the matching CLI from the patched Root's `cli/Cargo.toml`.
+
+Install the rebuilt host in a fresh isolated Hermes profile and select the existing authenticated development configuration through setup. Send a synthetic standing project rule in one real conversation and verify that the copied source retains the original user turn and that background processing commits a grounded Memory. Check the committed import through `rel source status` and public owner reads. Verify real recall in two distinct sessions across a clean host restart, including exact Memory ID, source snapshot digest, tool and dashboard receipts, and foreign-profile denial.
+
 ## HU05 isolated Desktop mutation checks
 
 Use an isolated Hermes worktree based on `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19`. Apply [the hosted native admission patch](../patches/hermes-v0.23.0-hosted-native-admission.patch) there. Set `HU05_HERMES_HOSTED_CHECKOUT` to that worktree, then run `tests/test_hosted_desktop_api.py` with the process-test binaries and pytest environment above. The probe creates separate launch and secondary profiles, drives the real gateway ticket checks and plugin workers, and verifies native setup and a persisted Memory mutation in each. It also checks cross-profile, replay, Origin, and spoofed-header denial.
