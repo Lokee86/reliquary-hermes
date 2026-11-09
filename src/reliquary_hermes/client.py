@@ -105,6 +105,11 @@ class HostClient:
         self._runtime_id = secrets.token_hex(16)
         self._runtime_scopes: set[str] = set()
 
+    def independent(self) -> "HostClient":
+        """Create a fresh client sharing profile authority but no runtime lease state."""
+        return HostClient(self._state_dir, self._profile_id, self._principal_id, self._token,
+                          binary=self._binary)
+
     def _runtime_call(self, path: str, value: dict) -> dict:
         discovery = self._read_discovery()
         if discovery is None:
@@ -415,6 +420,27 @@ class HostClient:
         except ContractError:
             raise HostUnavailable("invalid_dashboard_response") from None
 
+    def read_source_status(self, session_id: str) -> dict:
+        """Read signed Root import progress for one durable source identity."""
+        session = identifier(session_id)
+        discovery = self._read_discovery()
+        if discovery is None:
+            raise HostUnavailable("host_unavailable")
+        body = canonical({"profile_id": self._profile_id, "principal_id": self._principal_id,
+                          "session_id": session})
+        reply = self._exchange(discovery, "/v1/source/status", body,
+                               time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS)
+        try:
+            result = obj(decode(reply), {"session_id", "state", "receipt", "import_id"})
+            require(result["session_id"] == session and result["state"] in {
+                "none", "staged", "processing", "complete", "failed", "tombstoned", "unavailable"},
+                "invalid_source_status")
+            require(result["receipt"] is None or digest(result["receipt"]), "invalid_source_status")
+            require(result["import_id"] is None or identifier(result["import_id"]), "invalid_source_status")
+            return result
+        except ContractError:
+            raise HostUnavailable("invalid_source_status") from None
+
     def deliver_source_job(self, job) -> str:
         """Deliver only scoped durable outbox work and verify the exact receipt."""
         if job._scope != (self._profile_id, self._principal_id):
@@ -434,9 +460,13 @@ class HostClient:
         envelope_value = {"protocol_version": 1, "profile_id": self._profile_id,
                               "principal_id": self._principal_id, "session_id": job.session_id,
                               "generation": job.generation, "idempotency_key": job.idempotency_key,
-                              "operation": job.kind, "arguments": arguments}
+                              "operation": "manual_snapshot" if job.manual_owner_id is not None else job.kind,
+                              "arguments": arguments}
+        if job.manual_owner_id is not None:
+            envelope_value["target_owner_id"] = job.manual_owner_id
         runtime_lease = job.lease_id or (
-            self._runtime_lease if job.kind == "snapshot" and job.session_id in self._runtime_scopes else None)
+            self._runtime_lease if job.manual_owner_id is None and job.kind == "snapshot"
+            and job.session_id in self._runtime_scopes else None)
         if runtime_lease is not None:
             envelope_value["lease_id"] = runtime_lease
         if job.lease_id is not None:

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+import time
 
 from .source import SourceSnapshot
 from .validation import MAX_WIRE_BYTES, canonical, choice, content_digest, decode, identifier, integer, require, sequence
@@ -23,6 +24,7 @@ _MAX_PENDING_BYTES = 4 * MAX_WIRE_BYTES
 _MAX_CANDIDATES = 8
 _MAX_CANDIDATE_BYTES = _MAX_SNAPSHOT_BYTES
 _APPLICATION_ID = 0x52484F42
+_MAX_MANUAL_ATTEMPTS = 5
 
 
 class SourceOutboxError(RuntimeError):
@@ -41,6 +43,7 @@ class SourceJob:
     _scope: tuple[str, str] = field(repr=False)
     lease_id: str | None = None
     fence_epoch: int | None = None
+    manual_owner_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -65,7 +68,8 @@ _SCHEMA = (
         profile TEXT NOT NULL, principal TEXT NOT NULL, session TEXT NOT NULL,
         generation INTEGER NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('snapshot', 'invalidate', 'terminal')),
         reason TEXT, payload BLOB, snapshot_digest TEXT, last_message_uid TEXT, receipt TEXT,
-        lease_id TEXT, fence_epoch INTEGER,
+        lease_id TEXT, fence_epoch INTEGER, manual_owner_id TEXT,
+        manual_attempts INTEGER NOT NULL DEFAULT 0, manual_error TEXT, manual_retry_at REAL,
         FOREIGN KEY(profile, principal, session) REFERENCES source_state(profile, principal, session)
     )""",
     """CREATE INDEX source_jobs_pending ON source_jobs(profile, principal, session, sequence)
@@ -106,12 +110,27 @@ class SourceOutbox:
                 for statement in _SCHEMA:
                     db.execute(statement)
                 db.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
-                db.execute("PRAGMA user_version = 2")
+                db.execute("PRAGMA user_version = 4")
             elif (application, version) == (_APPLICATION_ID, 1):
                 db.execute("ALTER TABLE source_jobs ADD COLUMN lease_id TEXT")
                 db.execute("ALTER TABLE source_jobs ADD COLUMN fence_epoch INTEGER")
-                db.execute("PRAGMA user_version = 2")
-            elif (application, version) != (_APPLICATION_ID, 2):
+                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_owner_id TEXT")
+                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_attempts INTEGER NOT NULL DEFAULT 0")
+                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_error TEXT")
+                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_retry_at REAL")
+                db.execute("PRAGMA user_version = 4")
+            elif (application, version) == (_APPLICATION_ID, 2):
+                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_owner_id TEXT")
+                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_attempts INTEGER NOT NULL DEFAULT 0")
+                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_error TEXT")
+                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_retry_at REAL")
+                db.execute("PRAGMA user_version = 4")
+            elif (application, version) == (_APPLICATION_ID, 3):
+                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_attempts INTEGER NOT NULL DEFAULT 0")
+                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_error TEXT")
+                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_retry_at REAL")
+                db.execute("PRAGMA user_version = 4")
+            elif (application, version) != (_APPLICATION_ID, 4):
                 raise SourceOutboxError(UNAVAILABLE)
 
     @contextmanager
@@ -144,10 +163,12 @@ class SourceOutbox:
             (*self._scope, session_id),
         )
 
-    def _key(self, kind, session_id, generation, snapshot_digest=None, lease_id=None, fence_epoch=None):
+    def _key(self, kind, session_id, generation, snapshot_digest=None, lease_id=None, fence_epoch=None, manual_owner_id=None):
         parts = ["hermes-source-outbox-v1", *self._scope, session_id, kind, generation, snapshot_digest]
         if lease_id is not None:
             parts.extend(("reconcile", lease_id, fence_epoch))
+        if manual_owner_id is not None:
+            parts.extend(("manual", manual_owner_id))
         return content_digest(parts)
 
     def generation(self, session_id: str) -> int:
@@ -175,7 +196,11 @@ class SourceOutbox:
                 raise SourceOutboxError(TERMINAL)
             if current != generation:
                 raise SourceOutboxError(STALE)
-            if db.execute("SELECT 1 FROM source_jobs WHERE key=?", (key,)).fetchone():
+            existing = db.execute("SELECT manual_attempts, manual_error FROM source_jobs WHERE key=?", (key,)).fetchone()
+            if existing is not None:
+                if existing["manual_error"] is not None and existing["manual_attempts"] < _MAX_MANUAL_ATTEMPTS:
+                    db.execute("UPDATE source_jobs SET manual_error=NULL, manual_retry_at=NULL WHERE key=? AND receipt IS NULL",
+                               (key,))
                 return key
             if lease_id is not None:
                 # Keep only the newest unaccepted full view for this exact observed fence.
@@ -203,12 +228,94 @@ class SourceOutbox:
             self._ensure_state(db, session)
             db.execute(
                 """INSERT INTO source_jobs(key, profile, principal, session, generation, kind,
-                   payload, snapshot_digest, last_message_uid, lease_id, fence_epoch)
-                   VALUES (?, ?, ?, ?, ?, 'snapshot', ?, ?, ?, ?, ?)""",
+                   payload, snapshot_digest, last_message_uid, lease_id, fence_epoch, manual_owner_id)
+                   VALUES (?, ?, ?, ?, ?, 'snapshot', ?, ?, ?, ?, ?, NULL)""",
                 (key, *self._scope, session, generation, payload, snapshot.snapshot_digest, last_uid,
                  lease_id, fence_epoch),
             )
         return key
+
+    def enqueue_manual(self, snapshot: SourceSnapshot, *, owner_id: str, lease_id: str,
+                       fence_epoch: int | None = None) -> str:
+        """Persist an explicitly selected, trusted historical snapshot for the host.
+
+        The owner is a configured REL selected by the authenticated dashboard API.
+        The signed host independently checks that REL and pins the source route.
+        """
+        require(type(snapshot) is SourceSnapshot, "invalid_source_snapshot")
+        require(snapshot.profile_id == self._scope[0], "source_scope_mismatch")
+        snapshot.require_current()
+        owner = identifier(owner_id)
+        lease = identifier(lease_id)
+        epoch = None if fence_epoch is None else integer(fence_epoch, 1, _MAX_GENERATION)
+        session = identifier(snapshot.session_id)
+        generation = self.generation(session)
+        payload, last_uid = _snapshot_payload(snapshot)
+        key = self._key("snapshot", session, generation, snapshot.snapshot_digest,
+                        lease if epoch is not None else None, epoch, owner)
+        with self._transaction(write=True) as db:
+            current, terminal = self._state(db, session)
+            if terminal is not None:
+                raise SourceOutboxError(TERMINAL)
+            if current != generation:
+                raise SourceOutboxError(STALE)
+            prior = db.execute(
+                "SELECT DISTINCT manual_owner_id, snapshot_digest FROM source_jobs WHERE profile=? AND principal=? AND session=? AND manual_owner_id IS NOT NULL",
+                (*self._scope, session),
+            ).fetchall()
+            if any(row[0] != owner or row[1] != snapshot.snapshot_digest for row in prior):
+                raise SourceOutboxError("manual_import_conflict")
+            if db.execute("SELECT 1 FROM source_jobs WHERE key=?", (key,)).fetchone():
+                return key
+            count, size = db.execute(
+                "SELECT COUNT(*), COALESCE(SUM(length(payload)), 0) FROM source_jobs WHERE profile=? AND principal=? AND receipt IS NULL AND kind='snapshot'",
+                self._scope,
+            ).fetchone()
+            if count >= _MAX_PENDING + _MAX_CANDIDATES or size + len(payload) > 4 * _MAX_WIRE_BYTES:
+                raise SourceOutboxError(BACKPRESSURE)
+            self._ensure_state(db, session)
+            db.execute(
+                """INSERT INTO source_jobs(key, profile, principal, session, generation, kind,
+                   payload, snapshot_digest, last_message_uid, lease_id, fence_epoch, manual_owner_id)
+                   VALUES (?, ?, ?, ?, ?, 'snapshot', ?, ?, ?, ?, ?, ?)""",
+                (key, *self._scope, session, generation, payload, snapshot.snapshot_digest, last_uid,
+                 lease, epoch, owner),
+            )
+        return key
+
+    def rebind_manual(self, job: SourceJob, *, lease_id: str, fence_epoch: int | None) -> bool:
+        require(job.manual_owner_id is not None, "not_manual_import")
+        lease = identifier(lease_id)
+        epoch = None if fence_epoch is None else integer(fence_epoch, 1, _MAX_GENERATION)
+        key = self._key("snapshot", job.session_id, job.generation, job.snapshot.snapshot_digest,
+                        lease if epoch is not None else None, epoch, job.manual_owner_id)
+        with self._transaction(write=True) as db:
+            row = self._job_receipt(db, job)
+            if row is None or row["receipt"] is not None:
+                return False
+            db.execute("UPDATE source_jobs SET key=?, lease_id=?, fence_epoch=? WHERE key=? AND receipt IS NULL",
+                       (key, lease, epoch, job.idempotency_key))
+        return True
+
+    def manual_status(self, session_id: str) -> dict | None:
+        """Read the latest manual receipt without creating or waking any work."""
+        session = identifier(session_id)
+        with self._transaction() as db:
+            row = db.execute(
+                """SELECT generation, key, snapshot_digest, receipt, manual_owner_id,
+                          manual_attempts, manual_error, manual_retry_at FROM source_jobs
+                   WHERE profile=? AND principal=? AND session=? AND manual_owner_id IS NOT NULL
+                   ORDER BY sequence DESC LIMIT 1""",
+                (*self._scope, session),
+            ).fetchone()
+        if row is None:
+            return None
+        failed = row["receipt"] is None and row["manual_error"] is not None and row["manual_retry_at"] is None
+        return {"session_id": session, "generation": row["generation"], "idempotency_key": row["key"],
+                "snapshot_digest": row["snapshot_digest"], "receipt": row["receipt"],
+                "owner_id": row["manual_owner_id"], "reason": row["manual_error"],
+                "retryable": row["manual_attempts"] < _MAX_MANUAL_ATTEMPTS,
+                "status": "staged" if row["receipt"] is not None else "failed" if failed else "queued"}
 
     def _fence(self, db, session_id, generation, kind, reason=None):
         self._ensure_state(db, session_id)
@@ -260,9 +367,14 @@ class SourceOutbox:
 
     def next_job(self, session_id: str | None = None, *, terminal_only: bool = False,
                  fence_only: bool = False, runtime_scope: bool = False,
-                 runtime_lease_id: str | None = None) -> SourceJob | None:
+                 runtime_lease_id: str | None = None, manual_only: bool = False) -> SourceJob | None:
         query = "SELECT * FROM source_jobs WHERE profile=? AND principal=? AND receipt IS NULL"
         bindings = self._scope
+        if manual_only:
+            query += " AND manual_owner_id IS NOT NULL AND kind='snapshot' AND "                      "(manual_error IS NULL OR (manual_retry_at IS NOT NULL AND manual_retry_at<=?))"
+            bindings = (*bindings, time.time())
+        else:
+            query += " AND manual_owner_id IS NULL"
         if terminal_only:
             query += " AND kind='terminal'"
         elif fence_only:
@@ -292,16 +404,24 @@ class SourceOutbox:
                 require((snapshot.profile_id, snapshot.session_id, snapshot.snapshot_digest) ==
                         (self._scope[0], session, row["snapshot_digest"]), "source_scope_mismatch")
             lease_id, fence_epoch = row["lease_id"], row["fence_epoch"]
-            require((lease_id is None) == (fence_epoch is None), "invalid_source_job")
+            require(fence_epoch is None or lease_id is not None, "invalid_source_job")
+            manual_owner = row["manual_owner_id"]
+            if manual_owner is None:
+                require((lease_id is None) == (fence_epoch is None), "invalid_source_job")
             if lease_id is not None:
                 identifier(lease_id)
+            if fence_epoch is not None:
                 integer(fence_epoch, 1, _MAX_GENERATION)
+            if manual_owner is not None:
+                manual_owner = identifier(manual_owner)
+                require(kind == "snapshot", "invalid_source_job")
             require(row["key"] == self._key(kind, session, generation, row["snapshot_digest"],
-                                            lease_id, fence_epoch), "invalid_source_job")
+                                            lease_id if fence_epoch is not None else None,
+                                            fence_epoch, manual_owner), "invalid_source_job")
         except ValueError:
             raise SourceOutboxError(UNAVAILABLE) from None
         return SourceJob(kind, row["key"], session, generation, snapshot, payload, row["reason"], self._scope,
-                         lease_id, fence_epoch)
+                         lease_id, fence_epoch, manual_owner)
 
     def _job_receipt(self, db, job):
         if job._scope != self._scope:
@@ -328,7 +448,8 @@ class SourceOutbox:
                 return False
             if row["receipt"] is not None:
                 return row["receipt"] == receipt
-            db.execute("UPDATE source_jobs SET receipt=?, payload=NULL WHERE key=?", (receipt, job.idempotency_key))
+            db.execute("UPDATE source_jobs SET receipt=?, payload=NULL, manual_error=NULL, manual_retry_at=NULL WHERE key=?",
+                       (receipt, job.idempotency_key))
             if job.lease_id is not None:
                 db.execute(
                     """DELETE FROM source_jobs WHERE profile=? AND principal=? AND session=?
@@ -342,6 +463,23 @@ class SourceOutbox:
                        AND receipt IS NULL""",
                     (*self._scope, job.session_id, job.fence_epoch),
                 )
+        return True
+
+    def fail_manual(self, job: SourceJob, reason: str, *, retryable: bool) -> bool:
+        require(job.manual_owner_id is not None, "not_manual_import")
+        reason = identifier(reason)
+        with self._transaction(write=True) as db:
+            row = self._job_receipt(db, job)
+            if row is None or row["receipt"] is not None:
+                return False
+            current = db.execute("SELECT manual_attempts FROM source_jobs WHERE key=?", (job.idempotency_key,)).fetchone()
+            attempts = current[0] + 1
+            if retryable and attempts < _MAX_MANUAL_ATTEMPTS:
+                retry_at = time.time() + min(30, 2 ** (attempts - 1))
+            else:
+                retry_at = None
+            db.execute("UPDATE source_jobs SET manual_attempts=?, manual_error=?, manual_retry_at=? WHERE key=?",
+                       (attempts, reason, retry_at, job.idempotency_key))
         return True
 
     def discard_candidate(self, job: SourceJob) -> bool:

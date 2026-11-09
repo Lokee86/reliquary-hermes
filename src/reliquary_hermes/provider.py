@@ -12,6 +12,7 @@ from .settings import profile_home, profile_setup_lock, read_settings, read_toke
 from .setup import cli_setup
 from .source_capture import capture_snapshot
 from .source_worker import SourceWorker
+from .manual_delivery import ensure_manual_worker
 from .tools import tool_schemas
 from .validation import ContractError, canonical, decode, identifier, require, text
 
@@ -121,6 +122,7 @@ class ReliquaryMemoryProvider(MemoryProvider):
                 self._client = HostClient(
                     settings.state_dir, settings.profile_id, settings.principal_id, token, binary=settings.binary,
                 )
+                ensure_manual_worker(settings, self._client)
                 self._source = SourceWorker(settings, self._client)
                 self._source_profile = settings.profile_id
             except (OSError, HostUnavailable, RuntimeError, ValueError):

@@ -11,8 +11,9 @@ from .validation import ContractError
 
 
 class SourceWorker:
-    def __init__(self, settings, client):
+    def __init__(self, settings, client, *, manual_only=False):
         self._settings = settings
+        self._manual_only = bool(manual_only)
         self._client = client
         self._lock = Lock()
         self._wake = Event()
@@ -133,7 +134,11 @@ class SourceWorker:
                 if self._stopped:
                     return
             job = outbox.next_job(fence_only=True)
+            if job is None and self._manual_only:
+                job = outbox.next_job(manual_only=True)
             active_session = None
+            if job is None and self._manual_only:
+                return
             if job is None:
                 with self._lock:
                     active_session = self._session
@@ -145,22 +150,42 @@ class SourceWorker:
                         job = outbox.next_job(active_session)
             if job is None:
                 return
-            if job.kind == "snapshot" and hasattr(self._client, "runtime_has_scope"):
+            if job.kind == "snapshot" and job.manual_owner_id is None and hasattr(self._client, "runtime_has_scope"):
                 if not self._client.runtime_has_scope(job.session_id):
                     return
             with self._lock:
-                if job.kind == "snapshot" and job.session_id in self._fenced:
+                if job.kind == "snapshot" and job.manual_owner_id is None and job.session_id in self._fenced:
                     return
             if not outbox.is_current(job):
                 continue
             try:
                 receipt = self._client.deliver_source_job(job)
             except HostUnavailable as error:
-                if job.lease_id is not None and str(error) in {
+                if job.manual_owner_id is not None and str(error) in {
+                        "source_reconciliation_required", "runtime_lease_stale"}:
+                    try:
+                        lease_id, reconciliation = self._client.add_runtime_scope(job.session_id)
+                        if outbox.rebind_manual(job, lease_id=lease_id,
+                                                fence_epoch=reconciliation.get(job.session_id)):
+                            continue
+                    except (HostUnavailable, SourceOutboxError, ContractError):
+                        pass
+                if job.lease_id is not None and job.fence_epoch is not None and str(error) in {
                         "source_revision_unreconciled", "source_fence_epoch_stale",
                         "source_terminal", "runtime_lease_stale"}:
                     outbox.discard_candidate(job)
                     self._report(job.session_id, "source_reconciliation_required")
+                    continue
+                if job.manual_owner_id is not None:
+                    retryable = str(error) in {
+                        "source_import_pending", "source_reconciliation_required", "host_unavailable",
+                        "host_timeout", "host_connection_refused", "runtime_lease_stale",
+                        "source_provenance_unavailable",
+                    }
+                    try:
+                        outbox.fail_manual(job, str(error), retryable=retryable)
+                    except (SourceOutboxError, ContractError):
+                        pass
                     continue
                 self._report(job.session_id, str(error))
                 return
