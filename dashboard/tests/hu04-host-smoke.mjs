@@ -15,10 +15,14 @@ try {
   await page.getByRole("link", { name: "Reliquary", exact: true }).click();
   const owners = page.getByRole("combobox", { name: "Browse authorized owner" });
   await owners.waitFor();
-  const values = await owners.locator("option").evaluateAll(options => options.map(option => option.value));
-  assert.deepEqual(new Set(values), new Set(Object.values(evidence.owners)));
+  await owners.click();
+  const menu = page.getByRole("listbox");
+  await menu.getByRole("option", { name: "REL · Main REL", exact: true }).waitFor();
+  assert.deepEqual(new Set(await menu.getByRole("option").allTextContents()), new Set(["REL · Main REL", "REL · Project 1", "PHY · Active user"]));
+  await page.keyboard.press("Escape");
 
   const scope = page.locator(".rly-owner-meta");
+  await scope.getByText(evidence.owners.phy, { exact: true }).waitFor();
   const activity = page.locator(".rly-status-card");
   const session = page.getByRole("textbox", { name: "Hermes session ID" });
   async function lookup(id) {
@@ -28,13 +32,14 @@ try {
   }
 
   await lookup("session-project");
-  assert.equal(await owners.inputValue(), evidence.owners.project);
-  await owners.selectOption(evidence.owners.phy);
+  assert.equal(await owners.innerText(), "REL · Project 1");
+  await owners.click();
+  await menu.getByRole("option", { name: "PHY · Active user", exact: true }).click();
   await scope.getByText("PHY", { exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Create Memory", exact: true }).count(), 0);
 
   await lookup(evidence.sourceSession);
-  assert.equal(await owners.inputValue(), evidence.owners.main);
+  assert.equal(await owners.innerText(), "REL · Main REL");
   if (evidence.archived) {
     await activity.getByText("Tombstoned source", { exact: true }).waitFor();
   } else {

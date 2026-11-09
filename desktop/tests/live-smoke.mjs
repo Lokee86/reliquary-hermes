@@ -7,9 +7,11 @@ const [fixturePath] = process.argv.slice(2);
 assert(fixturePath, "Pass the isolated Desktop acceptance fixture JSON path.");
 const fixture = JSON.parse(await readFile(fixturePath, "utf8"));
 const readOnly = fixture.expectDesktopReadOnly === true;
+const appearance = fixture.appearance;
+assert(appearance === undefined || appearance === "dark" || appearance === "light");
 assert(!readOnly || !fixture.verifyMemoryWrite, "A read-only fixture cannot request native writes.");
 const { HU05_DESKTOP_EXE, HU05_DESKTOP_APP, HU05_PLAYWRIGHT, HP01_HERMES_CHECKOUT,
-  HU05_DESKTOP_PYTHON } = process.env;
+  HU05_DESKTOP_PYTHON, HU07_SCREENSHOT_DIR } = process.env;
 assert(HU05_DESKTOP_EXE && HU05_PLAYWRIGHT && HP01_HERMES_CHECKOUT && HU05_DESKTOP_PYTHON,
   "Set HU05_DESKTOP_EXE, HU05_PLAYWRIGHT, HP01_HERMES_CHECKOUT and HU05_DESKTOP_PYTHON.");
 const { _electron } = await import(pathToFileURL(HU05_PLAYWRIGHT).href);
@@ -45,7 +47,7 @@ if (HU05_DESKTOP_APP) {
 const app = await _electron.launch({
   executablePath: HU05_DESKTOP_EXE,
   args: [...args, "--user-data-dir=" + userData,
-    "--disable-gpu", "--no-sandbox"],
+    "--disable-gpu", "--no-sandbox", "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost"],
   cwd: scratch,
   env: {
     ...env,
@@ -95,15 +97,22 @@ try {
   }
 
   const page = await app.firstWindow({ timeout: 90_000 });
+  await page.route(/^https?:\/\//, (route) => {
+    const { hostname } = new URL(route.request().url());
+    return ["127.0.0.1", "localhost", "[::1]"].includes(hostname) ? route.continue() : route.abort();
+  });
   // Use the ordinary plugin opt-in and "choose a provider later" in the isolated renderer.
-  await page.addInitScript(() => {
+  await page.addInitScript((mode) => {
     localStorage.setItem("hermes.desktop.pluginDecisions.v2", JSON.stringify({ "reliquary-hermes": true }));
     localStorage.setItem("hermes-onboarding-skipped-v1", "1");
-  });
+    if (mode) localStorage.setItem("hermes-desktop-mode-v1", mode);
+  }, appearance);
   await page.reload();
   await page.getByRole("button", { name: "Reliquary", exact: true }).click({ timeout: 90_000 });
   const root = page.locator(".rly-desktop");
   await root.waitFor();
+  if (appearance) await page.waitForFunction((mode) => document.documentElement.dataset.hermesMode === mode, appearance);
+  if (HU07_SCREENSHOT_DIR) await mkdir(HU07_SCREENSHOT_DIR, { recursive: true });
 
   const connect = root.getByRole("button", { name: "Connect Reliquary", exact: true });
   const compatibilityNotice = root.getByRole("note").filter({
@@ -121,11 +130,17 @@ try {
     await browse("Active PHY path").click();
     assert.equal(await input("Main REL path").inputValue(), mainRel);
     assert.equal(await input("Active PHY path").inputValue(), activePhy);
+    const main = input("Main REL path");
+    assert.equal(await main.getAttribute("data-slot"), "input");
+    await main.press("Tab");
+    assert.equal(await browse("Main REL path").evaluate((button) => button.matches(":focus-visible")), true);
+    assert.equal(await root.evaluate((element) => element.scrollWidth <= element.clientWidth + 1), true);
     if (configPath) {
       await browse("Reliquary config path (optional)").click();
       assert.equal(await input("Reliquary config path (optional)").inputValue(), configPath);
     }
     const validate = root.getByRole("button", { name: "Validate", exact: true });
+    if (HU07_SCREENSHOT_DIR) await page.screenshot({ path: join(HU07_SCREENSHOT_DIR, `desktop-setup-${appearance}.png`) });
     if (readOnly) {
       assert(await validate.isDisabled());
       assert(await connect.isDisabled());
@@ -155,14 +170,20 @@ async function browseOwners(root, page, connect, compatibilityNotice) {
 
   const owners = root.getByRole("combobox", { name: "Browse authorized owner" });
   await owners.waitFor({ timeout: 45_000 });
-  const ids = await owners.locator("option").evaluateAll((options) => options.map((option) => option.value));
-  assert.deepEqual(new Set(ids), new Set(fixture.ownerIds));
+  await root.locator(".rly-owner-meta").getByText(fixture.ownerIds[1], { exact: true }).waitFor();
+  await owners.click();
+  const menu = page.getByRole("listbox");
+  const main = menu.getByRole("option", { name: "REL · Main REL", exact: true });
+  await main.waitFor();
+  const names = ["REL · Main REL", "PHY · Active user"];
+  for (let project = 1; project <= fixture.ownerIds.length - 2; project += 1) names.push(`REL · Project ${project}`);
+  assert.deepEqual(new Set(await menu.getByRole("option").allTextContents()), new Set(names));
+  await main.click();
   assert.equal(await connect.count(), 0);
   if (fixture.expectedConfigPath) {
     await root.locator(".rly-owner-meta").getByText(fixture.expectedConfigPath, { exact: true }).waitFor();
   }
   if (readOnly) {
-    await owners.selectOption(fixture.ownerIds[0]);
     const list = root.getByRole("list", { name: "Memories in this page" });
     await root.getByRole("button", { name: "List page", exact: true }).click();
     await list.waitFor();
@@ -218,7 +239,7 @@ async function browseOwners(root, page, connect, compatibilityNotice) {
     await list.getByRole("button", { name: new RegExp(title) }).click();
     await expectBody(body);
     const retire = formFor("Retire superseded Memory");
-    await retire.getByRole("checkbox", { name: "Confirm terminal retirement of this revision" }).check();
+    await retire.getByRole("checkbox", { name: "Confirm terminal retirement of this revision" }).click();
     await retire.getByRole("button", { name: "Retire Memory", exact: true }).click();
     const retirementResult = retire.locator(".rly-write-success, .rly-write-error");
     // The retirement form can unmount when the selected Memory becomes terminal.
@@ -231,9 +252,14 @@ async function browseOwners(root, page, connect, compatibilityNotice) {
     await inspector.getByText("Tombstoned Memory", { exact: true }).waitFor();
     console.log("Desktop Memory create, correction, and retirement passed.");
   }
-  await owners.selectOption(fixture.ownerIds[1]);
+  await owners.click();
+  await menu.getByRole("option", { name: "PHY · Active user", exact: true }).click();
   await root.getByText("PHY", { exact: true }).first().waitFor();
   assert.equal(await root.getByRole("button", { name: "Create Memory", exact: true }).count(), 0);
+  if (HU07_SCREENSHOT_DIR) {
+    await root.getByText("Loading graph…", { exact: true }).waitFor({ state: "hidden" });
+    await page.screenshot({ path: join(HU07_SCREENSHOT_DIR, `desktop-configured-${appearance}.png`) });
+  }
   console.log(fixture.candidate ? "Desktop first-run setup and owner management passed."
     : "Desktop reopened the configured profile and browsed the same owners.");
 }

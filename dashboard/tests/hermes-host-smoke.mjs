@@ -14,6 +14,7 @@ const { chromium } = await import(pathToFileURL(path.resolve(playwrightModule)).
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 try {
   const page = await browser.newPage({ baseURL: base.origin, acceptDownloads: false });
+  await page.route("**/*", (route) => new URL(route.request().url()).origin === base.origin ? route.continue() : route.abort());
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.addInitScript(() => {
@@ -69,23 +70,31 @@ try {
     const memoryButtons = page.locator(".rly-memory-button");
     const listMode = page.getByRole("button", { name: "List page", exact: true });
     const graphMode = page.getByRole("button", { name: "Graph page", exact: true });
+    const menu = page.getByRole("listbox");
+    async function choose(control, name) {
+      await control.click();
+      await menu.getByRole("option", { name, exact: true }).click();
+    }
     await rel.waitFor();
-    assert.equal(await rel.inputValue(), "fixture-rel");
-    assert.equal(await session.inputValue(), "fixture-session");
-    assert.equal(await activePhy.inputValue(), "fixture-phy");
+    assert.equal(await rel.innerText(), "General REL");
+    assert.equal(await session.innerText(), "fixture-session");
+    assert.equal(await activePhy.innerText(), "Private PHY");
 
-    await activePhy.selectOption("fixture-alt-phy");
+    await choose(activePhy, "Alternate Private PHY");
     await page.getByText("fixture-alt-phy", { exact: true }).waitFor();
-    assert.equal(await rel.inputValue(), "fixture-rel");
-    await browse.selectOption("PHY");
+    assert.equal(await rel.innerText(), "General REL");
+    await choose(browse, "Active PHY");
     await page.getByText("No graph nodes on this page.", { exact: true }).waitFor();
     await listMode.click();
     await page.getByText("No Memories match this page.", { exact: true }).waitFor();
-    await browse.selectOption("REL");
-    await activePhy.selectOption("");
+    await choose(browse, "Selected REL");
+    await choose(activePhy, "None");
     await page.getByText("Reliquary user ID", { exact: true }).waitFor();
-    assert.equal(await browse.locator('option[value="PHY"]').count(), 0);
-    await activePhy.selectOption("fixture-phy");
+    await browse.click();
+    await menu.getByRole("option", { name: "Selected REL", exact: true }).waitFor();
+    assert.equal(await menu.getByRole("option", { name: "Active PHY", exact: true }).count(), 0);
+    await page.keyboard.press("Escape");
+    await choose(activePhy, "Private PHY");
     await page.getByText("fixture-phy", { exact: true }).waitFor();
 
     await graphNodes.first().focus();
@@ -139,10 +148,10 @@ try {
     await page.locator(".rly-community-members").getByRole("button", { name: "fixture-rel-memory", exact: true }).click();
     await inspector.getByText("fixture-rel-memory", { exact: true }).waitFor();
 
-    await session.selectOption("fixture-project-session");
+    await choose(session, "fixture-project-session");
     await page.getByText("Tombstoned source", { exact: true }).waitFor();
-    assert.equal(await rel.inputValue(), "fixture-project-rel");
-    assert.equal(await activePhy.inputValue(), "fixture-phy");
+    assert.equal(await rel.innerText(), "Project REL");
+    assert.equal(await activePhy.innerText(), "Private PHY");
     assert.doesNotMatch(await inspector.innerText(), /fixture-rel-memory/);
 
     await listMode.click();
@@ -155,10 +164,10 @@ try {
     assert.equal(await inspector.locator("img, script").count(), 0);
     assert.equal(await page.evaluate(() => window.hu01Alerts), 0);
 
-    await rel.selectOption("fixture-rel");
+    await choose(rel, "General REL");
     await page.getByText("Mapped REL", { exact: true }).waitFor();
-    assert.equal(await session.inputValue(), "fixture-session");
-    assert.equal(await activePhy.inputValue(), "fixture-phy");
+    assert.equal(await session.innerText(), "fixture-session");
+    assert.equal(await activePhy.innerText(), "Private PHY");
     assert.doesNotMatch(await inspector.innerText(), /fixture-project-rel-memory/);
     assert.deepEqual(errors, []);
     console.log(`Reliquary HU02 fixture tab passed with Hermes SDK 1.1.0 and host React ${sdk.react}.`);
