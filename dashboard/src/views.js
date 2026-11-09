@@ -64,7 +64,7 @@
     return h("ul", { className: "rly-memory-list", "aria-label": "Memories in this page" },
       ...items.map((memory) => h("li", { key: memory.memory_id },
         h(Button, {
-          type: "button", className: "rly-memory-button", "aria-current": selected === memory.memory_id ? "true" : undefined,
+          type: "button", className: "rly-memory-button", "aria-current": selected === memory.memory_id,
           onClick: () => onSelect(memory.memory_id), onKeyDown: navigateList,
         },
           h("strong", null, memory.title ?? "Memory " + memory.memory_id),

@@ -2,8 +2,8 @@
 
 (function () {
 function createReliquarySurface(options) {
-  const { React, hooks = React } = options;
-  const runtime = { crypto: globalThis.crypto, ReliquaryDashboardHost: { React, hooks } };
+  const { React, hooks = React, components } = options;
+  const runtime = { crypto: globalThis.crypto, ReliquaryDashboardHost: { React, hooks, components } };
   (function (globalThis, module) {
 (function (root) {
   "use strict";
@@ -339,11 +339,9 @@ function createReliquarySurface(options) {
 (function (root) {
   "use strict";
 
-  /** @param {string} type @param {Record<string,unknown>|null} props @param {...unknown} children */
-  function h(type, props, ...children) {
-    const sdk = root.ReliquaryDashboardHost;
-    return sdk.React.createElement(type, props, ...children);
-  }
+  const { React, components } = root.ReliquaryDashboardHost;
+  const h = React.createElement;
+  const { Button, Select } = components;
 
   /** @param {string} label @param {string} value */
   function meta(label, value) {
@@ -364,31 +362,28 @@ function createReliquarySurface(options) {
     if (state.status === "stale_cursor" && resync) {
       return h("div", { role: "alert" },
         h("p", null, "This " + label + " page expired."),
-        h("button", { type: "button", onClick: () => { resync(); retry(); } }, "Return to first " + label + " page"));
+        h(Button, { type: "button", onClick: () => { resync(); retry(); } }, "Return to first " + label + " page"));
     }
     const reason = state.status === "unavailable" || state.status === "unsupported"
       ? label + " unavailable."
       : "Could not load " + label + " (" + state.code + ").";
     return h("div", { role: "status", className: "rly-read-message" },
       h("p", null, reason),
-      state.retryable && h("button", { type: "button", onClick: retry }, "Retry " + label));
+      state.retryable && h(Button, { type: "button", onClick: retry }, "Retry " + label));
   }
 
   /** @param {string} label @param {import("../types").CursorState} cursor @param {string | null} next */
   function pager(label, cursor, next) {
     if (!cursor.current && !next) return null;
     return h("div", { className: "rly-pager" },
-      h("button", { type: "button", disabled: cursor.current === null, onClick: cursor.previous }, "Previous " + label + " page"),
-      h("button", { type: "button", disabled: next === null, onClick: () => { if (next) cursor.next(next); } }, "Next " + label + " page"));
+      h(Button, { type: "button", disabled: cursor.current === null, onClick: cursor.previous }, "Previous " + label + " page"),
+      h(Button, { type: "button", disabled: next === null, onClick: () => { if (next) cursor.next(next); } }, "Next " + label + " page"));
   }
 
-  /** @param {string} label @param {string} value @param {{value:string,label:string}[]} options @param {(value:string)=>void} onChange */
-  function select(label, value, options, onChange) {
+  /** @param {string} label @param {string} value @param {{value:string,label:string}[]} options @param {(value:string)=>void} onValueChange @param {boolean} [disabled] */
+  function select(label, value, options, onValueChange, disabled) {
     return h("label", { className: "rly-field" }, h("span", null, label),
-      h("select", {
-        value,
-        onChange: (/** @type {{currentTarget: HTMLSelectElement}} */ event) => onChange(event.currentTarget.value),
-      }, ...options.map((option) => h("option", { key: option.value, value: option.value }, option.label))));
+      h(Select, { label, value, options, onValueChange, disabled }));
   }
 
   /** @param {{key:string,currentTarget:HTMLButtonElement,preventDefault():void}} event */
@@ -406,8 +401,8 @@ function createReliquarySurface(options) {
     if (!items.length) return h("p", { className: "rly-empty" }, "No Memories match this page.");
     return h("ul", { className: "rly-memory-list", "aria-label": "Memories in this page" },
       ...items.map((memory) => h("li", { key: memory.memory_id },
-        h("button", {
-          type: "button", className: "rly-memory-button", "aria-current": selected === memory.memory_id ? "true" : undefined,
+        h(Button, {
+          type: "button", className: "rly-memory-button", "aria-current": selected === memory.memory_id,
           onClick: () => onSelect(memory.memory_id), onKeyDown: navigateList,
         },
           h("strong", null, memory.title ?? "Memory " + memory.memory_id),
@@ -463,11 +458,11 @@ function createReliquarySurface(options) {
         h("h3", null, "Body"),
         h("p", { className: "rly-body" }, body.content ?? "Body availability is " + body.availability + "."))),
       h("h3", null, "Revision history"),
-      revision && h("button", { type: "button", onClick: () => setRevision(null) }, "Show current revision"),
+      revision && h(Button, { type: "button", onClick: () => setRevision(null) }, "Show current revision"),
       readContent("history", history, ({ revisions }) => h("div", null,
         revisions.items.length
           ? h("ul", { className: "rly-history" }, ...revisions.items.map((row) => h("li", { key: row.revision },
-            h("button", { type: "button", "aria-pressed": row.revision === exactRevision,
+            h(Button, { type: "button", "aria-pressed": row.revision === exactRevision,
               onClick: () => setRevision(row.revision) }, "Revision " + row.revision + " · " + row.availability))))
           : h("p", { className: "rly-muted" }, "No retained revisions on this page."),
         pager("history", cursor, revisions.next_cursor)), cursor.reset),
@@ -498,6 +493,8 @@ function createReliquarySurface(options) {
 
 (function (root) {
   "use strict";
+
+  const { Button } = root.ReliquaryDashboardHost.components;
 
   /** @typedef {import("../types").GraphViewProps} GraphViewProps */
   /** @typedef {import("../types").CommunityViewProps} CommunityViewProps */
@@ -587,7 +584,7 @@ function createReliquarySurface(options) {
             h("dt", null, "Type"), h("dd", null, selectedNode.kind),
             h("dt", null, "Origin"), h("dd", null, selectedNode.origin),
             h("dt", null, "Revision / cut"), h("dd", null, `${selectedNode.revision} · ${selectedNode.cut}`)),
-          h("button", { type: "button", onClick: () => props.onExpand(selectedNode.node_id) }, "Expand neighborhood")),
+          h(Button, { type: "button", onClick: () => props.onExpand(selectedNode.node_id) }, "Expand neighborhood")),
         selectedEdge && h("div", { className: "rly-graph-selection-details" },
           h("h3", null, `${selectedEdge.kind} connection`),
           h("dl", null,
@@ -603,13 +600,13 @@ function createReliquarySurface(options) {
     const h = React.createElement;
     const { communities, members, selected, onCommunity, onMemory, onNextCommunities, onNextMembers } = props;
     const communityRows = communities.items.map((community) => h("li", { key: community.community_id },
-      h("button", {
+      h(Button, {
         type: "button", className: `rly-community-button${selected?.community_id === community.community_id ? " is-selected" : ""}`,
         "aria-pressed": selected?.community_id === community.community_id, onClick: () => onCommunity(community),
       }, h("strong", null, community.name ?? `Community ${community.community_id}`),
       h("span", null, `${community.member_count} members · ${community.name_origin}`))));
     const memberRows = members?.items.map((memoryId) => h("li", { key: memoryId },
-      h("button", { type: "button", onClick: () => onMemory(memoryId) }, memoryId))) ?? [];
+      h(Button, { type: "button", onClick: () => onMemory(memoryId) }, memoryId))) ?? [];
     const nextCommunity = communities.next_cursor;
     const nextMember = members?.next_cursor;
 
@@ -618,14 +615,14 @@ function createReliquarySurface(options) {
         h("div", { className: "rly-community-list-pane" },
           communityRows.length ? h("ul", { className: "rly-community-list" }, ...communityRows)
             : h("p", { className: "rly-muted" }, "No communities on this page."),
-          nextCommunity && h("button", { type: "button", onClick: () => onNextCommunities(nextCommunity) }, "Next community page")),
+          nextCommunity && h(Button, { type: "button", onClick: () => onNextCommunities(nextCommunity) }, "Next community page")),
         h("div", { className: "rly-community-members-pane" },
           h("h3", null, "Members"),
           selected && h("p", { className: "rly-muted" }, `Community generation ${selected.generation}`),
           memberRows.length ? h("ul", { className: "rly-community-members" }, ...memberRows) : null,
           members && !memberRows.length && h("p", { className: "rly-muted" }, "No members on this page."),
           !selected && h("p", { className: "rly-muted" }, "Choose a community to inspect its members."),
-          nextMember && h("button", { type: "button", onClick: () => onNextMembers(nextMember) }, "Next member page"))));
+          nextMember && h(Button, { type: "button", onClick: () => onNextMembers(nextMember) }, "Next member page"))));
   }
 
   root.ReliquaryDashboardGraph = { GraphView, CommunityView };
@@ -637,6 +634,7 @@ function createReliquarySurface(options) {
 
   const sdk = root.ReliquaryDashboardHost;
   const h = sdk.React.createElement;
+  const { Button, Input, Textarea, Checkbox } = sdk.components;
   const { useState, useEffect, useRef } = sdk.hooks;
   const { useRead } = root.ReliquaryDashboardState;
 
@@ -660,7 +658,7 @@ function createReliquarySurface(options) {
     return h("div", { className: "rly-write-error", role: "status" },
       h("p", null, conflict ? "The owner changed after this draft was loaded." :
         `Could not save this draft (${outcome.code}). The draft and request key are preserved.`),
-      conflict && onRefresh && h("button", { type: "button", onClick: onRefresh }, "Refresh owner data"),
+      conflict && onRefresh && h(Button, { type: "button", onClick: onRefresh }, "Refresh owner data"),
       !conflict && outcome.retryable && h("p", { className: "rly-muted" }, "Submit again to retry this same draft."));
   }
 
@@ -719,15 +717,15 @@ function createReliquarySurface(options) {
         h("p", { className: "rly-write-conflict", role: "status" },
           `Draft started from revision ${draft.baseRevision}; latest revision is ${detail.body.revision}. Review before resubmitting.`),
       detail && detail.memory.revision !== detail.body.revision && h("p", { className: "rly-muted" }, "The exact body revision differs from the summary revision."),
-      h("label", { className: "rly-field" }, h("span", null, "Replacement title"), h("input", {
+      h("label", { className: "rly-field" }, h("span", null, "Replacement title"), h(Input, {
         value: draft.title, maxLength: 128,
         onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => edit("title", event.currentTarget.value),
       })),
-      h("label", { className: "rly-field" }, h("span", null, "Replacement body"), h("textarea", {
+      h("label", { className: "rly-field" }, h("span", null, "Replacement body"), h(Textarea, {
         value: draft.body, maxLength: 32768, rows: 5,
         onChange: (/** @type {{currentTarget:HTMLTextAreaElement}} */ event) => edit("body", event.currentTarget.value),
       })),
-      h("button", { type: "submit", disabled: pending || refreshing || outcome?.status === "ok" || !detail || detail.memory.lifecycle !== "active" ||
+      h(Button, { type: "submit", disabled: pending || refreshing || outcome?.status === "ok" || !detail || detail.memory.lifecycle !== "active" ||
         detail.body.availability !== "available" ||
         !draft.initialized || !draft.title.trim() || !draft.body.trim() }, pending ? "Saving…" : "Save correction"),
       resultMessage(outcome, onRefresh));
@@ -779,23 +777,23 @@ function createReliquarySurface(options) {
     return h("section", { className: "rly-memory-write-panel", "aria-label": "Memory management" },
       canCreate && h("form", { className: "rly-memory-write-form", onSubmit: submitCreate },
         h("h3", null, "Create user-origin Memory"),
-        h("label", { className: "rly-field" }, h("span", null, "Title"), h("input", {
+        h("label", { className: "rly-field" }, h("span", null, "Title"), h(Input, {
           value: draft.title, maxLength: 128,
           onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => edit("title", event.currentTarget.value),
         })),
-        h("label", { className: "rly-field" }, h("span", null, "Body"), h("textarea", {
+        h("label", { className: "rly-field" }, h("span", null, "Body"), h(Textarea, {
           value: draft.body, maxLength: 32768, rows: 5,
           onChange: (/** @type {{currentTarget:HTMLTextAreaElement}} */ event) => edit("body", event.currentTarget.value),
         })),
-        h("label", { className: "rly-field" }, h("span", null, "Category"), h("input", {
+        h("label", { className: "rly-field" }, h("span", null, "Category"), h(Input, {
           value: draft.category, maxLength: 128,
           onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => edit("category", event.currentTarget.value),
         })),
-        h("label", { className: "rly-field" }, h("span", null, "Memory type"), h("input", {
+        h("label", { className: "rly-field" }, h("span", null, "Memory type"), h(Input, {
           value: draft.memory_type, maxLength: 128,
           onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => edit("memory_type", event.currentTarget.value),
         })),
-        h("button", { type: "submit", disabled: pending || refreshing || outcome?.status === "ok" || !draft.title.trim() || !draft.body.trim() || !draft.category.trim() || !draft.memory_type.trim() },
+        h(Button, { type: "submit", disabled: pending || refreshing || outcome?.status === "ok" || !draft.title.trim() || !draft.body.trim() || !draft.category.trim() || !draft.memory_type.trim() },
           pending ? "Saving…" : "Create Memory"), resultMessage(outcome, onRefresh)),
       canEdit && memoryId && h(CorrectionForm, { key: memoryId, client, scope, memoryId,
         detail: detail.state.status === "ok" ? detail.state.value : null,
@@ -843,10 +841,10 @@ function createReliquarySurface(options) {
     return h("form", { className: "rly-memory-write-form", onSubmit: submit },
       h("h3", null, "Retire superseded Memory"),
       h("label", { className: "rly-confirmation" },
-        h("input", { type: "checkbox", checked: confirmed, disabled: pending,
-          onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => setConfirmed(event.currentTarget.checked),
+        h(Checkbox, { checked: confirmed, disabled: pending,
+          onCheckedChange: (/** @type {boolean | "indeterminate"} */ checked) => setConfirmed(checked === true),
         }), " Confirm terminal retirement of this revision"),
-      h("button", { type: "submit", disabled: !confirmed || pending || refreshing || outcome?.status === "ok" },
+      h(Button, { type: "submit", disabled: !confirmed || pending || refreshing || outcome?.status === "ok" },
         pending ? "Saving…" : "Retire Memory"),
       resultMessage(outcome, onRefresh));
   }
@@ -866,7 +864,9 @@ function createReliquarySurface(options) {
 
   const sdk = root.ReliquaryDashboardHost;
   const h = sdk.React.createElement;
+  const { Button, Input } = sdk.components;
   const { useState, useEffect, useRef } = sdk.hooks;
+  const { select } = root.ReliquaryDashboardViews;
 
   function requestKey() {
     const bytes = new Uint8Array(16);
@@ -890,13 +890,13 @@ function createReliquarySurface(options) {
       return h("div", { className: "rly-write-success", role: "status" },
         h("p", null, "Saved. Receipt ", outcome.value.result.receipt_id,
           ". Refresh owner data to inspect the committed change."),
-        onRefresh && h("button", { type: "button", onClick: onRefresh }, "Refresh owner data"));
+        onRefresh && h(Button, { type: "button", onClick: onRefresh }, "Refresh owner data"));
     }
     const conflict = outcome.status === "conflict" || outcome.status === "stale_cursor";
     return h("div", { className: "rly-write-error", role: "status" },
       h("p", null, conflict ? "The owner changed after this draft was loaded."
         : "Could not save this draft (", safeCode(outcome.code), "). The draft and request key are preserved."),
-      conflict && onRefresh && h("button", { type: "button", onClick: onRefresh }, "Refresh owner data"),
+      conflict && onRefresh && h(Button, { type: "button", onClick: onRefresh }, "Refresh owner data"),
       !conflict && outcome.retryable && h("p", { className: "rly-muted" }, "Submit again to retry this same draft."));
   }
 
@@ -992,44 +992,27 @@ function createReliquarySurface(options) {
     }
 
     if (!canEdit) return null;
+    const memoryOptions = [{ value: "", label: "Choose a Memory" },
+      ...nodes.map((node) => ({ value: node.node_id, label: node.label }))];
     return h("section", { className: "rly-graph-write-panel", "aria-label": "User association" },
       h("h3", null, "User association"),
       h("p", { className: "rly-muted" }, "Changes are checked against the current owner cut and Memory revisions."),
       h("form", { className: "rly-memory-write-form", onSubmit: submit },
-        h("label", { className: "rly-field" },
-          h("span", null, "Action"),
-          h("select", {
-            value: mode, disabled: pending,
-            onChange: (/** @type {{currentTarget:HTMLSelectElement}} */ event) => changed(() => {
-              setMode(/** @type {"link"|"unlink"} */ (event.currentTarget.value));
-              setOutcome(null);
-            }),
-          }, h("option", { value: "link" }, "Link two Memories"),
-          h("option", { value: "unlink" }, "Unlink an existing user association"))),
+        select("Action", mode, [
+          { value: "link", label: "Link two Memories" },
+          { value: "unlink", label: "Unlink an existing user association" },
+        ], (value) => changed(() => setMode(/** @type {"link"|"unlink"} */ (value))), pending),
         mode === "link"
           ? h("div", null,
-            h("label", { className: "rly-field" }, h("span", null, "From Memory"), h("select", {
-              value: sourceId, disabled: pending,
-              onChange: (/** @type {{currentTarget:HTMLSelectElement}} */ event) =>
-                changed(() => setSourceId(event.currentTarget.value)),
-            }, h("option", { value: "" }, "Choose a Memory"),
-            ...nodes.map((node) => h("option", { key: node.memory_id, value: node.memory_id }, node.label)))),
-            h("label", { className: "rly-field" }, h("span", null, "To Memory"), h("select", {
-              value: targetId, disabled: pending,
-              onChange: (/** @type {{currentTarget:HTMLSelectElement}} */ event) =>
-                changed(() => setTargetId(event.currentTarget.value)),
-            }, h("option", { value: "" }, "Choose a Memory"),
-            ...nodes.map((node) => h("option", { key: node.memory_id, value: node.memory_id }, node.label)))),
+            select("From Memory", sourceId, memoryOptions, (value) => changed(() => setSourceId(value)), pending),
+            select("To Memory", targetId, memoryOptions, (value) => changed(() => setTargetId(value)), pending),
             duplicate && h("p", { className: "rly-muted" }, "These Memories already have an active user association."),
           )
-          : h("label", { className: "rly-field" }, h("span", null, "Active user association"), h("select", {
-            value: edgeId, disabled: pending,
-            onChange: (/** @type {{currentTarget:HTMLSelectElement}} */ event) =>
-              changed(() => setEdgeId(event.currentTarget.value)),
-          }, h("option", { value: "" }, "Choose an association"),
-          ...edges.map((edge) => h("option", { key: edge.edge_id, value: edge.edge_id },
-            `${byId.get(edge.source_id)?.label} → ${byId.get(edge.target_id)?.label}`)))),
-        h("button", { type: "submit", disabled: !canSubmit },
+          : select("Active user association", edgeId, [{ value: "", label: "Choose an association" },
+            ...edges.map((edge) => ({ value: edge.edge_id,
+              label: `${byId.get(edge.source_id)?.label} → ${byId.get(edge.target_id)?.label}` }))],
+          (value) => changed(() => setEdgeId(value)), pending),
+        h(Button, { type: "submit", disabled: !canSubmit },
           pending ? "Saving…" : mode === "link" ? "Link Memories" : "Unlink association"),
         h(OutcomeMessage, { outcome, onRefresh })));
   }
@@ -1076,14 +1059,14 @@ function createReliquarySurface(options) {
       h("form", { className: "rly-memory-write-form", onSubmit: submit },
         h("h3", null, "Rename selected community"),
         !community && h("p", { className: "rly-muted" }, "Current community metadata is unavailable."),
-        h("label", { className: "rly-field" }, h("span", null, "Community name"), h("input", {
+        h("label", { className: "rly-field" }, h("span", null, "Community name"), h(Input, {
           value: name, maxLength: 128, disabled: pending,
           onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => {
             const value = event.currentTarget.value;
             setName(value); setDraftKey(requestKey()); setOutcome(null);
           },
         })),
-        h("button", { type: "submit", disabled: pending || refreshing || !community || !name.trim() },
+        h(Button, { type: "submit", disabled: pending || refreshing || !community || !name.trim() },
           pending ? "Saving…" : "Save community name"),
         h(OutcomeMessage, { outcome, onRefresh })));
   }
@@ -1102,6 +1085,7 @@ function createReliquarySurface(options) {
   /** @param {any} type @param {any} props @param {...any} children */
   const h = (type, props, ...children) => root.ReliquaryDashboardHost.React.createElement(type, props, ...children);
   const { useState, useEffect } = root.ReliquaryDashboardHost.hooks;
+  const { Button, Input } = root.ReliquaryDashboardHost.components;
   const { useRead, useCursor } = root.ReliquaryDashboardState;
   const { meta, readContent, select, pager, MemoryList, Inspector } = root.ReliquaryDashboardViews;
   const { GraphView, CommunityView } = root.ReliquaryDashboardGraph;
@@ -1113,7 +1097,7 @@ function createReliquarySurface(options) {
   function Filters({ filters, communities, onChange }) {
     /** @param {"query"|"category"|"memory_type"} key @param {string} label */
     function input(key, label) {
-      return h("label", { className: "rly-field" }, h("span", null, label), h("input", {
+      return h("label", { className: "rly-field" }, h("span", null, label), h(Input, {
         type: key === "query" ? "search" : "text", value: filters[key] ?? "",
         maxLength: key === "query" ? 1024 : 128,
         onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => {
@@ -1132,7 +1116,7 @@ function createReliquarySurface(options) {
         select("Community", filters.community_id ?? "", [{ value: "", label: "Any" },
           ...communities.map((item) => ({ value: item.community_id, label: item.name ?? item.community_id }))],
         (value) => onChange({ ...filters, community_id: value || null })),
-        h("button", { type: "button", onClick: () => onChange(initialFilters) }, "Clear filters"))));
+        h(Button, { type: "button", onClick: () => onChange(initialFilters) }, "Clear filters"))));
   }
 
   /** Shared HU02 owner content. Scope is always bound to an admitted owner.
@@ -1201,10 +1185,10 @@ function createReliquarySurface(options) {
     return h("div", { className: "rly-owner-content" },
       h("main", { className: "rly-main", "aria-label": "Memory graph or list" },
         h("div", { className: "rly-view-switch", role: "group", "aria-label": "Memory view" },
-          h("button", { type: "button", "aria-pressed": mode === "graph", onClick: () => setMode("graph") }, "Graph page"),
-          h("button", { type: "button", "aria-pressed": mode === "list", onClick: () => setMode("list") }, "List page")),
+          h(Button, { type: "button", "aria-pressed": mode === "graph", onClick: () => setMode("graph") }, "Graph page"),
+          h(Button, { type: "button", "aria-pressed": mode === "list", onClick: () => setMode("list") }, "List page")),
         mode === "graph" ? h("section", { "aria-label": "Memory graph" },
-          (seedId || graphCommunity) && h("button", { type: "button", onClick: () => {
+          (seedId || graphCommunity) && h(Button, { type: "button", onClick: () => {
             graphCursor.reset(); setSelection(null); setSeedId(null); setGraphCommunity(null);
           } }, "Reset graph"),
           readContent("graph", graph, graphContent, graphCursor.reset),
@@ -1223,12 +1207,12 @@ function createReliquarySurface(options) {
               onNextCommunities: (/** @type {string} */ cursor) => { changeCommunity(null); communitiesCursor.next(cursor); },
               onNextMembers: membersCursor.next,
             }),
-            communitiesCursor.current && h("button", { type: "button", onClick: () => {
+            communitiesCursor.current && h(Button, { type: "button", onClick: () => {
               changeCommunity(null); communitiesCursor.previous();
             } }, "Previous community page"),
-            membersCursor.current && h("button", { type: "button", onClick: membersCursor.previous }, "Previous member page"),
+            membersCursor.current && h(Button, { type: "button", onClick: membersCursor.previous }, "Previous member page"),
             community && members.state.status !== "ok" && readContent("community members", members, () => null, membersCursor.reset),
-            community && grants.graph && h("button", { type: "button", onClick: () => {
+            community && grants.graph && h(Button, { type: "button", onClick: () => {
               graphCursor.reset(); setSeedId(null); setSelection(null); setGraphCommunity(community.community_id); setMode("graph");
             } }, "Show community in graph")), communitiesCursor.reset),
           write && community && h(CommunityRenamePanel, { key: community.community_id, scope, write,
@@ -1363,6 +1347,7 @@ function createReliquarySurface(options) {
   "use strict";
 
   const { React, hooks } = root.ReliquaryDashboardHost;
+  const { Button, Input } = root.ReliquaryDashboardHost.components;
   const h = React.createElement;
   const { useEffect, useRef, useState } = hooks;
   const { candidate, message } = root.ReliquarySetupClient;
@@ -1464,14 +1449,14 @@ function createReliquarySurface(options) {
      */
     function pathField(label, value, update, kind, result) {
       return h("div", { className: "rly-setup-path" },
-        h("label", { className: "rly-field" }, h("span", null, label), h("input", {
+        h("label", { className: "rly-field" }, h("span", null, label), h(Input, {
           type: "text", value, autoComplete: "off", maxLength: 4096,
           onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => {
             clearResult();
             update(event.currentTarget.value);
           },
         })),
-        pickOpenPath && h("button", { type: "button", onClick: () => browse(kind, update), "aria-label": "Browse for " + label }, "Browse…"),
+        pickOpenPath && h(Button, { type: "button", onClick: () => browse(kind, update), "aria-label": "Browse for " + label }, "Browse…"),
         result && h("p", { className: "rly-setup-check", role: "status" }, checkText(result)));
     }
 
@@ -1496,25 +1481,25 @@ function createReliquarySurface(options) {
         pathField("Reliquary config path (optional)", config, setConfig, "config", report?.config),
         h("h2", null, "Project RELs"),
         projects.map(({ key, id, path }, index) => h("div", { className: "rly-setup-project", key: String(key) },
-          h("label", { className: "rly-field" }, h("span", null, `Project ${index + 1} ID`), h("input", {
+          h("label", { className: "rly-field" }, h("span", null, `Project ${index + 1} ID`), h(Input, {
             type: "text", value: id, autoComplete: "off", maxLength: 128,
             onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) =>
               changeProject(key, { id: event.currentTarget.value }),
           })),
           pathField(`Project ${index + 1} REL path`, path, (next) => changeProject(key, { path: next }),
             "REL", report?.projects[id.trim()]),
-          h("button", { type: "button", "aria-label": `Remove project ${index + 1}`, onClick: () => {
+          h(Button, { type: "button", "aria-label": `Remove project ${index + 1}`, onClick: () => {
             clearResult();
             setProjects((current) => current.filter((row) => row.key !== key));
           } }, "Remove"))),
-        h("button", { type: "button", disabled: projects.length >= 128, onClick: () => {
+        h(Button, { type: "button", disabled: projects.length >= 128, onClick: () => {
           clearResult();
           const key = nextKey.current++;
           setProjects((current) => [...current, { key, id: "", path: "" }]);
         } }, "Add project REL"),
         h("div", { className: "rly-setup-actions" },
-          h("button", { type: "button", disabled: !canSubmit, onClick: () => submit("validate") }, "Validate"),
-          h("button", { type: "submit", disabled: !canSubmit }, "Connect Reliquary")))),
+          h(Button, { type: "button", disabled: !canSubmit, onClick: () => submit("validate") }, "Validate"),
+          h(Button, { type: "submit", disabled: !canSubmit }, "Connect Reliquary")))),
       busy && h("p", { role: "status" }, "Working…"),
       error && h("p", { role: "alert" }, error),
       report && h("p", { role: report.valid ? "status" : "alert" },
@@ -1532,8 +1517,9 @@ function createReliquarySurface(options) {
 
   /** @type {import("../types").CreateReliquarySurface} */
   function createSurface({ authedFetch, pickOpenPath, mutationBlockReason, surfaceLabel }) {
-    const { React, hooks } = root.ReliquaryDashboardHost;
+    const { React, hooks, components } = root.ReliquaryDashboardHost;
     const h = React.createElement;
+    const { Button, Input } = components;
     const { useState, useEffect } = hooks;
     const { useRead, useCursor } = root.ReliquaryDashboardState;
     const { meta, readContent, select, pager, Status } = root.ReliquaryDashboardViews;
@@ -1611,12 +1597,12 @@ function createReliquarySurface(options) {
           return h("div", { className: "rly-layout" },
             h("aside", { className: "rly-sidebar", "aria-label": "Owner and scope" },
               h("h2", null, "Owner / scope"),
-              h("button", { type: "button", onClick: refreshOwnerData }, "Refresh owner data"),
+              h(Button, { type: "button", onClick: refreshOwnerData }, "Refresh owner data"),
               h("form", { onSubmit: findSession, className: "rly-session-lookup" },
-                h("label", { className: "rly-field" }, h("span", null, "Hermes session ID"), h("input", {
+                h("label", { className: "rly-field" }, h("span", null, "Hermes session ID"), h(Input, {
                   value: sessionInput, maxLength: 128, autoComplete: "off",
                   onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => setSessionInput(event.currentTarget.value),
-                })), h("button", { type: "submit" }, "Look up session")),
+                })), h(Button, { type: "submit" }, "Look up session")),
               ownerOptions.length ? select("Browse authorized owner", owner?.owner_id ?? "", ownerOptions, (id) => {
                 if (id !== selectedOwnerId) {
                   client.invalidate();
@@ -1678,7 +1664,7 @@ function createReliquarySurface(options) {
         current?.status ? h(Onboarding, { status: current.status, setup, pickOpenPath,
           mutationsEnabled: !blockReason, onConnected: refresh }) :
           current?.error ? h("div", { role: "alert" },
-            h("p", null, current.error), h("button", { type: "button", onClick: refresh }, "Retry setup status")) :
+            h("p", null, current.error), h(Button, { type: "button", onClick: refresh }, "Retry setup status")) :
             h("p", { role: "status" }, "Checking Reliquary setup…"));
     };
   }
@@ -1689,6 +1675,26 @@ function createReliquarySurface(options) {
 })(runtime);
   return runtime.ReliquaryDashboardSurface(options);
 }
+/** @param {import("../types").HermesDashboardSDK} sdk */
+function webComponents(sdk) {
+  const { Button, Input, Checkbox, Select, SelectOption } = sdk.components;
+  const h = sdk.React.createElement;
+  return {
+    /** @param {Record<string, unknown>} props */
+    Button(props) {
+      const quiet = props["aria-pressed"] === false || props["aria-current"] === false;
+      return h(Button, { ...props, ghost: quiet });
+    },
+    Input, Checkbox, Textarea: /** @type {const} */ ("textarea"),
+    /** @param {import("../types").HostSelectProps} props */
+    Select({ value, options, onValueChange, disabled }) {
+      return h(Select, { value, onValueChange, disabled },
+        ...options.map(({ value, label }) => h(SelectOption, { key: value, value }, label)));
+    },
+  };
+}
+
+
 (function (browser) {
   "use strict";
 
@@ -1698,7 +1704,8 @@ function createReliquarySurface(options) {
     throw new Error("Reliquary requires the Hermes web dashboard plugin SDK 1.1.0.");
   }
   registry.register("reliquary-hermes", createReliquarySurface({
-    React: sdk.React, hooks: sdk.hooks, authedFetch: sdk.authedFetch, surfaceLabel: "HERMES WEB DASHBOARD PLUGIN",
+    React: sdk.React, hooks: sdk.hooks, components: webComponents(sdk),
+    authedFetch: sdk.authedFetch, surfaceLabel: "HERMES WEB DASHBOARD PLUGIN",
   }));
 })(window);
 

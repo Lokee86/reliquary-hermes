@@ -20,6 +20,8 @@ async function load({ rest, pickOpenPath } = {}) {
     useMemo: (create) => create(),
   };
   const sdk = {
+    Button() {}, Checkbox() {}, Input() {}, Textarea() {}, Select() {}, SelectTrigger() {}, SelectValue() {},
+    SelectContent() {}, SelectItem() {},
     ROUTES_AREA: "routes",
     SIDEBAR_NAV_AREA: "sidebar.nav",
     gatewayActivationEpoch: () => routing.epoch,
@@ -50,7 +52,7 @@ async function load({ rest, pickOpenPath } = {}) {
     return { pane, surface: options.at(-1) };
   }
 
-  return { contribution, contributions, render, routing };
+  return { contribution, contributions, render, routing, sdk };
 }
 
 const url = (path) => "/api/plugins/reliquary-hermes" + path;
@@ -80,6 +82,30 @@ test("only verified native support enables Desktop writes", async () => {
     assert.match(notice, /web dashboard for setup and write management/);
   }
   assert.equal(mutationBlockReason({ desktop_native_mutations: true }), undefined);
+});
+
+test("passes Desktop SDK controls and keeps empty select options usable", async () => {
+  const { render, sdk } = await load();
+  const { pane, surface } = render();
+  assert.deepEqual(Object.keys(pane.props.style).sort(), ["height", "overflow", "width"]);
+  const toggle = surface.components.Button({ "aria-pressed": false });
+  assert.equal(toggle.type, sdk.Button);
+  assert.equal(toggle.props.variant, "ghost");
+  assert.equal(surface.components.Button({ "aria-pressed": true }).props.variant, "default");
+  for (const name of ["Checkbox", "Input", "Textarea"]) assert.equal(surface.components[name], sdk[name]);
+  let selected;
+  const control = surface.components.Select({ label: "Owner", value: "",
+    options: [{ value: "", label: "None" }, { value: "rel", label: "REL" }],
+    onValueChange(value) { selected = value; } });
+  assert.equal(control.type, sdk.Select);
+  assert.equal(control.children[0].type, sdk.SelectTrigger);
+  assert.equal(control.children[0].props["aria-label"], "Owner");
+  const empty = control.children[1].children[0];
+  assert.equal(empty.type, sdk.SelectItem);
+  assert.ok(empty.props.value);
+  assert.equal(control.props.value, empty.props.value);
+  control.props.onValueChange(empty.props.value);
+  assert.equal(selected, "");
 });
 
 test("uses the SDK profile scope for status, validate, apply and management", async () => {

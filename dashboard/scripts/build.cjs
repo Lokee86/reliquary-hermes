@@ -14,7 +14,7 @@ if (fixtureMode) {
   const fixture = JSON.parse(fs.readFileSync(path.join(root, "fixtures", "mock-responses.json"), "utf8"));
   bundle.push(buildFixtureBundle(fixture));
 } else {
-  bundle.push(`(function () {\n${buildLiveBundle()}\n${readSources(["live.js"])}\n})();`);
+  bundle.push(`(function () {\n${buildLiveBundle()}\n${readSources(["web_components.js", "live.js"])}\n})();`);
 }
 
 fs.mkdirSync(outputDir, { recursive: true });

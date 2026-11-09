@@ -22,8 +22,8 @@ ${readSources(names)}
 
 function buildLiveBundle() {
   return `function createReliquarySurface(options) {
-  const { React, hooks = React } = options;
-  const runtime = { crypto: globalThis.crypto, ReliquaryDashboardHost: { React, hooks } };
+  const { React, hooks = React, components } = options;
+  const runtime = { crypto: globalThis.crypto, ReliquaryDashboardHost: { React, hooks, components } };
   ${scopedSources(["client.js", "live_transport.js", ...views, "setup_client.js", "onboarding.js", "surface.js"])}
   return runtime.ReliquaryDashboardSurface(options);
 }`;
@@ -31,7 +31,9 @@ function buildLiveBundle() {
 
 function buildFixtureBundle(fixture) {
   return `(function (sdk) {
-  const runtime = { crypto: globalThis.crypto, ReliquaryDashboardHost: sdk, ReliquaryDashboardFixture: ${JSON.stringify(fixture)} };
+  ${readSources(["web_components.js"])}
+  const { React, hooks } = sdk;
+  const runtime = { crypto: globalThis.crypto, ReliquaryDashboardHost: { React, hooks, components: webComponents(sdk) }, ReliquaryDashboardFixture: ${JSON.stringify(fixture)} };
   ${scopedSources(["client.js", "fixtures.js", ...views, "index.js"])}
 })(window.__HERMES_PLUGIN_SDK__);`;
 }

@@ -7,6 +7,7 @@
     throw new Error("Reliquary requires the Hermes web dashboard plugin SDK 1.1.0.");
   }
   registry.register("reliquary-hermes", createReliquarySurface({
-    React: sdk.React, hooks: sdk.hooks, authedFetch: sdk.authedFetch, surfaceLabel: "HERMES WEB DASHBOARD PLUGIN",
+    React: sdk.React, hooks: sdk.hooks, components: webComponents(sdk),
+    authedFetch: sdk.authedFetch, surfaceLabel: "HERMES WEB DASHBOARD PLUGIN",
   }));
 })(window);

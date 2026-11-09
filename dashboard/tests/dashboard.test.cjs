@@ -9,6 +9,11 @@ const { createLiveClient, createLiveMutation } = require("../src/live_transport.
 const { createSetupClient, candidate, message } = require("../src/setup_client.js");
 const fixture = require("../fixtures/mock-responses.json");
 
+const sdkControls = {
+  Button() {}, Input() {}, Checkbox() {}, Select() {}, SelectOption() {},
+};
+const hostControls = { ...sdkControls, Textarea: "textarea" };
+
 const general = fixture.owner_sessions["fixture-session"][0].result.owners.items.find((owner) => owner.owner_id === "fixture-rel");
 const scope = { owner: general, sessionId: "fixture-session" };
 const signal = new AbortController().signal;
@@ -160,7 +165,8 @@ test("live and fixture builds register separately with the host SDK", () => {
   assert.doesNotMatch(bundle, /fixture-rel-memory|Synthetic fixture only/);
   let registration;
   const window = {
-    __HERMES_PLUGIN_SDK__: { sdkVersion: "1.1.0", React: { createElement() {} }, hooks: {}, authedFetch() {} },
+    __HERMES_PLUGIN_SDK__: { sdkVersion: "1.1.0", React: { createElement() {} }, hooks: {},
+      components: sdkControls, authedFetch() {} },
     __HERMES_PLUGINS__: { register: (name, component) => { registration = { name, component }; } },
   };
   vm.runInNewContext(bundle, { window }, { filename: manifest.entry });
@@ -172,6 +178,38 @@ test("live and fixture builds register separately with the host SDK", () => {
   assert.equal(fixtureManifest.api, undefined);
   vm.runInNewContext(fs.readFileSync(path.join(fixtureDir, fixtureManifest.entry), "utf8"), { window });
   assert.equal(registration.name, manifest.name);
+});
+
+test("the web entry passes its SDK controls and preserves select values", () => {
+  const { readSources } = require("../scripts/live-bundle.cjs");
+  const sdk = { sdkVersion: "1.1.0", React: { createElement: (type, props, ...children) => ({ type, props, children }) },
+    components: sdkControls, authedFetch() {} };
+  let options;
+  vm.runInNewContext(readSources(["web_components.js", "live.js"]), {
+    window: { __HERMES_PLUGIN_SDK__: sdk, __HERMES_PLUGINS__: { register() {} } },
+    createReliquarySurface(value) { options = value; },
+  });
+  const toggle = options.components.Button({ "aria-pressed": false });
+  assert.equal(toggle.type, sdkControls.Button);
+  assert.equal(toggle.props.ghost, true);
+  assert.equal(options.components.Button({ "aria-pressed": true }).props.ghost, false);
+  assert.equal(options.components.Input, sdkControls.Input);
+  assert.equal(options.components.Checkbox, sdkControls.Checkbox);
+  let selection;
+  const select = options.components.Select({ label: "Owner", value: "rel", disabled: true,
+    options: [{ value: "", label: "None" }, { value: "rel", label: "REL" }],
+    onValueChange(value) { selection = value; } });
+  assert.equal(select.type, sdkControls.Select);
+  assert.equal(select.props.disabled, true);
+  assert.equal(select.children[0].type, sdkControls.SelectOption);
+  assert.equal(select.children[0].props.value, "");
+  select.props.onValueChange("");
+  assert.equal(selection, "");
+});
+
+test("shared CSS leaves control and surface styling to Hermes", () => {
+  const css = fs.readFileSync(path.join(__dirname, "../styles.css"), "utf8");
+  assert.doesNotMatch(css, /--color-|(?:^|[;{])\s*font(?:-family)?\s*:|focus-visible|(?:background|border-radius|box-shadow)\s*:/m);
 });
 
 test("live owner discovery and scoped reads use the Hermes SDK route", async () => {
@@ -281,6 +319,7 @@ function renderHostSurface(status, mutationBlockReason, owner = general) {
     AbortController,
     ReliquaryDashboardHost: {
       React: { createElement: (type, props, ...children) => ({ type, props, children }) },
+      components: hostControls,
       hooks: {
         useState(initial) {
           if (initial === null && snapshot) {
@@ -334,7 +373,9 @@ test("Desktop setup keeps browsing available but disables unsupported validation
     assert.equal(!!findElement(surface, notice), blocked);
     const onboarding = findElement(surface, (element) => element.type?.name === "Onboarding");
     const form = onboarding.type(onboarding.props);
-    const button = (label) => findElement(form, (element) => element.type === "button" && element.children[0] === label);
+    const button = (label) => findElement(form, (element) => element.type === sdkControls.Button && element.children[0] === label);
+    assert.ok(findElement(form, (element) => element.type === sdkControls.Input && element.props.value === "C:/work/main.rel"));
+    assert.equal(findElement(form, (element) => element.type === "input" || element.type === "button"), undefined);
     assert.equal(button("Validate").props.disabled, blocked);
     assert.equal(button("Connect Reliquary").props.disabled, blocked);
     await findElement(form, (element) => element.props?.["aria-label"] === "Browse for Main REL path").props.onClick();
@@ -361,7 +402,8 @@ test("only the host gate removes the writer and leaves owner reads and permissio
 
 test("the common live surface installs no globals when another shell injects React", () => {
   const { buildLiveBundle } = require("../scripts/live-bundle.cjs");
-  const context = { input: { React: { createElement() {} }, hooks: {}, authedFetch() {}, surfaceLabel: "Desktop" } };
+  const context = { input: { React: { createElement() {} }, hooks: {}, components: hostControls,
+    authedFetch() {}, surfaceLabel: "Desktop" } };
   const create = vm.runInNewContext(`(function () {
     ${buildLiveBundle()}
     return createReliquarySurface(input);

@@ -1,6 +1,7 @@
 import { createElement as h, useMemo } from "react";
 import * as React from "react";
 import {
+  Button, Checkbox, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Textarea,
   gatewayActivationEpoch, host, ROUTES_AREA, SIDEBAR_NAV_AREA, useGatewayActivationEpoch, useValue,
 } from "@hermes/plugin-sdk";
 
@@ -54,16 +55,21 @@ function dashboardTransport(ctx, current) {
   };
 }
 
-const paneStyle = {
-  width: "100%", height: "100%", overflow: "auto",
-  "--color-foreground": "var(--ui-text-primary)",
-  "--color-muted-foreground": "var(--ui-text-secondary)",
-  "--color-background": "var(--ui-bg-primary)",
-  "--color-card": "var(--ui-bg-card)",
-  "--color-muted": "var(--ui-bg-secondary)",
-  "--color-border": "var(--ui-stroke-secondary)",
-  "--color-primary": "var(--ui-accent)",
+const components = {
+  Button(props) {
+    const quiet = props["aria-pressed"] === false || props["aria-current"] === false;
+    return h(Button, { ...props, variant: quiet ? "ghost" : "default" });
+  },
+  Checkbox, Input, Textarea,
+  Select({ label, value, options, onValueChange, disabled }) {
+    // The Desktop select reserves the empty string for its placeholder.
+    return h(Select, { value: ":" + value, onValueChange: (next) => onValueChange(next.slice(1)), disabled },
+      h(SelectTrigger, { "aria-label": label }, h(SelectValue)),
+      h(SelectContent, null, ...options.map(({ value, label }) => h(SelectItem, { key: value, value: ":" + value }, label))));
+  },
 };
+
+const paneStyle = { width: "100%", height: "100%", overflow: "auto" };
 
 function ReliquaryPane({ ctx }) {
   const epoch = useGatewayActivationEpoch();
@@ -72,6 +78,7 @@ function ReliquaryPane({ ctx }) {
     const current = () => gatewayActivationEpoch() === epoch && host.state.profile.get() === profile;
     return createReliquarySurface({
       React,
+      components,
       authedFetch: dashboardTransport(ctx, current),
       async pickOpenPath(kind) {
         if (!current()) return null;

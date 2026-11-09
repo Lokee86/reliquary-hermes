@@ -319,13 +319,32 @@ export interface CommunityViewProps {
 }
 
 export interface HostReact {
-  createElement(type: string, props?: Record<string, unknown> | null, ...children: unknown[]): unknown;
+  createElement(type: string | HostControl, props?: Record<string, unknown> | null, ...children: unknown[]): unknown;
   createElement<P>(type: (props: P) => unknown, props: P & { key?: string }, ...children: unknown[]): unknown;
+}
+
+type HostControl = (props: Record<string, unknown>) => unknown;
+
+export interface HostSelectProps {
+  label: string;
+  value: string;
+  options: { value: string; label: string }[];
+  onValueChange(value: string): void;
+  disabled?: boolean;
+}
+
+interface HostComponents {
+  Button: HostControl;
+  Input: HostControl;
+  Checkbox: HostControl;
+  Select(props: HostSelectProps): unknown;
+  Textarea: HostControl | "textarea";
 }
 
 export interface HermesDashboardSDK {
   sdkVersion: string;
   React: HostReact;
+  components: Pick<HostComponents, "Button" | "Input" | "Checkbox"> & { Select: HostControl; SelectOption: HostControl };
   authedFetch(url: string, init?: RequestInit): Promise<Response>;
   hooks: {
     useState<T>(initial: T | (() => T)): [T, (next: T | ((current: T) => T)) => void];
@@ -384,6 +403,7 @@ export interface CreateReliquarySurface {
   (options: {
     React: HostReact;
     hooks?: HermesDashboardSDK["hooks"];
+    components: HostComponents;
     authedFetch: HermesDashboardSDK["authedFetch"];
     pickOpenPath?: SetupPicker;
     mutationBlockReason?(status: SetupStatus): string | undefined;
@@ -400,7 +420,7 @@ declare global {
     __HERMES_PLUGIN_SDK__?: HermesDashboardSDK;
     __HERMES_PLUGINS__?: HermesPluginRegistry;
   }
-  var ReliquaryDashboardHost: Pick<HermesDashboardSDK, "React" | "hooks">;
+  var ReliquaryDashboardHost: Pick<HermesDashboardSDK, "React" | "hooks"> & { components: HostComponents };
   var createReliquarySurface: CreateReliquarySurface;
   var ReliquaryDashboardSurface: CreateReliquarySurface;
   var ReliquarySetupClient: {
@@ -430,7 +450,8 @@ declare global {
     meta(label: string, value: string): unknown;
     readContent<T>(label: string, read: ReadHandle<T>, render: (value: T) => unknown, resync?: () => void): unknown;
     pager(label: string, cursor: CursorState, next: string | null): unknown;
-    select(label: string, value: string, options: { value: string; label: string }[], onChange: (value: string) => void): unknown;
+    select(label: string, value: string, options: { value: string; label: string }[], onChange: (value: string) => void,
+      disabled?: boolean): unknown;
     MemoryList(props: { items: MemorySummary[]; selected: string | null; onSelect: (memoryId: string) => void }): unknown;
     Inspector(props: { client: DashboardClient; scope: ReadScope; memoryId: string }): unknown;
     Status(props: { client: DashboardClient; scope: ReadScope; live?: boolean }): unknown;

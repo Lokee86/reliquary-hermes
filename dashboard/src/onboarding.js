@@ -2,6 +2,7 @@
   "use strict";
 
   const { React, hooks } = root.ReliquaryDashboardHost;
+  const { Button, Input } = root.ReliquaryDashboardHost.components;
   const h = React.createElement;
   const { useEffect, useRef, useState } = hooks;
   const { candidate, message } = root.ReliquarySetupClient;
@@ -103,14 +104,14 @@
      */
     function pathField(label, value, update, kind, result) {
       return h("div", { className: "rly-setup-path" },
-        h("label", { className: "rly-field" }, h("span", null, label), h("input", {
+        h("label", { className: "rly-field" }, h("span", null, label), h(Input, {
           type: "text", value, autoComplete: "off", maxLength: 4096,
           onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => {
             clearResult();
             update(event.currentTarget.value);
           },
         })),
-        pickOpenPath && h("button", { type: "button", onClick: () => browse(kind, update), "aria-label": "Browse for " + label }, "Browse…"),
+        pickOpenPath && h(Button, { type: "button", onClick: () => browse(kind, update), "aria-label": "Browse for " + label }, "Browse…"),
         result && h("p", { className: "rly-setup-check", role: "status" }, checkText(result)));
     }
 
@@ -135,25 +136,25 @@
         pathField("Reliquary config path (optional)", config, setConfig, "config", report?.config),
         h("h2", null, "Project RELs"),
         projects.map(({ key, id, path }, index) => h("div", { className: "rly-setup-project", key: String(key) },
-          h("label", { className: "rly-field" }, h("span", null, `Project ${index + 1} ID`), h("input", {
+          h("label", { className: "rly-field" }, h("span", null, `Project ${index + 1} ID`), h(Input, {
             type: "text", value: id, autoComplete: "off", maxLength: 128,
             onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) =>
               changeProject(key, { id: event.currentTarget.value }),
           })),
           pathField(`Project ${index + 1} REL path`, path, (next) => changeProject(key, { path: next }),
             "REL", report?.projects[id.trim()]),
-          h("button", { type: "button", "aria-label": `Remove project ${index + 1}`, onClick: () => {
+          h(Button, { type: "button", "aria-label": `Remove project ${index + 1}`, onClick: () => {
             clearResult();
             setProjects((current) => current.filter((row) => row.key !== key));
           } }, "Remove"))),
-        h("button", { type: "button", disabled: projects.length >= 128, onClick: () => {
+        h(Button, { type: "button", disabled: projects.length >= 128, onClick: () => {
           clearResult();
           const key = nextKey.current++;
           setProjects((current) => [...current, { key, id: "", path: "" }]);
         } }, "Add project REL"),
         h("div", { className: "rly-setup-actions" },
-          h("button", { type: "button", disabled: !canSubmit, onClick: () => submit("validate") }, "Validate"),
-          h("button", { type: "submit", disabled: !canSubmit }, "Connect Reliquary")))),
+          h(Button, { type: "button", disabled: !canSubmit, onClick: () => submit("validate") }, "Validate"),
+          h(Button, { type: "submit", disabled: !canSubmit }, "Connect Reliquary")))),
       busy && h("p", { role: "status" }, "Working…"),
       error && h("p", { role: "alert" }, error),
       report && h("p", { role: report.valid ? "status" : "alert" },
