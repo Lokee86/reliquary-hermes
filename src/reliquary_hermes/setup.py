@@ -211,7 +211,10 @@ def create(home, candidate, *, native):
 def _owners_fingerprint(state, owners):
     with (state / "owners.json").open("rb") as stream:
         raw = stream.read(MAX_WIRE_BYTES + 1)
-    require(decode(raw) == owners, "service_restart_required")
+    persisted = decode(raw)
+    # Fresh settings may serialize an empty optional legacy map.
+    persisted.setdefault("session_projects", {})
+    require(persisted == {"session_projects": {}, **owners}, "service_restart_required")
     return hashlib.sha256(raw).hexdigest()
 
 
