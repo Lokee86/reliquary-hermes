@@ -313,6 +313,10 @@ def _same_origin(request: Request) -> bool:
         # Hermes redeems a private same-user ticket on loopback and rejects
         # any Origin before setting this request-local principal.
         return native.get("purpose") == "native-http" and not origins
+    hosted = getattr(request.state, "hosted_http_authenticated", False) is True
+    if hosted and getattr(request.state, "hosted_native_http_authenticated", False) is True:
+        # The gateway checked the redeemed grant against this worker's profile before IPC.
+        return not origins
     if len(origins) != 1:
         return False
 
@@ -327,7 +331,7 @@ def _same_origin(request: Request) -> bool:
         origin = origin_tuple(origins[0])
         if origin is None:
             return False
-        if getattr(request.state, "hosted_http_authenticated", False) is True:
+        if hosted:
             # Pinned Hermes strips the public Host before private IPC. Fetch
             # Metadata is set by the browser and cannot be set by page script.
             return request.headers.getlist("sec-fetch-site") == ["same-origin"]
