@@ -1285,7 +1285,7 @@ function createReliquarySurface(options) {
    * @param {string} main
    * @param {string} phy
    * @param {string} config
-   * @param {{id:string,path:string}[]} projects
+   * @param {{id:string,path:string}[]} [projects]
    * @returns {import("../types").SetupCandidate}
    */
   function candidate(main, phy, config, projects) {
@@ -1295,6 +1295,8 @@ function createReliquarySurface(options) {
     if (!localPath(main_rel)) throw new Error("main_path");
     if (!localPath(active_phy)) throw new Error("phy_path");
     if (config_path && !localPath(config_path)) throw new Error("config_path");
+    const selection = { main_rel, active_phy, config_path };
+    if (!projects) return selection;
     const entries = new Map();
     for (const { id, path } of projects) {
       const key = id.trim();
@@ -1303,7 +1305,7 @@ function createReliquarySurface(options) {
       if (!localPath(value)) throw new Error("project_path");
       entries.set(key, value);
     }
-    return { main_rel, active_phy, projects: Object.fromEntries(entries), config_path };
+    return { ...selection, projects: Object.fromEntries(entries) };
   }
 
   /**
@@ -1553,12 +1555,13 @@ function createReliquarySurface(options) {
       if (!canSubmit || controlsLocked || (reviewing && !currentInventory)) return;
       setReport(null);
       return run(async (signal) => {
-        const selected = candidate(main, phy, config, Array.from(assignments, ([id, path]) => ({ id, path })));
+        const selected = candidate(main, phy, config,
+          routingAvailable ? Array.from(assignments, ([id, path]) => ({ id, path })) : undefined);
         const result = await setup.validate(selected, signal);
         if (signal.aborted) return;
         setReport(result);
         if (reviewing && result.valid) setReview({
-          selected, fallback: projects.filter(({ id }) => !routingAvailable || !assignments.has(id)).length,
+          selected, fallback: routingAvailable ? projects.filter(({ id }) => !assignments.has(id)).length : 0,
         });
       });
     }
@@ -1652,7 +1655,8 @@ function createReliquarySurface(options) {
     });
 
     const projectCards = projects.map(({ id, name }) => {
-      const path = assignments.get(id) ?? "";
+      const savedPath = Object.hasOwn(status.defaults.projects, id) ? status.defaults.projects[id] : "";
+      const path = routingAvailable ? assignments.get(id) ?? "" : savedPath;
       const target = /** @type {PickerTarget} */ ({
         label: name, kind: "REL", createKind: "project_rel", projectId: id,
         update(next) {
@@ -1664,7 +1668,6 @@ function createReliquarySurface(options) {
           });
         },
       });
-      const savedPath = Object.hasOwn(status.defaults.projects, id) ? status.defaults.projects[id] : "";
       const savedRoute = status.configured ? savedPath : path;
       return { id, name, path, target, savedRoute, draftChanged: status.configured && savedPath !== path };
     });
@@ -1688,7 +1691,7 @@ function createReliquarySurface(options) {
           ownerButtons(identity, phy), check(report?.active_phy)),
         h("section", { "aria-label": "Project memories", className: "rly-setup-card" },
           h("h2", null, "Project memories"),
-          h("p", null, "Project memory selections apply after connecting."),
+          routingAvailable && h("p", null, "Project memory selections apply after connecting."),
           h("div", { className: "rly-setup-actions" },
             h(Button, { type: "button", "aria-expanded": showProjectHelp,
               onClick: () => setShowProjectHelp((show) => !show) }, "Create Hermes project"),
@@ -1700,21 +1703,23 @@ function createReliquarySurface(options) {
           !currentInventory && h("p", { role: "status" }, "Loading Hermes projects…"),
           currentInventory?.error && h("p", { role: "alert" }, currentInventory.error),
           currentInventory?.value?.projects.length === 0 && h("p", null, "This profile has no active Hermes projects."),
-          currentInventory?.value && !routingAvailable && projects.length > 0 && h("p", { role: "note" },
-            "This Hermes host does not supply trusted project membership for sessions. New sessions use General memory."),
+          currentInventory?.value && !routingAvailable && h("div", { role: "note" },
+            h("p", null, "Unavailable on this Hermes build"),
+            h("p", null, "Project conversations use General memory on this Hermes version.")),
           projectCards.map(({ id, name, path, target, savedRoute, draftChanged }) =>
             h("section", { key: id, className: "rly-setup-card", "aria-label": name },
               h("h3", null, name),
-              h("p", null, savedRoute && routingAvailable ? "Dedicated REL" : "Using General memory"),
-              path && (!routingAvailable || draftChanged) && h("p", null, "Dedicated REL selected"),
+              routingAvailable && h("p", null, savedRoute ? "Dedicated REL" : "Using General memory"),
+              path && !routingAvailable && h("p", null, "Saved project REL"),
+              path && draftChanged && h("p", null, "Dedicated REL selected"),
               !path && draftChanged && h("p", null, "General memory selected"),
               path && h("p", { className: "rly-setup-value" }, path),
-              ownerButtons(target, path),
-              check(report && Object.hasOwn(report.projects, id) ? report.projects[id] : undefined)))),
+              routingAvailable && ownerButtons(target, path),
+              routingAvailable && check(report && Object.hasOwn(report.projects, id) ? report.projects[id] : undefined)))),
         h("details", null, h("summary", null, "Advanced"),
           pathInput("Main REL path", main, setMain),
           pathInput("Active PHY path", phy, setPhy),
-          ...projectCards.map(({ id, name, path, target }) => h("div", { key: id },
+          routingAvailable && projectCards.map(({ id, name, path, target }) => h("div", { key: id },
             pathInput(name + " REL path", path, target.update))),
           pathInput("Reliquary config path (optional)", config, setConfig),
           h(Button, { type: "button", onClick: () => choose(configFile) }, "Select configuration"),

@@ -327,11 +327,16 @@ test("a missing or non-boolean Desktop capability preserves setup status and fai
   }
 });
 
-function renderHostSurface(status, mutationBlockReason, owner = general) {
+function renderHostSurface(status, mutationBlockReason, owner = general, inventory) {
   const calls = [];
+  const validations = [];
   let snapshot = { attempt: 0, status };
   const setup = {
-    async validate() { calls.push("validate"); return { valid: true }; },
+    async validate(selection) {
+      calls.push("validate");
+      validations.push(selection);
+      return { valid: true };
+    },
     async apply() { calls.push("apply"); return { valid: true, configured: true }; },
   };
   function OwnerContent() {}
@@ -371,7 +376,9 @@ function renderHostSurface(status, mutationBlockReason, owner = general) {
   const Surface = runtime.ReliquaryDashboardSurface({ mutationBlockReason,
     pickOpenPath: async (kind) => { calls.push(kind); return "C:/work/selected.rel"; } });
   const surface = Surface();
-  return { surface, dashboard: status.configured ? surface.type(surface.props) : null, calls, OwnerContent };
+  const dashboard = status.configured ? surface.type(surface.props) : null;
+  if (inventory) snapshot = { attempt: 0, value: inventory };
+  return { surface, dashboard, calls, validations, OwnerContent };
 }
 
 function findElement(tree, match) {
@@ -405,6 +412,41 @@ test("Desktop setup keeps browsing available but disables unsupported writes", a
     await button("Select REL").props.onClick();
     await button("Validate").props.onClick();
     assert.deepEqual(calls, blocked ? ["REL"] : ["REL", "validate"]);
+  }
+});
+
+test("stock Hermes shows saved project RELs read-only and leaves assignments out of setup", async () => {
+  const name = "Real Hermes project";
+  const savedPath = "C:/work/project.rel";
+  const projects = { "project-real": savedPath, archived: "C:/work/archived.rel" };
+  const status = { ...setupStatus, defaults: { ...setupStatus.defaults, projects } };
+  for (const routing_available of [false, true]) {
+    const { surface, validations } = renderHostSurface(status, undefined, general, {
+      projects: [{ id: "project-real", name }], routing_available,
+    });
+    const onboarding = findElement(surface, (element) => element.type?.name === "Onboarding");
+    const form = onboarding.type(onboarding.props);
+    const card = findElement(form, (element) => element.props?.["aria-label"] === name);
+    const text = (tree, value) => findElement(tree, (element) => element.children?.includes(value));
+    const button = (tree, label) => findElement(tree, (element) =>
+      element.type === sdkControls.Button && element.children[0] === label);
+    assert.ok(card);
+    assert.ok(text(card, savedPath));
+    assert.equal(!!text(card, "Saved project REL"), !routing_available);
+    assert.equal(!!text(card, "Dedicated REL"), routing_available);
+    assert.equal(!!text(form, "Unavailable on this Hermes build"), !routing_available);
+    assert.equal(!!text(form, "Project conversations use General memory on this Hermes version."), !routing_available);
+    for (const label of ["Select REL", "Create REL", "Use General"]) {
+      assert.equal(!!button(card, label), routing_available, label);
+    }
+    assert.equal(!!findElement(form, (element) =>
+      element.type === sdkControls.Input && element.props.value === savedPath), routing_available);
+    assert.equal(button(form, "Review and connect").props.disabled, false);
+    assert.equal(button(form, "Create PHY").props.disabled, false);
+    await button(form, "Validate").props.onClick();
+    const selection = validations[0];
+    assert.equal(Object.hasOwn(selection, "projects"), routing_available);
+    if (routing_available) assert.deepEqual(JSON.parse(JSON.stringify(selection.projects)), projects);
   }
 });
 

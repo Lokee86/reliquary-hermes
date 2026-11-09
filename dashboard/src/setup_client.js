@@ -52,7 +52,7 @@
    * @param {string} main
    * @param {string} phy
    * @param {string} config
-   * @param {{id:string,path:string}[]} projects
+   * @param {{id:string,path:string}[]} [projects]
    * @returns {import("../types").SetupCandidate}
    */
   function candidate(main, phy, config, projects) {
@@ -62,6 +62,8 @@
     if (!localPath(main_rel)) throw new Error("main_path");
     if (!localPath(active_phy)) throw new Error("phy_path");
     if (config_path && !localPath(config_path)) throw new Error("config_path");
+    const selection = { main_rel, active_phy, config_path };
+    if (!projects) return selection;
     const entries = new Map();
     for (const { id, path } of projects) {
       const key = id.trim();
@@ -70,7 +72,7 @@
       if (!localPath(value)) throw new Error("project_path");
       entries.set(key, value);
     }
-    return { main_rel, active_phy, projects: Object.fromEntries(entries), config_path };
+    return { ...selection, projects: Object.fromEntries(entries) };
   }
 
   /**

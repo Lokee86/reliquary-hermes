@@ -356,6 +356,12 @@ The authenticated setup checks exercise active-profile Hermes inventory, multi-f
 
 The stock and installed hosts expose the project registry but lack authoritative project attribution in the provider lifecycle. Their project lists and owner selection are available. New sessions attach to General memory and the UI reports the missing routing capability. Live project-specific routing requires the host contract recorded in the [host audit](host-audit.md).
 
+## HU05 release-safe stock fallback
+
+A stock Hermes build shows the project inventory and saved project paths read-only. Its review submits General REL and PHY setup without project assignment fields. Hosts that declare trusted attribution retain project assignment controls and the fallback confirmation for unassigned projects. The shared dashboard test covers both capability states.
+
+Use the stock Web and Desktop smoke fixtures to check General and PHY selection, creation through Web, the project capability notice, and saved paths on reopen. Use an isolated profile with a preaccepted dedicated session to verify that stock provider startup and restart bind fresh sessions to General while preserving the signed dedicated route, owner configuration, and topology.
+
 ## Related docs
 
 - [Documentation policy and ownership](documentation-policy.md)

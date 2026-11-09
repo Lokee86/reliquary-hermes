@@ -356,7 +356,7 @@ export interface HermesDashboardSDK {
 export interface SetupCandidate {
   main_rel: string;
   active_phy: string;
-  projects: Record<string, string>;
+  projects?: Record<string, string>;
   config_path: string | null;
 }
 
@@ -365,7 +365,12 @@ export interface SetupStatus {
   runtime_detected: boolean;
   desktop_native_mutations: boolean;
   config_path: string | null;
-  defaults: Omit<SetupCandidate, "main_rel" | "active_phy"> & { main_rel: string | null; active_phy: string | null };
+  defaults: {
+    main_rel: string | null;
+    active_phy: string | null;
+    projects: Record<string, string>;
+    config_path: string | null;
+  };
 }
 
 export interface SetupCheck {
@@ -456,7 +461,7 @@ declare global {
   var ReliquaryDashboardSurface: CreateReliquarySurface;
   var ReliquarySetupClient: {
     createSetupClient(authedFetch: HermesDashboardSDK["authedFetch"]): SetupClient;
-    candidate(main: string, phy: string, config: string, projects: { id: string; path: string }[]): SetupCandidate;
+    candidate(main: string, phy: string, config: string, projects?: { id: string; path: string }[]): SetupCandidate;
     message(error: unknown): string;
   };
   var ReliquaryOnboarding: {
