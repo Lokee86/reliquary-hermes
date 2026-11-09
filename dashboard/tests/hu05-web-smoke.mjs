@@ -8,7 +8,8 @@ assert(address && playwright && evidencePath && (mode === undefined || mode === 
 const base = new URL(address);
 assert.equal(base.protocol, "http:");
 assert.equal(base.hostname, "127.0.0.1");
-const { paths, ids, projectName, profilePath, createOwner, fallbackCount } = JSON.parse(await readFile(evidencePath, "utf8"));
+const { paths, ids, projectName, profilePath, createOwner, createPhy, fallbackCount, expectGeneralOnly } =
+  JSON.parse(await readFile(evidencePath, "utf8"));
 const { chromium } = await import(pathToFileURL(playwright).href);
 const screenshots = process.env.HU07_SCREENSHOT_DIR;
 if (screenshots) await mkdir(screenshots, { recursive: true });
@@ -23,6 +24,21 @@ try {
   await page.getByRole("link", { name: "Reliquary", exact: true }).click();
   const owner = page.getByRole("combobox", { name: "Browse authorized owner" });
   const setupHeading = page.getByRole("heading", { name: "Set up Reliquary" });
+
+  async function checkGeneralOnly(savedPath) {
+    const projects = page.getByRole("region", { name: "Project memories", exact: true });
+    await projects.getByText("Unavailable on this Hermes build", { exact: true }).waitFor();
+    await projects.getByText("Project conversations use General memory on this Hermes version.", { exact: true }).waitFor();
+    const project = projects.getByRole("region", { name: projectName, exact: true });
+    await project.waitFor();
+    assert.equal(await projects.getByRole("button", { name: /^(Select REL|Create REL|Use General)$/ }).count(), 0);
+    assert.equal(await page.getByText(projectName + " REL path", { exact: true }).count(), 0);
+    if (savedPath) {
+      await project.getByText("Saved project REL", { exact: true }).waitFor();
+      await project.getByText(savedPath, { exact: true }).waitFor();
+    }
+  }
+
   if (mode !== "--configured") {
     const main = page.getByRole("textbox", { name: "Main REL path" });
     const phy = page.getByRole("textbox", { name: "Active PHY path" });
@@ -78,14 +94,16 @@ try {
     await validate.click();
     await page.getByRole("alert").getByText(/Validation failed/).waitFor();
     await page.getByText(/Rejected · PHY.*wrong owner kind/).waitFor();
-    if (createOwner) {
+    for (const [region, kind, filename] of [[general, "REL", createOwner], [identity, "PHY", createPhy]]) {
+      if (!filename) continue;
       assert(profilePath);
-      await general.getByRole("button", { name: "Create REL", exact: true }).click();
+      await region.getByRole("button", { name: "Create " + kind, exact: true }).click();
       await picker.getByTitle(profilePath, { exact: true }).click();
-      await picker.getByRole("textbox", { name: "New file name" }).fill(createOwner);
+      await picker.getByRole("textbox", { name: "New file name" }).fill(filename);
       await picker.getByRole("button", { name: "Use this destination" }).click();
       await page.getByRole("button", { name: "Create owner file", exact: true }).click();
       await page.getByText("Created owner files remain on disk if connection fails.").waitFor();
+      await region.getByText(join(profilePath, filename), { exact: true }).waitFor();
     }
     if (profilePath) {
       await pick(general, "REL", paths.main);
@@ -94,7 +112,9 @@ try {
       await main.fill(paths.main);
       await phy.fill(paths.phy);
     }
-    if (paths.project) {
+    if (expectGeneralOnly) {
+      await checkGeneralOnly();
+    } else if (paths.project) {
       assert(projectName, "Pass the actual Hermes project display name as projectName.");
       const project = page.getByRole("region", { name: projectName, exact: true });
       await project.getByText("Using General memory", { exact: true }).waitFor();
@@ -108,7 +128,10 @@ try {
     await page.getByRole("button", { name: "Review and connect" }).click();
     const review = page.getByRole("region", { name: "Review connection" });
     await review.waitFor();
-    if (fallbackCount) {
+    if (expectGeneralOnly) {
+      await review.getByRole("button", { name: "Connect Reliquary", exact: true }).waitFor();
+      assert.equal(await review.getByRole("button", { name: "Continue", exact: true }).count(), 0);
+    } else if (fallbackCount) {
       await review.getByText(new RegExp("^" + fallbackCount + " projects? will use General memory")).waitFor();
       await review.getByRole("button", { name: "Back to edit", exact: true }).click();
       await page.getByRole("button", { name: "Review and connect" }).click();
@@ -153,7 +176,8 @@ try {
   assert.equal(await setupHeading.count(), 0);
   if (screenshots) await page.screenshot({ path: join(screenshots, "web-configured.png") });
   await page.getByRole("button", { name: "Manage memory setup", exact: true }).click();
-  if (projectName) await page.getByRole("region", { name: projectName, exact: true }).getByText(/^Dedicated REL/).waitFor();
+  if (expectGeneralOnly) await checkGeneralOnly(paths.project);
+  else if (projectName) await page.getByRole("region", { name: projectName, exact: true }).getByText(/^Dedicated REL/).waitFor();
   await page.getByRole("button", { name: "Back to dashboard", exact: true }).click();
   await owner.waitFor();
   assert.deepEqual(errors, []);

@@ -128,6 +128,21 @@ try {
     hasText: "Use the Reliquary web dashboard for setup and write management.",
   });
   if (readOnly) await compatibilityNotice.waitFor();
+
+  async function checkGeneralOnly() {
+    const projects = root.getByRole("region", { name: "Project memories", exact: true });
+    await projects.getByText("Unavailable on this Hermes build", { exact: true }).waitFor();
+    await projects.getByText("Project conversations use General memory on this Hermes version.", { exact: true }).waitFor();
+    const project = projects.getByRole("region", { name: fixture.projectName, exact: true });
+    await project.waitFor();
+    assert.equal(await projects.getByRole("button", { name: /^(Select REL|Create REL|Use General)$/ }).count(), 0);
+    assert.equal(await root.getByText(fixture.projectName + " REL path", { exact: true }).count(), 0);
+    if (fixture.savedProjectRel) {
+      await project.getByText("Saved project REL", { exact: true }).waitFor();
+      await project.getByText(fixture.savedProjectRel, { exact: true }).waitFor();
+    }
+  }
+
   if (fixture.candidate) {
     const { mainRel, activePhy, configPath, createPhy, projectRel, projectName } = fixture.candidate;
     const general = root.getByRole("region", { name: "General memory", exact: true });
@@ -156,7 +171,9 @@ try {
     await root.getByRole("button", { name: "Create Hermes project", exact: true }).click();
     await root.getByText(/In Hermes Desktop Chat, choose New project/).waitFor();
     await root.getByRole("button", { name: "Refresh projects", exact: true }).click();
-    if (projectRel) {
+    if (fixture.expectGeneralOnly) {
+      await checkGeneralOnly();
+    } else if (projectRel) {
       assert(projectName);
       const project = root.getByRole("region", { name: projectName, exact: true });
       await project.getByRole("button", { name: "Select REL", exact: true }).click();
@@ -188,7 +205,12 @@ try {
       for (const id of fixture.ownerIds) await root.getByText(id, { exact: false }).first().waitFor();
       await connect.click();
       const review = root.getByRole("region", { name: "Review connection", exact: true });
-      if (fixture.fallbackCount) await review.getByText(new RegExp("^" + fixture.fallbackCount + " projects? will use General memory")).waitFor();
+      if (fixture.expectGeneralOnly) {
+        await review.getByRole("button", { name: "Connect Reliquary", exact: true }).waitFor();
+        assert.equal(await review.getByRole("button", { name: "Continue", exact: true }).count(), 0);
+      } else if (fixture.fallbackCount) {
+        await review.getByText(new RegExp("^" + fixture.fallbackCount + " projects? will use General memory")).waitFor();
+      }
       await review.getByRole("button", { name: /^(Continue|Connect Reliquary)$/ }).click();
     }
   }
@@ -197,6 +219,12 @@ try {
     console.log("Desktop setup and picker remained visible with Validate and Connect disabled.");
   } else {
     await browseOwners(root, page, connect, compatibilityNotice);
+    if (fixture.expectGeneralOnly) {
+      await root.getByRole("button", { name: "Manage memory setup", exact: true }).click();
+      await checkGeneralOnly();
+      await root.getByRole("button", { name: "Back to dashboard", exact: true }).click();
+      console.log("Desktop confirmed stock General-only setup on the configured profile.");
+    }
   }
 } finally {
   await app.close();
@@ -228,10 +256,12 @@ async function browseOwners(root, page, connect, compatibilityNotice) {
   if (readOnly) {
     const list = root.getByRole("list", { name: "Memories in this page" });
     await root.getByRole("button", { name: "List page", exact: true }).click();
-    await list.waitFor();
     if (fixture.expectedMemory) {
+      await list.waitFor();
       await list.getByRole("button", { name: new RegExp(fixture.expectedMemory.title) }).click();
       await expectBody(fixture.expectedMemory.body);
+    } else {
+      await list.or(root.getByText("No Memories match this page.", { exact: true })).waitFor();
     }
     assert.equal(await root.locator(".rly-memory-write-form, .rly-graph-write-panel, .rly-community-rename").count(), 0);
     await compatibilityNotice.waitFor();
