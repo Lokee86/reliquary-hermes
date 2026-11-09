@@ -2,8 +2,8 @@
   "use strict";
 
   /** @param {any} type @param {any} props @param {...any} children */
-  const h = (type, props, ...children) => /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__).React.createElement(type, props, ...children);
-  const { useState, useEffect } = /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__).hooks;
+  const h = (type, props, ...children) => root.ReliquaryDashboardHost.React.createElement(type, props, ...children);
+  const { useState, useEffect } = root.ReliquaryDashboardHost.hooks;
   const { useRead, useCursor } = root.ReliquaryDashboardState;
   const { meta, readContent, select, pager, MemoryList, Inspector } = root.ReliquaryDashboardViews;
   const { GraphView, CommunityView } = root.ReliquaryDashboardGraph;

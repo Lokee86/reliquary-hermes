@@ -334,6 +334,61 @@ export interface HermesDashboardSDK {
   };
 }
 
+export interface SetupCandidate {
+  main_rel: string;
+  active_phy: string;
+  projects: Record<string, string>;
+  config_path: string | null;
+}
+
+export interface SetupStatus {
+  configured: boolean;
+  runtime_detected: boolean;
+  config_path: string | null;
+  defaults: Omit<SetupCandidate, "main_rel" | "active_phy"> & { main_rel: string | null; active_phy: string | null };
+}
+
+export interface SetupCheck {
+  accepted: boolean;
+  opened: boolean;
+  error: string | null;
+}
+
+export interface SetupOwner extends SetupCheck {
+  kind: "rel" | "phy" | null;
+  owner_id: string | null;
+  scope: string | null;
+}
+
+export interface SetupReport {
+  valid: boolean;
+  main_rel: SetupOwner;
+  active_phy: SetupOwner;
+  projects: Record<string, SetupOwner>;
+  config: SetupCheck;
+  topology_error: string | null;
+}
+
+export interface SetupClient {
+  status(signal: AbortSignal): Promise<SetupStatus>;
+  validate(candidate: SetupCandidate, signal: AbortSignal): Promise<SetupReport>;
+  apply(candidate: SetupCandidate, signal: AbortSignal): Promise<
+    { valid: true; configured: true } | (SetupReport & { configured: false })
+  >;
+}
+
+export type SetupPicker = (kind: "REL" | "PHY" | "config") => Promise<string | null>;
+
+export interface CreateReliquarySurface {
+  (options: {
+    React: HostReact;
+    hooks?: HermesDashboardSDK["hooks"];
+    authedFetch: HermesDashboardSDK["authedFetch"];
+    pickOpenPath?: SetupPicker;
+    surfaceLabel: string;
+  }): () => unknown;
+}
+
 export interface HermesPluginRegistry {
   register(name: string, component: () => unknown): void;
 }
@@ -343,6 +398,17 @@ declare global {
     __HERMES_PLUGIN_SDK__?: HermesDashboardSDK;
     __HERMES_PLUGINS__?: HermesPluginRegistry;
   }
+  var ReliquaryDashboardHost: Pick<HermesDashboardSDK, "React" | "hooks">;
+  var createReliquarySurface: CreateReliquarySurface;
+  var ReliquaryDashboardSurface: CreateReliquarySurface;
+  var ReliquarySetupClient: {
+    createSetupClient(authedFetch: HermesDashboardSDK["authedFetch"]): SetupClient;
+    candidate(main: string, phy: string, config: string, projects: { id: string; path: string }[]): SetupCandidate;
+    message(error: unknown): string;
+  };
+  var ReliquaryOnboarding: {
+    Onboarding(props: { status: SetupStatus; setup: SetupClient; pickOpenPath?: SetupPicker; onConnected(): void }): unknown;
+  };
   var ReliquaryDashboardClient: {
     createClient(transport: DashboardTransport, sessions?: SessionChoice[], phys?: PhyChoice[], resetTransport?: () => void): DashboardClient;
   };

@@ -10,7 +10,7 @@
    * @returns {import("../types").ReadHandle<import("../types").ReadResults[K]>}
    */
   function useRead(client, operation, scope, args) {
-    const { useState, useEffect } = /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__).hooks;
+    const { useState, useEffect } = root.ReliquaryDashboardHost.hooks;
     const [attempt, setAttempt] = useState(0);
     const [snapshot, setSnapshot] = useState(/** @type {{ client: import("../types").DashboardClient, key: string, state: import("../types").ReadOutcome<import("../types").ReadResults[K]> } | null} */ (null));
     const key = JSON.stringify([operation, scope, args, attempt]);
@@ -36,7 +36,7 @@
 
   /** @returns {import("../types").CursorState} */
   function useCursor() {
-    const { useState } = /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__).hooks;
+    const { useState } = root.ReliquaryDashboardHost.hooks;
     const [trail, setTrail] = useState(/** @type {(string | null)[]} */ ([null]));
     return {
       current: trail[trail.length - 1],
