@@ -79,8 +79,10 @@ def test_hosted_desktop_compatibility(tmp_path, hosted_checkout, binaries, plugi
             with installed.open("rb") as actual, binary.open("rb") as expected:
                 assert file_digest(actual, "sha256").digest() == file_digest(expected, "sha256").digest()
             (home / "config.yaml").write_text("plugins:\n  enabled: [reliquary-hermes]\n", encoding="utf-8")
+        if profile == "secondary":
+            continue
         main, phy = home / "main.rel", home / "active.phy"
-        if profile == "default" and community_rel:
+        if community_rel:
             copyfile(community_rel, main)
             result = subprocess.check_output([str(cli), "rel", "community", "list", str(main)], timeout=10)
             page = json.loads(result)["page"]
@@ -102,7 +104,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 from gateway.runtime_bootstrap import TicketStore
 from gateway.session_authorities import SessionAuthorities
-from hermes_cli import plugins, profiles, web_server as web
+from hermes_cli import plugins, profiles, projects_db, web_server as web
 from hermes_cli.dashboard_auth.native_http import HEADER
 
 fixture = json.load(sys.stdin)
@@ -170,6 +172,44 @@ with ExitStack() as stack:
         assert client.post(setup_api + "/apply", headers=grant(profile), params={"profile": other},
                            json=candidate).status_code == 403
         assert not (selected / "reliquary/owners.json").exists()
+        if profile == "secondary":
+            with projects_db.connect_closing(db_path=selected / "projects.db") as db:
+                dedicated = projects_db.create_project(db, name="HU05 Dedicated", folders=[str(selected)])
+                general = projects_db.create_project(db, name="HU05 General fallback")
+                archived = projects_db.create_project(db, name="Archived")
+                projects_db.archive_project(db, archived)
+            listed = reply(client.get(setup_api + "/projects", headers=grant(profile), params=params))
+            assert {entry["id"] for entry in listed["projects"]} == {dedicated, general}
+            assert reply(client.get(setup_api + "/projects", headers=auth))["projects"] == []
+            assert client.get(setup_api + "/projects", headers=grant("default"), params=params).status_code == 403
+            project_file = selected / "project.rel"
+            project_body = {"kind": "project_rel", "path": str(project_file), "project_id": dedicated}
+            assert client.post(setup_api + "/create", headers=cross_origin, params=params,
+                               json=project_body).status_code == 403
+            stale = client.post(setup_api + "/create", headers=writer(profile), params=params,
+                                json={**project_body, "project_id": archived})
+            assert stale.status_code == 409 and stale.json()["detail"] == "unknown_hermes_project"
+            assert not project_file.exists()
+            created = {}
+            for key, body, scope in (
+                ("main", {"kind": "general_rel", "path": candidate["main_rel"]}, "unspecified"),
+                ("phy", {"kind": "phy", "path": candidate["active_phy"]}, None),
+                ("project", project_body, "project"),
+            ):
+                report = reply(client.post(setup_api + "/create", headers=writer(profile), params=params, json=body))
+                assert report["accepted"] and report["opened"] and report["scope"] == scope
+                assert report["path"] == body["path"]
+                created[key] = report["owner_id"]
+            fixture["owners"][profile] = created
+            existing = client.post(setup_api + "/create", headers=writer(profile), params=params, json=project_body)
+            assert existing.status_code == 409 and existing.json()["detail"] == "owner_already_exists"
+            candidates = reply(client.get(setup_api + "/browse", headers=auth,
+                                          params={**params, "path": str(selected), "kind": "rel"}))
+            assert {entry["name"] for entry in candidates["entries"] if entry["kind"] == "file"} == {
+                "main.rel", "project.rel"}
+            assert client.get(setup_api + "/browse", headers=auth,
+                              params={"path": str(selected), "kind": "rel"}).status_code == 403
+            candidate["projects"] = {dedicated: str(project_file)}
         web_validation = reply(client.post(setup_api + "/validate", headers=same_origin, params=params, json=candidate))
         assert web_validation["valid"], web_validation
         if not native_mutations:
@@ -184,6 +224,22 @@ with ExitStack() as stack:
             assert client.post(setup_api + "/apply", headers=ticket, params=params, json=candidate).status_code == 401
         status = reply(client.get(setup_api + "/status", headers=grant(profile), params=params))
         assert status["configured"] and status["desktop_native_mutations"] is native_mutations
+        if profile == "secondary":
+            assert status["defaults"]["projects"] == candidate["projects"]
+            unchanged = reply(client.post(setup_api + "/validate", headers=writer(profile),
+                                          params=params, json=candidate))
+            assert unchanged["valid"] and unchanged["projects"][dedicated]["owner_id"] == created["project"]
+            assert reply(client.post(setup_api + "/apply", headers=writer(profile),
+                                     params=params, json=candidate))["configured"]
+            saved = selected / "reliquary/owners.json"
+            raw = saved.read_bytes()
+            saved.write_bytes(raw + b"\n")
+            drift = client.post(setup_api + "/apply", headers=writer(profile), params=params, json=candidate)
+            assert drift.status_code == 409 and drift.json()["detail"] == "service_restart_required"
+            saved.write_bytes(raw)
+            conflict = client.post(setup_api + "/apply", headers=writer(profile), params=params,
+                                   json={**candidate, "projects": {}})
+            assert conflict.status_code == 409 and conflict.json()["detail"] == "service_restart_required"
 
         discovery = reply(client.post(dashboard, headers=grant(profile), params=params, json=fixture["request"]))
         assert discovery["status"] == "ok", discovery

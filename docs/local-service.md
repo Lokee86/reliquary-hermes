@@ -8,22 +8,22 @@ Configure the standalone Hermes provider to attach to a local Reliquary service 
 
 The pinned Hermes `MemoryProvider` starts an attachment in a context-bound background thread. Its client validates discovery, authenticates the host and receives the durable session binding. The host mounts configured RELs for writing through public Root and mounts the selected PHY read-only. It exposes a provider channel with actual owner status. User edits belong to a separate dashboard channel.
 
-Each configured profile has a separate local service and credential. Multiple sessions in one profile share the service. Each project REL is a distinct child of the main REL in the service registry. A configured project session binds to that child. Other sessions bind to the main REL. The same explicit PHY selection can serve different bot profiles without changing the integration `user_id`.
+Each configured profile has a separate local service and credential. Multiple sessions in one profile share the service. Each project REL is a distinct child of the main REL in the service registry. New sessions with trusted Hermes project attribution bind to the matching dedicated REL when one is configured. Other new sessions use General memory. The audited and installed Hermes hosts lack the attribution hook and use General for new attachments. The same explicit PHY selection can serve different bot profiles without changing the integration `user_id`.
 
 ## Configuration and setup
 
 1. Install the standalone Reliquary plugin and its built host in the active Hermes profile. The default executable is `plugins/reliquary/host/reliquary-hermes-host.exe` under that profile. Build it from the Root revision and the HU05 patches recorded in the [verification guide](verification.md#hu05-fresh-real-model-verification).
-2. Identify an existing main REL with a non-project scope, an active PHY, and a project-scoped REL for each optional project. Create owners with the Reliquary CLI if needed.
-3. Choose these paths in Reliquary setup or run `hermes memory setup reliquary` for headless setup. Setup derives profile and service identity, validates the paths through the Rust host, provisions a random credential in Hermes secret storage, and checks the signed host topology before selecting the provider.
-4. Start a new Hermes session to attach the provider. Set any explicit session-to-project mapping in the private `owners.json` before the session first attaches.
+2. Select or create a General REL and active PHY. The Project memories section lists the active Hermes projects and can select or create a dedicated project REL. Create Hermes projects through the host’s Projects UI or `hermes project create`, then refresh the list.
+3. Review any General memory fallback and connect. Setup derives profile and service identity, validates owners through the Rust host, provisions a random credential in Hermes secret storage, and checks the signed host topology before selecting the provider. Run `hermes memory setup reliquary` for headless setup.
+4. Start a Hermes session to attach the provider. Already attached sessions keep their accepted REL.
 
 For a unified directory installation, build the browser and Desktop assets with `node dashboard/scripts/build.cjs` and `node desktop/scripts/build.cjs`. Install the provider Python files from `src/reliquary_hermes/` at the root of the existing `plugins/reliquary` package with its native manifest and host pin. Place the rebuilt host in `host/`, the dashboard manifest, Python router and `dist/` in `dashboard/`, and the generated Desktop entry at `desktop/plugin.js`. The dashboard uses the `reliquary-hermes` plugin namespace. Enable that dashboard contribution in the profile and enable Reliquary in Desktop's Capabilities → Plugins.
 
 With `plugins.isolation: host`, Desktop enables setup and writes when Hermes carries verified native HTTP admission to the active profile's worker. On stock builds without that capability, the Desktop pane shows setup status and supports browsing configured owners. Open the Reliquary web dashboard to connect owners or manage writes. The same plugin enables Desktop setup and writes automatically on a compatible Hermes build. [Stock and fixed Hermes verification](verification.md#hu06-stock-and-fixed-hermes-acceptance)
 
-Open the Reliquary tab in the browser or the Reliquary pane in Desktop. Both use the active Hermes profile. The browser accepts typed paths and Desktop also offers its native file picker. In the browser or on a Desktop host with write support, validation shows the detected owner kinds and stable IDs. Connect starts the service and opens the owner dashboard. If you connect from the web dashboard, reopen the Desktop pane to browse the configured owners.
+Open the Reliquary tab in the browser or the Reliquary pane in Desktop. Both use the active Hermes profile. The web picker browses the Hermes host. It lists eligible files under the active profile home, configured owner directories, active project folders and operator-approved roots in `RELIQUARY_SETUP_BROWSE_ROOTS` (separated by `;` on Windows). Named profile homes are isolated from other profiles. Desktop uses native Open and Save dialogs. Advanced exposes absolute owner and config paths. Created owners remain on disk if setup is cancelled or connection fails. In the browser or on a Desktop host with write support, validation shows the detected owner kinds and stable IDs. Connect starts the service and opens the owner dashboard. If you connect from the web dashboard, reopen the Desktop pane to browse the configured owners.
 
-Paths are absolute. Configuration is scoped to the `hermes_home` that the pinned host supplies. The example `<hermes_home>/reliquary/owners.json` below binds a session to the Lantern project.
+Paths are absolute. Configuration is scoped to the `hermes_home` that the pinned host supplies. The example `<hermes_home>/reliquary/owners.json` below associates a dedicated REL with a stable Hermes project ID.
 
 ```json
 {
@@ -31,8 +31,7 @@ Paths are absolute. Configuration is scoped to the `hermes_home` that the pinned
   "principal_id": "operator",
   "main_rel": "C:/example/owners/general.rel",
   "active_phy": "C:/example/owners/active.phy",
-  "projects": {"lantern": "C:/example/owners/lantern.rel"},
-  "session_projects": {"session-lantern": "lantern"}
+  "projects": {"p_a41e9cd88482": "C:/example/owners/lantern.rel"}
 }
 ```
 
@@ -40,11 +39,11 @@ Paths are absolute. Configuration is scoped to the `hermes_home` that the pinned
 
 ## Lifecycle and recovery
 
-The service takes an exclusive process lease before mounting owners. Each writable REL also takes the normal Root writer lease. Once mounted, the service publishes `discovery.json` atomically. An authenticated attach creates the exact durable session route before returning its binding. Known sessions reuse their routes after restart. First startup pins the profile, principal, main REL, configured project set and active PHY to the exact mounted identities. Later starts reject changes to that topology or conflicting accepted session routes.
+The service takes an exclusive process lease before mounting owners. Each writable REL also takes the normal Root writer lease. Once mounted, the service publishes `discovery.json` atomically. An authenticated attach creates the exact durable session route before returning its binding. Known sessions reuse their routes after restart. First startup pins the profile, principal, main REL, configured project set and active PHY to the exact mounted identities. Later starts allow an append-only project topology extension with the same profile, principal, General REL, PHY and existing project owner IDs. Removing or replacing accepted owners yields `owner_topology_changed`. Live owner or processing changes return `service_restart_required`. Stop the profile service cleanly before applying the changes again.
 
 Back up `owners.json`, `provider.json`, `topology-v1.json` and `sessions-v1/` with the matching owners and their usual Reliquary backups. Keep the profile credential in Hermes secret storage. The lock file and `discovery.json` are runtime coordination data. A stale endpoint that refuses the connection permits a new candidate, which must acquire the lease and publish a new authenticated identity. A timeout, malformed discovery, identity mismatch or authentication failure reports unavailable without attempting another launch.
 
-Provider and host lifetime are separated by a generic **integration runtime lease**. Hermes is the first adapter using it, not the lifecycle owner. While attached, each integration runtime renews its authenticated lease. A clean runtime shutdown first makes volatile adapter-owned source captures durable, then cleanly detaches that lease. The shared Rust host remains alive while any integration runtime lease exists; after the **last clean integration runtime exits**, and provided no unclean runtime fence still requires reconciliation, it stops accepting new work, closes Reliquary owners/workers normally and exits. An expired lease without clean detach is recorded as an unclean integration-runtime termination: the host remains running, persists an integration-scoped crash/reconciliation marker and fences only the affected copied-source continuity until that integration reconnects and resynchronizes. See [HP04 crash/reconnect lifecycle](hp04-crash-reconnect-lifecycle-2026-11-08.md). Configure session-to-project assignments before that session's first attachment, and restart the service to load configuration updates.
+Provider and host lifetime are separated by a generic **integration runtime lease**. Hermes is the first adapter using it, not the lifecycle owner. While attached, each integration runtime renews its authenticated lease. A clean runtime shutdown first makes volatile adapter-owned source captures durable, then cleanly detaches that lease. The shared Rust host remains alive while any integration runtime lease exists; after the **last clean integration runtime exits**, and provided no unclean runtime fence still requires reconciliation, it stops accepting new work, closes Reliquary owners/workers normally and exits. An expired lease without clean detach is recorded as an unclean integration-runtime termination: the host remains running, persists an integration-scoped crash/reconciliation marker and fences only the affected copied-source continuity until that integration reconnects and resynchronizes. See [HP04 crash/reconnect lifecycle](hp04-crash-reconnect-lifecycle-2026-11-08.md).
 
 ## Security and diagnostics
 
@@ -74,7 +73,7 @@ Queued prefetch can stage an exact selection in the host. When Hermes asks for m
 
 ## Live dashboard
 
-Install the integration Python package in the pinned Hermes environment and stage the live dashboard manifest, router and bundle under the selected profile's user plugin directory. Enable the Reliquary plugin in that profile. Open an attached Hermes provider session to start the configured service. The dashboard discovers that service for the request's admitted profile. Select a configured REL or the active PHY. Enter a configured project session ID or a durably attached general session ID to see status for its mapped REL. Use **Refresh owner data** after an owner cut changes.
+Install the integration Python package in the pinned Hermes environment and stage the live dashboard manifest, router and bundle under the selected profile's user plugin directory. Enable the Reliquary plugin in that profile. Open an attached Hermes provider session to start the configured service. The dashboard discovers that service for the request's admitted profile. Select a configured REL or the active PHY. Enter a durably attached session ID to see status for its accepted REL. Use **Refresh owner data** after an owner cut changes.
 
 The REL inspector shows Memory summaries, current payloads, available history and provenance, graph neighborhoods, current community metadata, and processing state. Session status shows the copied source head or tombstone and the latest recorded recall return when present. An absent or stale community partition and unavailable provenance fields appear as typed unavailable results. The active PHY has read capabilities only.
 

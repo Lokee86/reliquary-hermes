@@ -31,6 +31,22 @@ _SETUP_ERRORS = {
     "service_restart_required": (409, "service_restart_required"),
     "managed_setup": (403, "managed_setup"),
     "setup_request_too_large": (413, "setup_request_too_large"),
+    "project_discovery_unavailable": (503, "project_discovery_unavailable"),
+    "unknown_hermes_project": (409, "unknown_hermes_project"),
+    "invalid_browse_kind": (400, "invalid_browse_kind"),
+    "invalid_local_path": (400, "invalid_local_path"),
+    "browse_outside_roots": (403, "browse_outside_roots"),
+    "browse_reparse_point": (403, "browse_reparse_point"),
+    "browse_not_directory": (400, "browse_not_directory"),
+    "browse_not_found": (404, "browse_not_found"),
+    "browse_unreadable": (403, "browse_unreadable"),
+    "browse_timeout": (503, "browse_timeout"),
+    "invalid_owner_path": (400, "invalid_owner_path"),
+    "owner_already_exists": (409, "owner_already_exists"),
+    "owner_creation_failed": (422, "owner_creation_failed"),
+    "owner_created_unverified": (422, "owner_created_unverified"),
+    "owner_creation_unavailable": (503, "owner_creation_unavailable"),
+    "owner_creation_unconfirmed": (503, "owner_creation_unconfirmed"),
 }
 _CURSOR_TTL = 300.0
 _CURSOR_CAP = 256
@@ -351,11 +367,12 @@ def _require_hermes_auth(request: Request, error: str) -> None:
         raise HTTPException(status_code=403, detail=error) from None
 
 
-async def _setup_request(request: Request, operation: str):
+async def _setup_request(request: Request, operation: str, *read_args):
     _require_hermes_auth(request, "setup_admission_failed")
     home = _host_home(request)
-    args = (home,)
-    if operation != "status":
+    args = (home, *read_args)
+    kwargs = {}
+    if operation in {"validate", "apply", "create"}:
         if not _same_origin(request):
             raise HTTPException(status_code=403, detail="same_origin_required")
         content_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
@@ -363,15 +380,17 @@ async def _setup_request(request: Request, operation: str):
             raise HTTPException(status_code=415, detail="setup_json_required")
         try:
             candidate = decode(await _read_bounded_body(request, limit=_SETUP_BODY_BYTES, error="setup_request_too_large"))
-            require(_SETUP_REQUIRED_FIELDS <= set(candidate) <= _SETUP_FIELDS, "invalid_setup_candidate")
+            if operation != "create":
+                require(_SETUP_REQUIRED_FIELDS <= set(candidate) <= _SETUP_FIELDS, "invalid_setup_candidate")
         except ContractError:
             raise HTTPException(status_code=400, detail="invalid_setup_request") from None
         args = (home, candidate)
+        kwargs = {"native": "origin" not in request.headers} if operation == "create" else {"project_aware": True}
 
     try:
         from . import setup
 
-        result = await run_in_threadpool(getattr(setup, operation), *args)
+        result = await run_in_threadpool(getattr(setup, operation), *args, **kwargs)
     except ContractError as exc:
         status, detail = _SETUP_ERRORS.get(str(exc), (400, "invalid_setup_request"))
         raise HTTPException(status_code=status, detail=detail) from None
@@ -386,6 +405,21 @@ async def _setup_request(request: Request, operation: str):
 @router.get("/setup-v1/status")
 async def setup_status(request: Request):
     return await _setup_request(request, "status")
+
+
+@router.get("/setup-v1/projects")
+async def setup_projects(request: Request):
+    return await _setup_request(request, "projects")
+
+
+@router.get("/setup-v1/browse")
+async def setup_browse(request: Request, kind: str = "", path: str | None = None):
+    return await _setup_request(request, "browse", kind, path)
+
+
+@router.post("/setup-v1/create")
+async def setup_create(request: Request):
+    return await _setup_request(request, "create")
 
 
 @router.post("/setup-v1/validate")

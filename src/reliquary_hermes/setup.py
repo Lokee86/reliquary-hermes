@@ -5,7 +5,9 @@ import os
 from pathlib import Path
 import subprocess
 
+from . import setup_paths
 from .client import HostClient, HostUnavailable
+from .projects import active_projects, inventory
 from .settings import (
     _read_object, _state_dir, ensure_setup_token, profile_home, profile_setup_lock, read_settings, read_token,
     save_settings,
@@ -13,6 +15,9 @@ from .settings import (
 from .validation import ContractError, MAX_WIRE_BYTES, canonical, decode, identifier, obj, require, text
 
 _OWNER_REPORT_FIELDS = {"accepted", "opened", "kind", "owner_id", "scope", "error"}
+_CREATE_ROLES = {"general_rel": "main_rel", "project_rel": "project_rel", "phy": "active_phy"}
+_CREATE_ERRORS = {b"owner_already_exists", b"invalid_owner_path", b"owner_creation_failed",
+                  b"owner_created_unverified"}
 
 
 def _read_optional(path):
@@ -76,13 +81,19 @@ def status(home):
             "config_path": defaults["config_path"], "defaults": defaults}
 
 
-def _candidate(home, candidate, prior, defaults):
+def _candidate(home, candidate, prior, defaults, *, project_aware=False):
     fields = {"main_rel", "active_phy"}
     require(type(candidate) is dict and fields <= set(candidate) <= fields | {"projects", "config_path"},
             "invalid_fields")
     projects = candidate.get("projects", defaults["projects"])
     require(type(projects) is dict and len(projects) <= 128, "invalid_project_config")
     projects = {identifier(key): _local_path(path) for key, path in projects.items()}
+    if project_aware and projects != defaults["projects"]:
+        active = active_projects(home)
+        previous = defaults["projects"]
+        for project in projects.keys() | previous.keys():
+            if projects.get(project) != previous.get(project):
+                require(project in active, "unknown_hermes_project")
     config = candidate.get("config_path")
     if config is None:
         config = defaults["config_path"]
@@ -113,17 +124,21 @@ def _owner_report(value):
             identifier(row[field])
 
 
-def _preflight(home, binary, request):
+def _host_setup(home, binary, operation, request):
     require(binary.is_absolute() and binary.is_file(), "runtime_unavailable")
     wire = canonical(request)
     require(len(wire) <= MAX_WIRE_BYTES, "setup_request_too_large")
     environment = {name: os.environ[name] for name in ("SystemRoot", "WINDIR") if name in os.environ}
     environment.update({name: str(home) for name in ("TEMP", "TMP", "TMPDIR")})
     flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    return subprocess.run([str(binary), operation, "--state-dir", str(_state_dir(home))],
+                          input=wire, capture_output=True, cwd=home, env=environment,
+                          creationflags=flags, timeout=15, check=True)
+
+
+def _preflight(home, binary, request):
     try:
-        result = subprocess.run([str(binary), "setup-validate", "--state-dir", str(_state_dir(home))],
-                                input=wire, capture_output=True, cwd=home, env=environment,
-                                creationflags=flags, timeout=15, check=True)
+        result = _host_setup(home, binary, "setup-validate", request)
         report = obj(decode(result.stdout), {"valid", "main_rel", "active_phy", "projects", "config", "topology_error"})
         require(type(report["valid"]) is bool, "invalid_preflight")
         _owner_report(report["main_rel"])
@@ -136,14 +151,111 @@ def _preflight(home, binary, request):
             if error is not None:
                 identifier(error)
         return report
+    except ContractError as exc:
+        if str(exc) in {"runtime_unavailable", "setup_request_too_large"}:
+            raise
+        raise ContractError("preflight_unavailable") from None
     except (OSError, ValueError, subprocess.SubprocessError):
         raise ContractError("preflight_unavailable") from None
 
 
-def validate(home, candidate):
+def projects(home):
+    return inventory(profile_home(home))
+
+
+def browse(home, kind, path):
     home = profile_home(home)
-    prior, _, binary, defaults = _defaults(home)
-    return _preflight(home, binary, _candidate(home, candidate, prior, defaults))
+    _, _, _, defaults = _defaults(home)
+    return setup_paths.browse(home, defaults, kind, path)
+
+
+def create(home, candidate, *, native):
+    from hermes_cli.config import is_managed
+
+    kind = candidate.get("kind")
+    require(type(kind) is str and kind in _CREATE_ROLES, "invalid_setup_request")
+    fields = {"kind", "path", "project_id"} if kind == "project_rel" else {"kind", "path"}
+    obj(candidate, fields)
+    home = profile_home(home)
+    require(not is_managed(), "managed_setup")
+    with profile_setup_lock(home):
+        _, _, binary, defaults = _defaults(home)
+        if kind == "project_rel":
+            require(identifier(candidate["project_id"]) in active_projects(home), "unknown_hermes_project")
+        file_kind = "phy" if kind == "phy" else "rel"
+        with setup_paths.destination(home, defaults, file_kind, candidate["path"], native=native) as path:
+            try:
+                result = _host_setup(home, binary, "setup-create",
+                                     {"role": _CREATE_ROLES[kind], "path": str(path)})
+            except subprocess.CalledProcessError as exc:
+                code = exc.stderr.strip().removeprefix(b"reliquary-hermes-host: ")
+                if code in _CREATE_ERRORS:
+                    raise ContractError(code.decode("ascii")) from None
+                raise ContractError("owner_creation_unavailable") from None
+            except subprocess.TimeoutExpired:
+                raise ContractError("owner_creation_unconfirmed") from None
+            except OSError:
+                raise ContractError("owner_creation_unavailable") from None
+            try:
+                report = decode(result.stdout)
+                _owner_report(report)
+                require(report["accepted"] and report["opened"] and report["kind"] == file_kind
+                        and report["owner_id"] is not None, "owner_created_unverified")
+                scope = {"general_rel": "unspecified", "project_rel": "project", "phy": None}[kind]
+                require(report["scope"] == scope, "owner_created_unverified")
+            except ContractError:
+                raise ContractError("owner_created_unverified") from None
+            return {**report, "path": str(path)}
+
+
+def _owners_fingerprint(state, owners):
+    with (state / "owners.json").open("rb") as stream:
+        raw = stream.read(MAX_WIRE_BYTES + 1)
+    require(decode(raw) == owners, "service_restart_required")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _running_report(home, prior, processing, request):
+    state = _state_dir(home)
+    if not (state / "discovery.json").is_file():
+        return None
+    try:
+        settings = read_settings(home)
+        client = HostClient(state, settings.profile_id, settings.principal_id, read_token(home))
+        client.read_dashboard_topology(None)
+    except (OSError, ValueError, HostUnavailable):
+        return None
+
+    config = request["config_path"]
+    changed = request["owners"] != prior or (
+        config is not None and Path(config) != Path(processing.get("config_path") or "")
+    )
+    require(not changed, "service_restart_required")
+    try:
+        fingerprint = _owners_fingerprint(state, request["owners"])
+        topology = client.read_dashboard_topology(None, owners_fingerprint=fingerprint)
+    except (OSError, ValueError, HostUnavailable):
+        raise ContractError("service_restart_required") from None
+
+    # Signed owner bindings are in registry order: General, projects sorted by
+    # stable ID, then active PHY. Scope was verified when this topology mounted.
+    projects = sorted(prior["projects"])
+    rows = topology["owners"]
+    require(len(rows) == len(projects) + 2 and rows[-1]["owner_id"] == topology["active_phy_id"],
+            "service_restart_required")
+    reports = [{"accepted": True, "opened": True, "kind": row["owner_kind"].lower(),
+                "owner_id": row["owner_id"], "scope": None, "error": None} for row in rows]
+    return {"valid": True, "main_rel": reports[0], "active_phy": reports[-1],
+            "projects": dict(zip(projects, reports[1:-1])),
+            "config": {"accepted": True, "opened": config is not None, "error": None},
+            "topology_error": None}
+
+
+def validate(home, candidate, *, project_aware=False):
+    home = profile_home(home)
+    prior, processing, binary, defaults = _defaults(home)
+    request = _candidate(home, candidate, prior, defaults, project_aware=project_aware)
+    return _running_report(home, prior, processing, request) or _preflight(home, binary, request)
 
 
 def _activate(home):
@@ -160,7 +272,7 @@ def _activate(home):
     save_config({"memory": {"provider": "reliquary"}, "plugins": {"enabled": enabled}}, merge_existing=True)
 
 
-def apply(home, candidate):
+def apply(home, candidate, *, project_aware=False):
     from hermes_cli.config import is_managed
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     from utils import atomic_json_write
@@ -172,32 +284,20 @@ def apply(home, candidate):
         require(not is_managed(), "managed_setup")
         with profile_setup_lock(home):
             prior, processing, binary, defaults = _defaults(home)
-            request = _candidate(home, candidate, prior, defaults)
+            request = _candidate(home, candidate, prior, defaults, project_aware=project_aware)
+            if _running_report(home, prior, processing, request) is not None:
+                _activate(home)
+                return {"valid": True, "configured": True}
             processing_path = state / "processing.json"
             config_path = request["config_path"]
             prior_config = processing.get("config_path")
             config_changed = config_path is not None and (
                 prior_config is None or Path(prior_config) != Path(config_path)
             )
-            if request["owners"] == prior and not config_changed and (state / "discovery.json").is_file():
-                # A running host holds the writer leases. Authenticate its accepted topology
-                # for an unchanged setup instead of trying to reopen its owner files.
-                try:
-                    settings = read_settings(home)
-                    client = HostClient(state, settings.profile_id, settings.principal_id, read_token(home))
-                    client.read_dashboard_topology(None)
-                except (OSError, ValueError, HostUnavailable):
-                    pass
-                else:
-                    _activate(home)
-                    return {"valid": True, "configured": True}
-
             report = _preflight(home, binary, request)
             if not report["valid"]:
                 return {**report, "configured": False}
 
-            if config_changed:
-                require(not (state / "discovery.json").exists(), "service_restart_required")
             paths = [state / "owners.json", state / "provider.json"]
             if config_changed:
                 paths.append(processing_path)
@@ -214,7 +314,18 @@ def apply(home, candidate):
                 settings = read_settings(home)
                 client = HostClient(settings.state_dir, settings.profile_id, settings.principal_id,
                                     read_token(home), binary=settings.binary)
-                client.connect_dashboard(None)
+                fingerprint = _owners_fingerprint(state, request["owners"])
+                try:
+                    active = client.connect_dashboard(None, owners_fingerprint=fingerprint)
+                except HostUnavailable as exc:
+                    if str(exc) == "service_restart_required":
+                        raise ContractError("service_restart_required") from None
+                    raise
+                expected = {report["main_rel"]["owner_id"], report["active_phy"]["owner_id"],
+                            *(owner["owner_id"] for owner in report["projects"].values())}
+                require({owner["owner_id"] for owner in active["owners"]} == expected
+                        and active["active_phy_id"] == report["active_phy"]["owner_id"],
+                        "service_restart_required")
                 _activate(home)
             except (OSError, RuntimeError, ValueError):
                 if client is not None and client.cancel_startup():

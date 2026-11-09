@@ -350,6 +350,12 @@ The local Chrome smoke passed against Hermes `104a7c4158e98719750e32347cd4101a7b
 
 Electron 44.9.3 passed the stock Hermes `b766b76988449e15e3914037d3e03fb96af72774` light-theme check with the native picker, visible keyboard focus and disabled setup writes. On fixed Hermes `104a7c4158e98719750e32347cd4101a7b35bc8d` in dark mode, native setup, owner selection and Memory create, correction and retirement passed through tombstone readback. Both hosts used isolated profiles and scripted native file-picker selections.
 
+## HU05 project-aware onboarding amendment
+
+The authenticated setup checks exercise active-profile Hermes inventory, multi-folder project grouping, archived project exclusion, bounded host path browsing, and browser and verified native creation admission. Run `tests/test_setup_api.py` with the pinned Hermes checkout and `tests/test_hosted_desktop_api.py` with the installed host matrix. The hosted probe creates General, project and PHY owners in an isolated profile and verifies their signed topology and existing management operations. The Rust `setup_validation` and registry suites cover exclusive creation, owner preflight and durable binding through restart.
+
+The stock and installed hosts expose the project registry but lack authoritative project attribution in the provider lifecycle. Their project lists and owner selection are available. New sessions attach to General memory and the UI reports the missing routing capability. Live project-specific routing requires the host contract recorded in the [host audit](host-audit.md).
+
 ## Related docs
 
 - [Documentation policy and ownership](documentation-policy.md)

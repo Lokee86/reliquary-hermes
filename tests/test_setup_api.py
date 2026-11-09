@@ -23,7 +23,7 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from gateway.runtime_bootstrap import TicketStore
-from hermes_cli import web_server as web
+from hermes_cli import projects_db, web_server as web
 from hermes_cli.dashboard_auth.native_http import HEADER
 from plugins.memory import import_provider_module
 
@@ -32,6 +32,22 @@ ContractError = import_provider_module("reliquary", "validation").ContractError
 
 home = Path(os.environ["HERMES_HOME"]).resolve()
 assert not (home / "reliquary/owners.json").exists()
+project_root = home.parent / "project-folder"
+project_root.mkdir()
+(project_root / "first.rel").touch()
+(project_root / "active.phy").touch()
+(project_root / "private.txt").touch()
+folder_two = home.parent / "project-other"
+folder_two.mkdir()
+unapproved = home.parent / "private"
+unapproved.mkdir()
+with projects_db.connect_closing(db_path=home / "projects.db") as db:
+    project = projects_db.create_project(db, name="Active Project", folders=[str(project_root), str(folder_two)])
+    fallback = projects_db.create_project(db, name="General Fallback")
+    archive = projects_db.create_project(db, name="Archived")
+    projects_db.archive_project(db, archive)
+setup = import_provider_module("reliquary", "setup")
+inventory, browse = setup.projects, setup.browse
 path = "/api/plugins/reliquary-hermes/setup-v1"
 candidate = {"main_rel": "C:/owners/main.rel", "active_phy": "C:/owners/user.phy"}
 defaults = {"main_rel": None, "active_phy": None, "projects": {}, "config_path": None}
@@ -48,8 +64,8 @@ def status(selected):
     return {"configured": "apply" in calls, "runtime_detected": True,
             "config_path": None, "defaults": defaults}
 
-def validate(selected, value):
-    assert selected == home
+def validate(selected, value, *, project_aware):
+    assert selected == home and project_aware
     if value["main_rel"] == "busy":
         raise ContractError("service_restart_required")
     if value["main_rel"] == "private-diagnostic":
@@ -58,12 +74,18 @@ def validate(selected, value):
     calls.append("validate")
     return report
 
-def apply(selected, value):
-    assert selected == home and value == candidate
+def apply(selected, value, *, project_aware):
+    assert selected == home and value == candidate and project_aware
     calls.append("apply")
     return {**report, "configured": True}
 
-provider.setup = SimpleNamespace(status=status, validate=validate, apply=apply)
+def create(selected, value, *, native):
+    assert selected == home and value == {"kind": "project_rel", "path": str(project_root / "new.rel"),
+                                         "project_id": project}
+    return {"native": native}
+
+provider.setup = SimpleNamespace(status=status, validate=validate, apply=apply,
+                                 projects=inventory, browse=browse, create=create)
 
 # Exercise the real native middleware and one-use ticket store. TestClient
 # substitutes the TCP scope the gateway otherwise supplies for loopback.
@@ -86,8 +108,27 @@ def grant():
 with TestClient(loopback_app) as client:
     auth = {web._SESSION_HEADER_NAME: web._SESSION_TOKEN}
     same = {**auth, "Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
-    for method, route in (("GET", "/status"), ("POST", "/validate"), ("POST", "/apply")):
+    for method, route in (("GET", "/status"), ("GET", "/projects"), ("GET", "/browse"),
+                          ("POST", "/validate"), ("POST", "/apply"), ("POST", "/create")):
         assert client.request(method, path + route, json=candidate).status_code == 401
+    found = client.get(path + "/projects", headers=auth)
+    assert found.status_code == 200 and found.headers["Cache-Control"] == "no-store"
+    assert {item["id"]: item["name"] for item in found.json()["projects"]} == {
+        project: "Active Project", fallback: "General Fallback"}
+    roots = client.get(path + "/browse", headers=auth, params={"kind": "rel"}).json()
+    assert {entry["path"] for entry in roots["entries"]} == {str(home), str(project_root), str(folder_two)}
+    def list_path(directory):
+        return client.get(path + "/browse", headers=auth, params={"kind": "rel", "path": str(directory)})
+    entries = list_path(project_root).json()["entries"]
+    assert entries == [{"name": "first.rel", "path": str(project_root / "first.rel"), "kind": "file"}]
+    assert list_path(unapproved).json() == {"detail": "browse_outside_roots"}
+    assert list_path(home / "profiles").json() == {"detail": "browse_outside_roots"}
+    assert list_path(project_root / ".." / unapproved.name).json() == {"detail": "invalid_local_path"}
+    assert list_path("//server/share").json() == {"detail": "invalid_local_path"}
+    body = {"kind": "project_rel", "path": str(project_root / "new.rel"), "project_id": project}
+    assert client.post(path + "/create", headers=auth, json=body).status_code == 403
+    assert client.post(path + "/create", headers=same, json=body).json() == {"native": False}
+    assert client.post(path + "/create", headers=grant(), json=body).json() == {"native": True}
     response = client.get(path + "/status", headers=auth)
     assert response.status_code == 200, response.text
     assert response.headers["Cache-Control"] == "no-store"

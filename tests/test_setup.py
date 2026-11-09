@@ -1,10 +1,12 @@
 """The shared setup interface owns activation, provisioning and rollback."""
 
 import json
+import os
+import subprocess
 
 import pytest
 
-from reliquary_hermes import setup
+from reliquary_hermes import setup, setup_paths
 from reliquary_hermes.client import HostUnavailable
 from reliquary_hermes.settings import TOKEN_VAR, read_token
 from reliquary_hermes.validation import ContractError
@@ -24,8 +26,17 @@ def setup_profile(pinned_provider, monkeypatch, tmp_path):
         path.touch()
         candidate[field] = str(path)
     monkeypatch.setenv("RELIQUARY_CONFIG_PATH", candidate["config_path"])
-    monkeypatch.setattr(setup, "_preflight", lambda home, binary, request: {"valid": True})
-    monkeypatch.setattr(setup.HostClient, "connect_dashboard", lambda self, session: {})
+    def preflight(home, binary, request):
+        return {"valid": True, "main_rel": {"owner_id": "general"}, "active_phy": {"owner_id": "identity"},
+                "projects": {key: {"owner_id": key} for key in request["owners"]["projects"]}}
+
+    def connect(client, session, *, owners_fingerprint):
+        projects = json.loads((home / "reliquary/owners.json").read_bytes())["projects"]
+        return {"owners": [{"owner_id": key} for key in ("general", "identity", *projects)],
+                "active_phy_id": "identity"}
+
+    monkeypatch.setattr(setup, "_preflight", preflight)
+    monkeypatch.setattr(setup.HostClient, "connect_dashboard", connect)
     return home, candidate
 
 
@@ -88,6 +99,37 @@ def test_setup_rejects_authority_and_keeps_project_session_mappings(setup_profil
     owner_file.write_text(json.dumps(owners), encoding="utf-8")
     assert setup.apply(home, candidate)["configured"]
     assert json.loads(owner_file.read_bytes()) == owners
+
+
+def test_browse_caps_listing_and_rejects_directory_links(tmp_path, monkeypatch):
+    home = tmp_path / "hermes"
+    home.mkdir()
+    external = tmp_path / "private"
+    external.mkdir()
+    (external / "outside.rel").touch()
+    alias = home / "alias"
+    if os.name == "nt":
+        # Windows junctions require no developer mode or symbolic-link privilege.
+        subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(external)],
+                       check=True, capture_output=True, timeout=10)
+    else:
+        alias.symlink_to(external, target_is_directory=True)
+
+    monkeypatch.setattr(setup_paths, "_default_home", lambda: home)
+    monkeypatch.setattr(setup_paths, "active_projects", lambda home: {})
+    monkeypatch.setattr(setup_paths, "_MAX_ENTRIES", 2)
+    for index in range(3):
+        (home / f"owner-{index}.rel").touch()
+    result = setup_paths.browse(home, {}, "rel", str(home))
+    assert result["truncated"]
+    assert len(result["entries"]) == 2
+    assert all(entry["kind"] == "file" for entry in result["entries"])
+    with pytest.raises(ContractError, match="browse_reparse_point"):
+        setup_paths.browse(home, {}, "rel", str(alias))
+    with pytest.raises(ContractError, match="browse_reparse_point"):
+        with setup_paths.destination(home, {}, "rel", str(alias / "new.rel"), native=False):
+            pytest.fail("accepted creation through a directory link")
+    assert not (external / "new.rel").exists()
 
 
 def test_exited_setup_host_releases_unaccepted_topology(pinned_provider, binaries, setup_hosts, tmp_path):
