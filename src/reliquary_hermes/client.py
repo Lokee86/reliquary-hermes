@@ -304,10 +304,13 @@ class HostClient:
             raise
 
     def _connect_session(self, session_id: str) -> SessionBinding:
+        return self._connect(lambda discovery, deadline: self._attach(discovery, session_id, deadline))
+
+    def _connect(self, exchange):
         previous = self._read_discovery()
         if previous is not None:
             try:
-                return self._attach(previous, session_id, time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS)
+                return exchange(previous, time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS)
             except _ConnectionRefused:
                 pass
         if self._binary is None:
@@ -318,20 +321,36 @@ class HostClient:
             remaining = _remaining(deadline)
             current = self._read_discovery()
             if current is not None and current != previous:
-                return self._attach(current, session_id, deadline)
+                return exchange(current, deadline)
             time.sleep(min(0.03, remaining))
+
+    def connect_dashboard(self, session_id: str | None) -> dict:
+        """Start or reuse the profile host, then verify its signed owner topology."""
+        return self._connect(lambda discovery, deadline: self._dashboard_topology(discovery, session_id, deadline))
+
+    def cancel_startup(self) -> bool:
+        """Stop only a process this client launched while applying setup."""
+        if self._process is None:
+            return False
+        if self._process.poll() is None:
+            self._process.kill()
+            self._process.wait(timeout=3)
+        return True
 
     def read_dashboard_topology(self, session_id: str | None) -> dict:
         """Read signed server-owned topology without attaching or starting the host."""
-        if session_id is not None:
-            identifier(session_id)
         discovery = self._read_discovery()
         if discovery is None:
             raise HostUnavailable("host_unavailable")
+        deadline = time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS
+        return self._dashboard_topology(discovery, session_id, deadline)
+
+    def _dashboard_topology(self, discovery: Discovery, session_id: str | None, deadline: float) -> dict:
+        if session_id is not None:
+            identifier(session_id)
         body = canonical({"profile_id": self._profile_id, "principal_id": self._principal_id,
                           "session_id": session_id})
-        reply = self._exchange(discovery, "/v1/dashboard/topology", body,
-                               time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS)
+        reply = self._exchange(discovery, "/v1/dashboard/topology", body, deadline)
         try:
             result = obj(decode(reply), {"owners", "active_phy_id", "session_id", "session_owner_id"})
             owners = result["owners"]

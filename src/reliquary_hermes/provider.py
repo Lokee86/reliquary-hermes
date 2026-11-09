@@ -6,15 +6,8 @@ import secrets
 from agent.memory_provider import MemoryProvider, RecallStatus, spawn_context_thread
 
 from .client import HostClient, HostUnavailable
-from .settings import (
-    PROMPTS,
-    ensure_setup_token,
-    profile_home,
-    read_settings,
-    read_token,
-    save_settings,
-    setup_defaults,
-)
+from .settings import profile_home, read_settings, read_token
+from .setup import cli_setup
 from .source_capture import capture_snapshot
 from .source_worker import SourceWorker
 from .tools import tool_schemas
@@ -427,45 +420,6 @@ class ReliquaryMemoryProvider(MemoryProvider):
         if thread is not None:
             thread.join(timeout=2)
 
-    def get_config_schema(self):
-        return [{"key": key, "description": prompt, "required": True} for key, prompt in PROMPTS]
-
-    def save_config(self, values, hermes_home):
-        save_settings(profile_home(hermes_home), values)
-
     def post_setup(self, hermes_home, _config):
         """Run the supported CLI setup hook for both picker and named setup."""
-        from hermes_cli.config import is_managed, save_config
-        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
-
-        try:
-            home = profile_home(hermes_home)
-            defaults = setup_defaults(home)
-            print("Configure the existing Reliquary owners and local host.")
-            values = {}
-            for key, prompt in PROMPTS:
-                default = defaults.get(key)
-                label = f"{prompt} (blank keeps current value)" if default else prompt
-                value = input(f"{label}: ").strip()
-                values[key] = value or default
-            scope = set_hermes_home_override(home)
-            try:
-                require(not is_managed(), "managed_setup")
-                self.save_config(values, home)
-                ensure_setup_token(home)
-                plugins = _config.get("plugins") or {}
-                enabled = list(plugins.get("enabled") or ())
-                observer = "reliquary-source-observer"
-                if observer not in (plugins.get("disabled") or ()) and observer not in enabled:
-                    enabled.append(observer)
-                save_config({"memory": {"provider": self.name}, "plugins": {"enabled": enabled}},
-                            merge_existing=True)
-            finally:
-                reset_hermes_home_override(scope)
-        except (EOFError, KeyboardInterrupt):
-            print("Reliquary setup cancelled.")
-            return
-        except (OSError, RuntimeError, ValueError):
-            print("Reliquary setup could not validate or save this profile's configuration.")
-            return
-        print("Reliquary configured. Start a new Hermes session to attach.")
+        cli_setup(hermes_home)

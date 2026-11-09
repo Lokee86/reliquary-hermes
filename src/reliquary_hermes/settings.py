@@ -8,13 +8,6 @@ from .validation import MAX_WIRE_BYTES, canonical, decode, identifier, obj, requ
 
 TOKEN_VAR = "RELIQUARY_HERMES_TOKEN"
 OWNER_FIELDS = {"profile_id", "principal_id", "main_rel", "projects", "active_phy"}
-PROMPTS = (
-    ("profile_id", "Reliquary profile ID"),
-    ("principal_id", "Reliquary principal ID"),
-    ("main_rel", "Absolute path to the existing main REL"),
-    ("active_phy", "Absolute path to the existing active PHY"),
-    ("binary", "Absolute path to the Reliquary Hermes host executable"),
-)
 
 
 @dataclass(frozen=True)
@@ -97,18 +90,6 @@ def read_token(home: Path) -> str:
     return token
 
 
-def setup_defaults(home: Path) -> dict:
-    state = _state_dir(home)
-    result = {}
-    for name in ("owners.json", "provider.json"):
-        try:
-            data = _read_object(state / name)
-        except FileNotFoundError:
-            continue
-        result.update({key: data[key] for key, _ in PROMPTS if key in data})
-    return result
-
-
 def save_settings(home: Path, values: dict) -> None:
     from utils import atomic_json_write
 
@@ -122,14 +103,22 @@ def save_settings(home: Path, values: dict) -> None:
     config = dict(prior)
     for key in ("profile_id", "principal_id", "main_rel", "active_phy"):
         config[key] = values.get(key)
+    if "projects" in values:
+        config["projects"] = values["projects"]
     _owner_config(config)
     provider = {"binary": str(_existing_file(values.get("binary")))}
     require(len(canonical(config)) <= MAX_WIRE_BYTES, "invalid_owner_config")
     require(provider_path.resolve() == provider_path, "invalid_settings_path")
-    if config != prior:
+    try:
+        prior_provider = _read_object(provider_path)
+    except FileNotFoundError:
+        prior_provider = None
+    if config != prior or provider != prior_provider:
         require(not (state / "discovery.json").exists(), "service_restart_required")
+    if config != prior:
         atomic_json_write(config_path, config, mode=0o600, fsync_dir=True)
-    atomic_json_write(provider_path, provider, mode=0o600, fsync_dir=True)
+    if provider != prior_provider:
+        atomic_json_write(provider_path, provider, mode=0o600, fsync_dir=True)
 
 
 def ensure_setup_token(home: Path) -> None:
