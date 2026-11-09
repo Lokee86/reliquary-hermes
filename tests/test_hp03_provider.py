@@ -193,7 +193,7 @@ def test_provider_uses_explicit_profile_and_context_and_discards_stale_attach(
         provider.on_session_switch("skipped-session", project_id="caller-project")
         provider.on_session_switch("project-session", session_project_id="p_abcdef01")
         provider.sync_turn("private source", "private answer", session_id="project-session")
-        assert provider.sync_status == "source_ingestion_unavailable"
+        assert provider.sync_status == "source_capture_session_unavailable"
         assert provider.prefetch("private prompt") == ""
         release.set()
         _settled(provider, "attached")

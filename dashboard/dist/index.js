@@ -1245,6 +1245,7 @@ function createReliquarySurface(options) {
     ["invalid_setup_request", "Check the selected owner paths and refresh the Hermes projects list."],
     ["setup_denied", "Hermes did not authorize setup in this profile."],
     ["setup_unavailable", "Could not reach Reliquary setup. Try again."],
+    ["source_capture_setup_required", "Check this profile's Reliquary capture enrollment file, then retry setup."],
     ["invalid_setup_response", "Reliquary returned an invalid setup response."],
     ["picker_failed", "Hermes Desktop could not open the file picker."],
     ["main_path", "Enter an absolute local path for the main REL."],

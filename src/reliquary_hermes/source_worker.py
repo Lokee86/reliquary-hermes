@@ -18,6 +18,7 @@ class SourceWorker:
         self._wake = Event()
         self._captures = deque()
         self._session = None
+        self._capture_allowed = False
         self._generation = None
         self._fenced = set()
         self._runtime_lease = None
@@ -35,10 +36,11 @@ class SourceWorker:
         with self._lock:
             return self._status
 
-    def activate(self, session_id):
+    def set_scope(self, session_id, *, capture_allowed):
         with self._lock:
-            if self._session != session_id:
-                self._session, self._generation = session_id, None
+            if (self._session, self._capture_allowed) != (session_id, capture_allowed):
+                self._session, self._capture_allowed = session_id, capture_allowed
+                self._generation = None
                 self._status = "source_ingestion_unavailable"
         self._wake.set()
 
@@ -56,7 +58,7 @@ class SourceWorker:
 
     def submit(self, snapshot):
         with self._lock:
-            if self._stopped or snapshot.session_id != self._session or self._generation is None:
+            if self._stopped or not self._capture_allowed or snapshot.session_id != self._session:
                 return
             if self._generation or snapshot.session_id in self._fenced:
                 self._status = "source_reconciliation_required"
@@ -66,7 +68,9 @@ class SourceWorker:
                 return
             epoch = self._fence_epochs.get(snapshot.session_id)
             candidate = (self._runtime_lease, epoch) if epoch is not None else (None, None)
-            self._captures.append((snapshot, self._generation, *candidate))
+            # Hermes may commit its session row during the first turn. If activation
+            # just became possible, enqueue still checks the initial generation atomically.
+            self._captures.append((snapshot, 0, *candidate))
             self._status = "source_reconciliation_required" if epoch is not None else "source_capture_pending"
         self._wake.set()
 
@@ -177,14 +181,15 @@ class SourceWorker:
             self._wake.clear()
             with self._lock:
                 session = self._session
+                capture_allowed = self._capture_allowed
                 stopped = self._stopped
             try:
                 if outbox is None:
                     outbox = self._outbox()
-                if session is not None:
+                if session is not None and capture_allowed:
                     generation = outbox.generation(session)
                     with self._lock:
-                        if session == self._session and session not in self._fenced:
+                        if session == self._session and self._capture_allowed and session not in self._fenced:
                             if self._generation is None:
                                 self._status = ("source_reconciliation_required"
                                                 if generation or session in self._fence_epochs else "source_ready")

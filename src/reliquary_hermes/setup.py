@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 
 from . import setup_paths
+from .capture_policy import ENROLLMENT_FILE, capture_cutoff
 from .client import HostClient, HostUnavailable
 from .projects import active_projects, inventory
 from .settings import (
@@ -289,6 +290,7 @@ def apply(home, candidate, *, project_aware=False):
             prior, processing, binary, defaults = _defaults(home)
             request = _candidate(home, candidate, prior, defaults, project_aware=project_aware)
             if _running_report(home, prior, processing, request) is not None:
+                capture_cutoff(home, enroll=True)
                 _activate(home)
                 return {"valid": True, "configured": True}
             processing_path = state / "processing.json"
@@ -329,6 +331,11 @@ def apply(home, candidate, *, project_aware=False):
                 require({owner["owner_id"] for owner in active["owners"]} == expected
                         and active["active_phy_id"] == report["active_phy"]["owner_id"],
                         "service_restart_required")
+                enrollment = state / ENROLLMENT_FILE
+                new_enrollment = not enrollment.exists()
+                capture_cutoff(home, enroll=True)
+                if new_enrollment:
+                    previous[enrollment] = {}
                 _activate(home)
             except (OSError, RuntimeError, ValueError):
                 if client is not None and client.cancel_startup():

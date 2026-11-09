@@ -311,10 +311,13 @@ def test_hp04_pinned_provider_delivers_and_fences_late_same_session_callback(
         tmp_path, binaries, pinned_provider, monkeypatch, setup_hosts):
     from hermes_cli.memory_setup import _post_setup_hook
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from hermes_state import SessionDB
+    from time import time
 
     binary, cli = binaries
     home = tmp_path / "hermes-profile"
     home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
     rel, phy = tmp_path / "provider.rel", tmp_path / "provider.phy"
     owner(cli, "rel", rel, "unspecified")
     owner(cli, "phy", phy)
@@ -331,7 +334,7 @@ def test_hp04_pinned_provider_delivers_and_fences_late_same_session_callback(
 
     def callback(uid):
         provider.sync_turn(TEXT[uid], "", session_id=SESSION, messages=[{
-            "message_uid": uid, "role": "user", "timestamp": 1700000000.25,
+            "message_uid": uid, "role": "user", "timestamp": time(),
             "content": TEXT[uid],
         }])
 
@@ -341,6 +344,8 @@ def test_hp04_pinned_provider_delivers_and_fences_late_same_session_callback(
         [setup_host] = setup_hosts
         assert setup_host._process is not None and setup_host._process.poll() is None
         settings = read_settings(home)
+        with SessionDB(home / "state.db") as db:
+            db.create_session(SESSION, source="cli", profile_name="default")
         provider.initialize(SESSION, hermes_home=str(home))
         outbox = SourceOutbox(settings.state_dir, settings.profile_id, settings.principal_id)
         try:

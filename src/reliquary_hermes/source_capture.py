@@ -10,7 +10,7 @@ from .validation import MAX_WIRE_BYTES, canonical, choice, identifier, require, 
 _EPOCH_SECONDS_LIMIT = (1 << 63) / 1_000_000_000
 
 
-def capture_snapshot(profile_id: str, session_id: str, messages) -> SourceSnapshot:
+def capture_snapshot(profile_id: str, session_id: str, messages, *, after=None) -> SourceSnapshot:
     """Copy one callback's text and logical markers without inventing source evidence."""
     profile_id, session_id = identifier(profile_id), identifier(session_id)
     rows = []
@@ -22,6 +22,11 @@ def capture_snapshot(profile_id: str, session_id: str, messages) -> SourceSnapsh
         timestamp = message.get("timestamp")
         require(type(timestamp) in {int, float} and 0 <= timestamp < _EPOCH_SECONDS_LIMIT,
                 "invalid_source_timestamp")
+        if after is not None:
+            # A detached compression segment may contain a newly timestamped
+            # summary of historical rows. Hermes supplies the summary marker.
+            require(timestamp > after and not message.get("_compressed_summary"),
+                    "source_capture_historical")
         rows.append({
             "message_uid": identifier(message.get("message_uid")),
             "role": choice(message.get("role"), {"user", "assistant", "system", "tool"}),

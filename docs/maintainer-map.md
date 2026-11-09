@@ -8,7 +8,7 @@ Route integration changes to the owning contract, implementation boundary and ve
 
 | Change area | Canonical documentation | Implementation and verification |
 | --- | --- | --- |
-| Hermes setup, pinned hooks and profile isolation | [Host audit](host-audit.md) and [local service](local-service.md) | `setup.py`, `projects.py`, `setup_paths.py`, `provider.py`, `settings.py`, standalone registration and pinned provider tests |
+| Hermes setup, pinned hooks and profile isolation | [Host audit](host-audit.md) and [local service](local-service.md) | `setup.py`, `projects.py`, `setup_paths.py`, `provider.py`, `settings.py`, `capture_policy.py`, standalone registration and pinned provider tests |
 | Authenticated transport and response correlation | [Protocol](protocol.md) | `client.py`, Rust service protocol and HTTP modules, local transport and process tests |
 | Owner grants, leases and durable routing | [Local service](local-service.md) | Rust registry and registry storage, Root-backed process and registry tests |
 | Copied source and retrieval return | [Protocol](protocol.md) | Source and authority DTOs, `retrieval.rs`, `retrieval_hack.rs`, provider recall and copied-source and selected-return proofs |

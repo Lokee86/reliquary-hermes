@@ -14,9 +14,10 @@ from hashlib import sha256
 
 import pytest
 
+from reliquary_hermes.capture_policy import capture_cutoff
 from reliquary_hermes.client import HostClient, HostUnavailable
 from reliquary_hermes.outbox import SourceOutbox
-from reliquary_hermes.settings import TOKEN_VAR, read_settings
+from reliquary_hermes.settings import TOKEN_VAR, profile_setup_lock, read_settings
 from reliquary_hermes.source_capture import capture_snapshot
 from reliquary_hermes.validation import canonical
 from test_host_client import TOKEN
@@ -104,6 +105,15 @@ def test_clean_runtime_detach_keeps_shared_host_until_last_lease(tmp_path, binar
         assert not (first._state_dir / "discovery.json").exists()
 
 
+def _enroll_and_create_session(home):
+    from hermes_state import SessionDB
+
+    with profile_setup_lock(home):
+        capture_cutoff(home, enroll=True)
+    with SessionDB(home / "state.db") as db:
+        db.create_session(SESSION, source="cli", profile_name="default")
+
+
 def test_pinned_provider_clean_drain_exits_and_restart_preserves_route(
         tmp_path, binaries, pinned_provider):
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
@@ -119,6 +129,7 @@ def test_pinned_provider_clean_drain_exits_and_restart_preserves_route(
     scope = set_hermes_home_override(tmp_path)
     with ExitStack() as cleanup:
         cleanup.callback(reset_hermes_home_override, scope)
+        _enroll_and_create_session(tmp_path)
         first = pinned_provider.ReliquaryMemoryProvider()
         first.initialize(SESSION, hermes_home=str(tmp_path))
         _wait_until(lambda: first.lifecycle_status == "attached")
@@ -127,7 +138,7 @@ def test_pinned_provider_clean_drain_exits_and_restart_preserves_route(
         cleanup.callback(stop, first_process)
         cleanup.callback(first.shutdown)
         first.sync_turn("", "", session_id=SESSION, messages=[{
-            "message_uid": "accepted", "role": "user", "timestamp": 1700000000.25,
+            "message_uid": "accepted", "role": "user", "timestamp": time.time(),
             "content": TEXT["accepted"],
         }])
         first.shutdown()
@@ -257,12 +268,13 @@ def test_ungraceful_runtime_exit_fences_scope_and_reconnects(
     with ExitStack() as cleanup:
         processing_url = cleanup.enter_context(_loopback_model())
         host, state = _host(binary, cli, tmp_path, cleanup, processing_url=processing_url)
+        _enroll_and_create_session(tmp_path)
         original_binding = host.attach(SESSION)
         survivor_lease, initial_scopes = host.attach_runtime(SESSION)
         assert initial_scopes == {}
 
         outbox = SourceOutbox(state, PROFILE, PRINCIPAL)
-        messages = [{"message_uid": "accepted", "role": "user", "timestamp": 1700000000.25,
+        messages = [{"message_uid": "accepted", "role": "user", "timestamp": time.time(),
                      "content": TEXT["accepted"]}]
         initial_snapshot = capture_snapshot(PROFILE, SESSION, messages)
         initial_key = outbox.enqueue(initial_snapshot, generation=outbox.generation(SESSION))
@@ -366,7 +378,7 @@ sleep(120)
         assert host._process.poll() is None
 
         reconciled_messages = messages + [{
-            "message_uid": "appended", "role": "user", "timestamp": 1700000001.25,
+            "message_uid": "appended", "role": "user", "timestamp": time.time(),
             "content": TEXT["appended"],
         }]
         from hermes_cli.config import load_config

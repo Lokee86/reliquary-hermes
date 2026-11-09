@@ -293,7 +293,7 @@ def test_pinned_setup_provider_attaches_and_recovers_real_process(
             initial = provider.binding
             assert (initial.rel_id, initial.user_id) == (rel_id, user_id)
             provider.sync_turn("synthetic user", "synthetic assistant", session_id="session-a")
-            assert provider.sync_status == "source_ingestion_unavailable"
+            assert provider.sync_status == "source_capture_session_unavailable"
             assert provider._client._process is None
             stop(original)
             provider.on_turn_start(2, "synthetic follow-up")

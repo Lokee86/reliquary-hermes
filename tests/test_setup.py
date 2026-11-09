@@ -57,12 +57,15 @@ def test_fresh_setup_derives_private_values_and_preserves_existing_processing(se
         assert token not in (state / name).read_text(encoding="utf-8")
     assert TOKEN_VAR not in (home / "config.yaml").read_text(encoding="utf-8")
 
+    enrollment = state / "capture-enrollment-v1.json"
+    cutoff = enrollment.read_bytes()
     processing = state / "processing.json"
     prior = processing.read_bytes() + b"\n"
     processing.write_bytes(prior)
     candidate.pop("config_path")
     assert setup.apply(home, candidate)["configured"]
     assert processing.read_bytes() == prior
+    assert enrollment.read_bytes() == cutoff
     assert read_token(home) == token
 
 
@@ -89,6 +92,8 @@ def test_setup_rejects_authority_and_keeps_project_session_mappings(setup_profil
     home, candidate = setup_profile
     with pytest.raises(ContractError, match="invalid_fields"):
         setup.validate(home, {**candidate, "profile_id": "foreign"})
+    with pytest.raises(ContractError, match="invalid_fields"):
+        setup.apply(home, {**candidate, "cutoff": 1})
     project = home / "project.rel"
     project.touch()
     candidate["projects"] = {"project": str(project)}

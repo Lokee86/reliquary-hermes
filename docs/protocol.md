@@ -91,6 +91,8 @@ Expiry durably records an unclean runtime and establishes a fence for each affec
 
 ## HP04 private source adapter
 
+The provider admits new automatic snapshots using the profile enrollment cutoff and the exact owned Hermes session row before copying any callback content. An unavailable row or ambiguous known ancestry prevents capture. The normal Hermes egress callback remains the source of copied bytes, original timestamps and logical message IDs. Existing outbox jobs retain their original session, generation and digest.
+
 `POST /v1/source` uses the same instance-bound transport proof and requires the configured profile and principal. The provider invokes this private channel from its filtered Hermes callback and the committed lifecycle observer. The profile credential authorizes this adapter. A JSON authority claim in a model-facing request conveys no source grant.
 
 The exact envelope carries `protocol_version`, `profile_id`, `principal_id`, `session_id`, integer `generation`, `idempotency_key`, `operation` and `arguments`. A snapshot sends the original canonical copied view as `source_json` and its SHA-256 as `snapshot_digest`. Invalidation sends an empty object. A terminal operation sends the committed `archive` or `delete` reason. Both reasons share one terminal identity for the logical session. The generation fences adapter work and has no meaning as a Hermes source revision.

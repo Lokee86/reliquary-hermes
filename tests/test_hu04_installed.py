@@ -98,14 +98,16 @@ def _install(home, checkout, binary, rel, phy, project, ids):
 
 
 def _conversation(home):
+    from time import time
+
     from agent.session_persistence import _db_flush_row, _db_flush_write
     from hermes_state import SessionDB
 
     messages = []
-    for index, content in enumerate(USER_TEXTS):
+    for content in USER_TEXTS:
         messages.extend((
-            {"role": "user", "content": content, "timestamp": 1794000000.25 + index * 2},
-            {"role": "assistant", "content": REPLY, "timestamp": 1794000001.5 + index * 2},
+            {"role": "user", "content": content, "timestamp": time()},
+            {"role": "assistant", "content": REPLY, "timestamp": time()},
         ))
     with SessionDB(home / "state.db") as db:
         db.create_session(SOURCE, source="cli")

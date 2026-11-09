@@ -29,6 +29,7 @@ _SETUP_ERRORS = {
     "runtime_unavailable": (503, "runtime_unavailable"),
     "preflight_unavailable": (503, "preflight_unavailable"),
     "service_restart_required": (409, "service_restart_required"),
+    "source_capture_setup_required": (503, "source_capture_setup_required"),
     "managed_setup": (403, "managed_setup"),
     "setup_request_too_large": (413, "setup_request_too_large"),
     "project_discovery_unavailable": (503, "project_discovery_unavailable"),

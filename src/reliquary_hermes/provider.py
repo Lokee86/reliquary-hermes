@@ -5,6 +5,7 @@ import secrets
 
 from agent.memory_provider import MemoryProvider, RecallStatus, spawn_context_thread
 
+from .capture_policy import capture_cutoff, capture_eligibility
 from .client import HostClient, HostUnavailable
 from .projects import routing_available
 from .settings import profile_home, profile_setup_lock, read_settings, read_token
@@ -32,6 +33,7 @@ class ReliquaryMemoryProvider(MemoryProvider):
         self._lock = Lock()
         self._client = None
         self._home = None
+        self._capture_cutoff = None
         self._source = self._source_profile = None
         self._binding = None
         self._session_id = None
@@ -67,7 +69,7 @@ class ReliquaryMemoryProvider(MemoryProvider):
     @property
     def sync_status(self):
         with self._lock:
-            return self._source.status if self._source is not None else self._sync_status
+            return self._source.status if self._sync_status is None else self._sync_status
 
     @property
     def runtime_lease_id(self):
@@ -110,6 +112,11 @@ class ReliquaryMemoryProvider(MemoryProvider):
                 with profile_setup_lock(home):
                     settings = read_settings(home)
                     token = read_token(home)
+                    try:
+                        # The first provider start upgrades already configured profiles.
+                        self._capture_cutoff = capture_cutoff(home, enroll=True)
+                    except ContractError:
+                        pass  # Ordinary recall remains available.
                 self._home = home
                 self._client = HostClient(
                     settings.state_dir, settings.profile_id, settings.principal_id, token, binary=settings.binary,
@@ -120,9 +127,21 @@ class ReliquaryMemoryProvider(MemoryProvider):
                 self._status = "unavailable"
                 return
             project_id = kwargs.get("session_project_id") if routing_available() else None
-            self._queue_attach(session_id, project_id)
+            self._queue_attach(session_id, project_id, check_capture=True)
 
-    def _queue_attach(self, session_id, project_id):
+    def _set_source_scope(self, session_id):
+        """Set capture admission independently of recall and preexisting delivery."""
+        self._sync_status = "source_capture_setup_required"
+        try:
+            cutoff = capture_cutoff(self._home)
+            if cutoff == self._capture_cutoff:
+                self._sync_status = capture_eligibility(self._home, session_id, cutoff)
+        except ContractError:
+            pass
+        self._source.set_scope(session_id, capture_allowed=self._sync_status is None)
+        return self._sync_status is None
+
+    def _queue_attach(self, session_id, project_id, *, check_capture=False):
         """Replace the pending intent. The caller owns the state lock."""
         self._generation += 1
         changed_scope = self._session_id != session_id
@@ -137,17 +156,17 @@ class ReliquaryMemoryProvider(MemoryProvider):
         self._pending = None
         self._session_id = None
         self._session_project_id = None
-        self._sync_status = "unavailable"
         try:
             if project_id is not None:
                 project_id = identifier(project_id)
             self._session_id = identifier(session_id)
         except ContractError:
-            self._status = "unavailable"
+            self._status = self._sync_status = "unavailable"
+            self._source.set_scope(None, capture_allowed=False)
             return
         self._session_project_id = project_id
-        if self._source is not None:
-            self._source.activate(self._session_id)
+        if check_capture:
+            self._set_source_scope(self._session_id)
         self._pending = (self._generation, self._session_id, project_id)
         self._status = "connecting"
         if not self._attaching:
@@ -228,7 +247,7 @@ class ReliquaryMemoryProvider(MemoryProvider):
             project_id = self._session_project_id if prior == new_session_id else None
             if routing_available():
                 project_id = kwargs.get("session_project_id", project_id)
-            self._queue_attach(new_session_id, project_id)
+            self._queue_attach(new_session_id, project_id, check_capture=True)
         if fence:
             source.invalidate(prior)
 
@@ -369,12 +388,15 @@ class ReliquaryMemoryProvider(MemoryProvider):
             if self._status in {"non_primary", "stopped"} or session_id != self._session_id:
                 return
             source, profile = self._source, self._source_profile
-            if source is None:
+            if source is None or not self._set_source_scope(session_id):
                 return
             try:
-                snapshot = capture_snapshot(profile, session_id, messages)
-            except ContractError:
-                source.unavailable(session_id)
+                snapshot = capture_snapshot(profile, session_id, messages, after=self._capture_cutoff)
+            except ContractError as error:
+                if str(error) == "source_capture_historical":
+                    self._sync_status = str(error)
+                else:
+                    source.unavailable(session_id)
                 return
             source.submit(snapshot)
 
