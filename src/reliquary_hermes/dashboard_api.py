@@ -194,10 +194,11 @@ def _service_owner_sessions(home: Path, browser_request: UIRequest) -> UIRespons
     try:
         settings = read_settings(home)
         token = read_token(home)
-        client = HostClient(settings.state_dir, settings.profile_id, settings.principal_id, token)
+        client = HostClient(settings.state_dir, settings.profile_id, settings.principal_id, token,
+                            binary=settings.binary)
         # The requested session is only a selector. The signed host resolves it against its own
         # configured/durable map and returns 403 for unknown IDs. Null preserves owner-level scope.
-        topology = client.read_dashboard_topology(browser_request.session_id)
+        topology = client.connect_dashboard(browser_request.session_id)
         context = _verified_context(settings, topology)
         request_value = browser_request.value
         request_value["profile_id"] = settings.profile_id

@@ -330,11 +330,10 @@ class HostClient:
 
     def cancel_startup(self) -> bool:
         """Stop only a process this client launched while applying setup."""
-        if self._process is None:
+        if self._process is None or self._process.poll() is not None:
             return False
-        if self._process.poll() is None:
-            self._process.kill()
-            self._process.wait(timeout=3)
+        self._process.kill()
+        self._process.wait(timeout=3)
         return True
 
     def read_dashboard_topology(self, session_id: str | None) -> dict:

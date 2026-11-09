@@ -97,7 +97,10 @@ def _candidate(home, candidate, prior, defaults):
               "main_rel": _local_path(candidate["main_rel"]), "active_phy": _local_path(candidate["active_phy"]),
               "projects": projects}
     if "session_projects" in prior:
-        owners["session_projects"] = prior["session_projects"]
+        mappings = prior["session_projects"]
+        require(type(mappings) is dict and all(type(project) is str and project in projects
+                for project in mappings.values()), "invalid_project_config")
+        owners["session_projects"] = mappings
     return {"owners": owners, "config_path": config}
 
 

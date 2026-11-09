@@ -6,7 +6,7 @@
 
 ## Purpose
 
-## Problem Statement
+### Problem Statement
 
 Reliquary is operationally integrated with Hermes, and the web dashboard can manage configured owners, but first-run setup is still CLI-first. An unconfigured web dashboard shows an unavailable binding state instead of guiding setup, and the Hermes Desktop app has no native Reliquary management surface at all.
 
@@ -20,7 +20,7 @@ The correction is to make setup and management one shared Reliquary capability w
 
 ## Overview
 
-## Target Architecture
+### Target Architecture
 
 Canonical call direction:
 
