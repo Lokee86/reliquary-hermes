@@ -293,7 +293,7 @@ The Electron probe is `desktop/tests/live-smoke.mjs`. Pass an isolated fixture J
 
 Use an isolated Hermes worktree based on `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19`. Apply [the hosted native admission patch](../patches/hermes-v0.23.0-hosted-native-admission.patch) there. Set `HU05_HERMES_HOSTED_CHECKOUT` to that worktree, then run `tests/test_hosted_desktop_api.py` with the process-test binaries and pytest environment above. The probe creates separate launch and secondary profiles, drives the real gateway ticket checks and plugin workers, and verifies native setup and a persisted Memory mutation in each. It also checks cross-profile, replay, Origin, and spoofed-header denial.
 
-For live Electron verification, point `HP01_HERMES_CHECKOUT` at the patched checkout and set `plugins.isolation: host` in the isolated profile. The launch-profile live proof used the native picker, completed setup, created a REL Memory, and reopened its exact body. The isolated worker was confirmed in the gateway log. The public CLI verified the Memory after shutdown and lease release.
+For live Electron verification, point `HP01_HERMES_CHECKOUT` at the patched checkout and set `plugins.isolation: host` in the isolated profile. Set `verifyMemoryWrite` to true in the fresh fixture to exercise a real mutation. The launch-profile live proof used the native picker, completed setup, created a REL Memory, and reopened its exact body. The isolated worker was confirmed in the gateway log. The public CLI verified the Memory after shutdown and lease release.
 
 ## Related docs
 

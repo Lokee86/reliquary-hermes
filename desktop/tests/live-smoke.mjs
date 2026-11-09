@@ -130,6 +130,22 @@ try {
   if (fixture.expectedConfigPath) {
     await root.locator(".rly-owner-meta").getByText(fixture.expectedConfigPath, { exact: true }).waitFor();
   }
+  if (fixture.verifyMemoryWrite) {
+    assert(fixture.candidate, "The write probe requires fresh isolated owners.");
+    const title = "Hosted Desktop authority proof";
+    const body = "Synthetic worker-verified Memory body.";
+    const form = root.locator(".rly-memory-write-form");
+    await form.getByRole("textbox", { name: "Title" }).fill(title);
+    await form.getByRole("textbox", { name: "Body" }).fill(body);
+    await form.getByRole("button", { name: "Create Memory", exact: true }).click();
+    const result = root.locator(".rly-write-success, .rly-write-error");
+    await result.waitFor({ timeout: 30_000 });
+    assert.match(await result.textContent() ?? "", /^Saved\. Receipt /);
+    await root.getByRole("button", { name: "Refresh owner data", exact: true }).click();
+    await root.getByRole("button", { name: "List page", exact: true }).click();
+    await root.getByRole("button", { name: new RegExp(title) }).click();
+    await root.locator(".rly-inspector").getByText(body, { exact: true }).waitFor();
+  }
   await owners.selectOption(fixture.ownerIds[1]);
   await root.getByText("PHY", { exact: true }).first().waitFor();
   assert.equal(await root.getByRole("button", { name: "Create Memory", exact: true }).count(), 0);
