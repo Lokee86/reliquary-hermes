@@ -8,9 +8,10 @@ import subprocess
 import pytest
 
 from reliquary_hermes.client import HostClient, HostUnavailable
+from reliquary_hermes.settings import TOKEN_VAR, save_settings
 from reliquary_hermes.validation import canonical, decode
 from test_host_client import TOKEN, status_request
-from test_hp03_provider import pinned_provider
+from test_hp03_provider import _settled, pinned_provider
 
 
 @pytest.fixture(scope="module")
@@ -165,6 +166,72 @@ def test_live_host_start_attach_scope_leases_outage_and_restart(tmp_path, binari
         second_discovery = decode((state / "discovery.json").read_bytes())
         assert second_discovery["instance_id"] != first_discovery["instance_id"]
         assert second_discovery["lease_id"] != first_discovery["lease_id"]
+
+
+def test_stock_provider_preserves_accepted_project_route_after_downgrade(
+        tmp_path, binaries, pinned_provider, monkeypatch):
+    from agent import memory_provider
+    from agent.memory_manager import MemoryManager
+    from hermes_cli.projects_db import connect_closing, create_project
+
+    binary, cli = binaries
+    main_rel, project_rel, active_phy = (tmp_path / name for name in ("main.rel", "lantern.rel", "active.phy"))
+    main_id = owner(cli, "rel", main_rel, "unspecified")
+    dedicated_id = owner(cli, "rel", project_rel, "project")
+    phy_id = owner(cli, "phy", active_phy)
+    project_folder = tmp_path / "lantern"
+    project_folder.mkdir()
+    with connect_closing(tmp_path / "projects.db") as registry:
+        project_id = create_project(registry, name="Lantern", folders=[str(project_folder)])
+    save_settings(tmp_path, {"profile_id": "profile-a", "principal_id": "principal-a",
+                             "main_rel": str(main_rel), "active_phy": str(active_phy),
+                             "projects": {project_id: str(project_rel)}, "binary": str(binary)})
+    (tmp_path / ".env").write_text(f"{TOKEN_VAR}={TOKEN}\n", encoding="utf-8")
+    state = tmp_path / "reliquary"
+
+    with ExitStack() as cleanup:
+        def start(session_id, **metadata):
+            manager = MemoryManager()
+            provider = pinned_provider.ReliquaryMemoryProvider()
+            manager.add_provider(provider)
+
+            def close():
+                client = provider._client
+                manager.shutdown_all()
+                if client is not None and client._process is not None:
+                    stop(client._process)
+
+            cleanup.callback(close)
+            manager.initialize_all(session_id, hermes_home=str(tmp_path), cwd=str(project_folder), **metadata)
+            _settled(provider, "attached")
+            process = provider._client._process
+            assert process is not None
+            return manager, provider, process
+
+        with monkeypatch.context() as capable:
+            capable.setattr(memory_provider, "SESSION_PROJECT_ATTRIBUTION_VERSION", 1, raising=False)
+            manager, provider, process = start("existing-project", session_project_id=project_id)
+            accepted = provider.binding
+            assert (accepted.rel_id, accepted.user_id) == (dedicated_id, phy_id)
+            manager.shutdown_all()
+            assert process.wait(timeout=10) == 0
+
+        [route] = (state / "sessions-v1").glob("*.json")
+        saved = {path: path.read_bytes() for path in (route, state / "topology-v1.json", state / "owners.json")}
+
+        assert not pinned_provider.routing_available()
+        manager, provider, process = start("fresh-project")
+        assert (provider.binding.rel_id, provider.binding.user_id) == (main_id, phy_id)
+        client = provider._client
+        assert client.read_dashboard_topology("fresh-project")["session_owner_id"] == main_id
+        manager.on_session_switch("existing-project")
+        _settled(provider, "attached")
+        assert provider.binding == accepted
+        assert client.read_dashboard_topology("existing-project")["session_owner_id"] == dedicated_id
+        manager.shutdown_all()
+        assert process.wait(timeout=10) == 0
+
+    assert {path: path.read_bytes() for path in saved} == saved
 
 
 def test_two_profiles_can_explicitly_select_the_same_read_only_phy(tmp_path, binaries):
