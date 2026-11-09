@@ -8,7 +8,7 @@
 - [Protocol and authority](protocol.md): strict DTOs, server-owned grants, copied source and bounded model tools.
 - [Web-dashboard typed DTOs](ui-contract.md): complete HU01/HU02 contract, views, user actions, cuts/cursors and owner capabilities.
 - [HU03 dashboard authorization](hu03-dashboard-authorization-2026-11-08.md): approved live authorization mapping from Hermes-authenticated profile scope to the configured Reliquary topology; unblocks `ui.owner_sessions`.
-- [HU05 cross-surface onboarding specification](hu05-cross-surface-onboarding-desktop-spec-2026-11-08.md) records the approved setup and Desktop gates.
+- [HU05 cross-surface onboarding specification and 2026-11-09 project-aware amendment](hu05-cross-surface-onboarding-desktop-spec-2026-11-08.md) records the accepted setup baseline and the proposed Select/Create, secure web browsing, Hermes project inventory, General fallback, and durable routing correction.
 - [HU06 stock Hermes compatibility specification](hu06-stock-hermes-desktop-mutation-compat-spec-2026-11-09.md) defines the Desktop capability gate and the stock and fixed host acceptance matrix.
 - [HU07 Hermes-native presentation specification](hu07-hermes-native-presentation-spec-2026-11-09.md) moves visual presentation ownership to Hermes-native web and Desktop controls and limits Reliquary CSS to structural/layout concerns.
 - [Verification and later gates](verification.md): exact commands, evidence, ownership impact and unimplemented capabilities.
