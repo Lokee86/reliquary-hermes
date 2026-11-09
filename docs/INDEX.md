@@ -11,6 +11,7 @@
 - [HU05 cross-surface onboarding specification and 2026-11-09 project-aware amendment](hu05-cross-surface-onboarding-desktop-spec-2026-11-08.md) records the accepted setup baseline and the proposed Select/Create, secure web browsing, Hermes project inventory, General fallback, and durable routing correction.
 - [HU06 stock Hermes compatibility specification](hu06-stock-hermes-desktop-mutation-compat-spec-2026-11-09.md) defines the Desktop capability gate and the stock and fixed host acceptance matrix.
 - [HU07 Hermes-native presentation specification](hu07-hermes-native-presentation-spec-2026-11-09.md) moves visual presentation ownership to Hermes-native web and Desktop controls and limits Reliquary CSS to structural/layout concerns.
+- [HU05 two-track release/routing specification](hu05-release-fallback-and-hermes-attribution-spec-2026-11-09.md) separates stock-Hermes General REL release from a minimal upstream Hermes session-project metadata PR.
 - [Verification and later gates](verification.md): exact commands, evidence, ownership impact and unimplemented capabilities.
 - [Roadmap](roadmap.md): deferred service-lifecycle work that remains intentionally outside the current acceptance scope.
 - [Documentation policy and procedure](documentation-policy.md): service profile, canonical owners and required checks.
