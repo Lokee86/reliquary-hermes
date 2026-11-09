@@ -1,7 +1,6 @@
 """Setup admission through the audited Hermes dashboard and native HTTP gates."""
 
 import os
-from pathlib import Path
 import subprocess
 import sys
 
@@ -26,8 +25,10 @@ from fastapi.testclient import TestClient
 from gateway.runtime_bootstrap import TicketStore
 from hermes_cli import web_server as web
 from hermes_cli.dashboard_auth.native_http import HEADER
-import reliquary_hermes
-from reliquary_hermes.validation import ContractError, MAX_WIRE_BYTES
+from plugins.memory import import_provider_module
+
+provider = import_provider_module("reliquary")
+ContractError = import_provider_module("reliquary", "validation").ContractError
 
 home = Path(os.environ["HERMES_HOME"]).resolve()
 assert not (home / "reliquary/owners.json").exists()
@@ -62,7 +63,7 @@ def apply(selected, value):
     calls.append("apply")
     return {**report, "configured": True}
 
-reliquary_hermes.setup = SimpleNamespace(status=status, validate=validate, apply=apply)
+provider.setup = SimpleNamespace(status=status, validate=validate, apply=apply)
 
 # Exercise the real native middleware and one-use ticket store. TestClient
 # substitutes the TCP scope the gateway otherwise supplies for loopback.
@@ -103,7 +104,7 @@ with TestClient(loopback_app) as client:
     body = b'{"main_rel":"a","main_rel":"b","active_phy":"c"}'
     headers = {**same, "Content-Type": "application/json"}
     assert client.post(path + "/apply", headers=headers, content=body).status_code == 400
-    assert client.post(path + "/apply", headers=headers, content=b"x" * (MAX_WIRE_BYTES + 1)).status_code == 413
+    assert client.post(path + "/apply", headers=headers, content=b"x" * 65537).status_code == 413
     assert client.post(path + "/apply", headers={**grant(), "Origin": "http://testserver"},
                        json=candidate).status_code == 401
     assert client.post(path + "/apply", headers=grant(), params={"profile": "foreign"},
@@ -123,14 +124,13 @@ with TestClient(loopback_app) as client:
     assert client.get(path + "/status", headers=auth).json()["configured"] is True
     assert calls == ["validate", "apply"]
 """
-    repo = Path(__file__).resolve().parents[1]
     env = {key: value for key, value in os.environ.items()
            if key.upper() in {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR"}}
     env.update(HERMES_HOME=str(home), HERMES_KANBAN_HOME=str(tmp_path / "kanban"),
                USERPROFILE=str(tmp_path), APPDATA=str(tmp_path), LOCALAPPDATA=str(tmp_path),
                TEMP=str(tmp_path), TMP=str(tmp_path), TMPDIR=str(tmp_path), PYTHONDONTWRITEBYTECODE="1",
                HERMES_DISABLE_LAZY_INSTALLS="1", HERMES_ENABLE_PROJECT_PLUGINS="0",
-               PYTHONPATH=os.pathsep.join((str(pinned_checkout), str(repo / "src"))))
+               PYTHONPATH=str(pinned_checkout))
     result = subprocess.run([sys.executable, "-B", "-c", script], cwd=tmp_path, env=env,
                             capture_output=True, text=True, timeout=90)
     assert result.returncode == 0, result.stderr

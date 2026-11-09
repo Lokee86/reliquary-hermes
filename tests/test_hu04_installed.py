@@ -55,7 +55,7 @@ def _install(home, checkout, binary, rel, phy, project, ids):
         assert file_digest(executable, "sha256").hexdigest() == manifest["host_sha256"]
     _stage_plugin(home)
     installed = home / "plugins/reliquary"
-    copytree(artifact, installed)
+    copytree(artifact, installed, dirs_exist_ok=True)
     # Preserve the HP06 directory registration and update its implementation.
     for module in (REPO / "src/reliquary_hermes").glob("*.py"):
         if module.name != "__init__.py":

@@ -129,7 +129,7 @@ def start_dashboard(primary, foreign, checkout, scratch, cleanup):
         HERMES_DISABLE_LAZY_INSTALLS="1", HERMES_ENABLE_PROJECT_PLUGINS="0",
         HERMES_DASHBOARD_SESSION_TOKEN=token,
         **({"HERMES_WEB_DIST": os.environ["HERMES_WEB_DIST"]} if "HERMES_WEB_DIST" in os.environ else {}),
-        PYTHONPATH=os.pathsep.join((str(checkout), str(REPO / "src"))),
+        PYTHONPATH=str(checkout),
     )
     log = scratch / "dashboard.log"
     with log.open("wb") as stream:

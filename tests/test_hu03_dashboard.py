@@ -25,6 +25,11 @@ def _stage_plugin(home, enabled=True):
     dashboard.mkdir(parents=True)
     for name in ("manifest.json", "plugin_api.py"):
         shutil.copyfile(REPO / "dashboard" / name, dashboard / name)
+    provider = home / "plugins/reliquary"
+    provider.mkdir(parents=True)
+    for module in (REPO / "src/reliquary_hermes").glob("*.py"):
+        shutil.copyfile(module, provider / module.name)
+    (provider / "plugin.yaml").write_text("name: reliquary\nkind: standalone\n", encoding="utf-8")
     consent = "enabled" if enabled else "disabled"
     (home / "config.yaml").write_text(f"plugins:\n  {consent}: [reliquary-hermes]\n", encoding="utf-8")
 

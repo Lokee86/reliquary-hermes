@@ -15,11 +15,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from reliquary_hermes.client import HostClient, HostUnavailable
-from reliquary_hermes.settings import Settings, profile_home, read_settings, read_token
-from reliquary_hermes.ui_contract import UIRequest, UIResponse, VerifiedUIContext
-from reliquary_hermes.ui_schema import MUTATIONS, OP_CAPABILITY
-from reliquary_hermes.validation import ContractError, MAX_WIRE_BYTES, canonical, decode, require
+from .client import HostClient, HostUnavailable
+from .settings import Settings, profile_home, read_settings, read_token
+from .ui_contract import UIRequest, UIResponse, VerifiedUIContext
+from .ui_schema import MUTATIONS, OP_CAPABILITY
+from .validation import ContractError, MAX_WIRE_BYTES, canonical, decode, require
 
 router = APIRouter()
 _SETUP_BODY_BYTES = 65536
@@ -364,7 +364,7 @@ async def _setup_request(request: Request, operation: str):
         args = (home, candidate)
 
     try:
-        from reliquary_hermes import setup
+        from . import setup
 
         result = await run_in_threadpool(getattr(setup, operation), *args)
     except ContractError as exc:

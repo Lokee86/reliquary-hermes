@@ -1,3 +1,5 @@
 """Hermes manifest-loaded backend router for the Reliquary dashboard."""
 
-from reliquary_hermes.dashboard_api import router
+from plugins.memory import import_provider_module
+
+router = import_provider_module("reliquary", "dashboard_api").router
