@@ -17,6 +17,10 @@ Each configured profile has a separate local service and credential. Multiple se
 3. Choose these paths in Reliquary setup or run `hermes memory setup reliquary` for headless setup. Setup derives profile and service identity, validates the paths through the Rust host, provisions a random credential in Hermes secret storage, and checks the signed host topology before selecting the provider.
 4. Start a new Hermes session to attach the provider. Set any explicit session-to-project mapping in the private `owners.json` before the session first attaches.
 
+For a unified directory installation, build the browser and Desktop assets with `node dashboard/scripts/build.cjs` and `node desktop/scripts/build.cjs`. Install the provider Python files from `src/reliquary_hermes/` at the root of the existing `plugins/reliquary` package with its native manifest and host pin. Place the rebuilt host in `host/`, the dashboard manifest, Python router and `dist/` in `dashboard/`, and the generated Desktop entry at `desktop/plugin.js`. The dashboard uses the `reliquary-hermes` plugin namespace. Enable that dashboard contribution in the profile and enable Reliquary in Desktop's Capabilities → Plugins.
+
+Open the Reliquary tab in the browser or the Reliquary pane in Desktop. Both use the active Hermes profile. The browser accepts typed paths and Desktop also offers its native file picker. Validation shows the detected owner kinds and stable IDs. Connect starts the service and opens the owner dashboard.
+
 Paths are absolute. Configuration is scoped to the `hermes_home` that the pinned host supplies. The example `<hermes_home>/reliquary/owners.json` below binds a session to the Lantern project.
 
 ```json

@@ -32,6 +32,8 @@ The setup service calls `reliquary-hermes-host setup-validate --state-dir <profi
 
 ## Dashboard owner discovery
 
+The initial `ui.owner_sessions` read can start the configured profile's host and verify its signed topology after a service restart. Operational reads and mutations continue using the same `dashboard-v1` DTOs and authorization rules.
+
 The Hermes plugin admits the request through the pinned dashboard authentication guard and uses the host-bound profile home to read that integration's settings. In-process routes use the stamped secret scope. Hosted routes use the profile worker's launch home after private IPC admission. The browser sends the existing `ui.owner_sessions` envelope. The plugin uses the configured profile and the active PHY stable ID for `VerifiedUIContext`. Its private service request uses the configured service principal and credential.
 
 `POST /v1/dashboard/topology` uses the existing signed loopback framing and accepts exactly `profile_id`, `principal_id`, and nullable `session_id`. It returns only configured owner bindings, the active PHY ID, and the selected session's exact REL mapping. A configured project session may be looked up before attachment. A general session requires a durable attach record. A read never creates a binding or starts the service.
