@@ -134,11 +134,11 @@
       exactRevision && readContent("provenance", provenance, (value) => provenanceList(value.sources)));
   }
 
-  /** @param {{client:import("../types").DashboardClient,scope:import("../types").ReadScope}} props */
-  function Status({ client, scope }) {
+  /** @param {{client:import("../types").DashboardClient,scope:import("../types").ReadScope,live?:boolean}} props */
+  function Status({ client, scope, live = false }) {
     const read = ReliquaryDashboardState.useRead(client, "ui.operational_status", scope, scope.owner?.capabilities.status ? {} : null);
     return h("div", { className: "rly-status-card" },
-      h("strong", null, "Fixture activity"),
+      h("strong", null, "Operational activity"),
       readContent("operational status", read, (status) => h("dl", null,
         meta("Copied source", status.source_state === "tombstoned" ? "Tombstoned source" : status.source_state),
         meta("Worker", status.worker_state),
@@ -146,7 +146,7 @@
         status.accepted_source_cursor && meta("Source cursor", status.accepted_source_cursor),
         status.last_completed_receipt && meta("Last completed receipt", status.last_completed_receipt),
         meta("Latest recall", status.latest_recall.state),
-        meta("Candidate Memories", status.latest_recall.candidate_ids.join(", ") || "None"),
+        meta("Candidate Memories", live ? "Unavailable" : status.latest_recall.candidate_ids.join(", ") || "None"),
         meta("Selected Memories", status.latest_recall.selected_ids.join(", ") || "None"),
         meta("Returned Memories", status.latest_recall.returned_ids.join(", ") || "None"))));
   }

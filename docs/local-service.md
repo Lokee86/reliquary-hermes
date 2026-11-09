@@ -64,13 +64,15 @@ Hermes can prefetch relevant Memories at turn start and call `memory_query`, `re
 
 Queued prefetch can stage an exact selection in the host. When Hermes asks for matching context, the host checks the current cut and accepted copied-source evidence before recording the selected return. A source crash fence, rewind or tombstone prevents return of Memories grounded in the affected copied evidence.
 
-## Dashboard owner discovery
+## Live dashboard
 
-Install the integration Python package in the pinned Hermes environment and stage the live dashboard manifest, router and bundle under the selected profile's user plugin directory. Enable the Reliquary plugin in that profile. Open an attached Hermes provider session to start the configured service. The dashboard discovers that service for the request's admitted profile and lists configured owners. Enter a configured project session ID or a durably attached general session ID to resolve its REL.
+Install the integration Python package in the pinned Hermes environment and stage the live dashboard manifest, router and bundle under the selected profile's user plugin directory. Enable the Reliquary plugin in that profile. Open an attached Hermes provider session to start the configured service. The dashboard discovers that service for the request's admitted profile. Select a configured REL or the active PHY. Enter a configured project session ID or a durably attached general session ID to see status for its mapped REL. Use **Refresh owner data** after an owner cut changes.
+
+The REL inspector shows Memory summaries, current payloads, available history and provenance, graph neighborhoods, current community metadata, and processing state. Session status shows the copied source head or tombstone and the latest recorded recall return when present. An absent or stale community partition and unavailable provenance fields appear as typed unavailable results. The active PHY has read capabilities only.
 
 ## Limits
 
-Graph retrieval follows Root's one-hop workflow. A selection that exceeds the requested result or wire bounds fails before a retrieval receipt is recorded. Dashboard mutations require the later authenticated user channel. Setup uses existing Root owners and registry routing. Hermes workspace names, display names and caller-provided owner IDs convey no routing authority.
+Graph retrieval follows Root's one-hop workflow. A selection that exceeds the requested result or wire bounds fails before a retrieval receipt is recorded. Dashboard writes require an authenticated same-origin Hermes request and the expected owner cut. Setup uses existing Root owners and registry routing. Hermes workspace names, display names and caller-provided owner IDs convey no routing authority.
 
 ## Related docs
 

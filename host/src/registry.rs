@@ -15,7 +15,8 @@ use std::{
 };
 
 #[path = "registry_store.rs"]
-mod store;
+pub(crate) mod registry_store;
+use registry_store as store;
 
 #[cfg(test)]
 #[path = "registry_tests.rs"]
@@ -119,6 +120,8 @@ pub(crate) struct OwnerStatus {
 
 pub(crate) struct Registry {
     admission: HostAdmissionAdapter,
+    dashboard_actor: Instance,
+    dashboard_intents: PathBuf,
     topology: Topology,
     session_projects: BTreeMap<String, String>,
     sessions_dir: PathBuf,
@@ -191,6 +194,19 @@ impl Registry {
         if gateway.mount_phylactery(&phy, false).map_err(owner_error)? != active_phy {
             return Err(RegistryError::Conflict("mounted_owner_changed"));
         }
+        // Derive a private Root actor using the existing bootstrap credential.
+        // This separate in-process admission has no route or retained adapter.
+        // Provider calls continue to use their original OperateRel instance.
+        let (dashboard_admission, _) = TrustedHostAdmission::new([HostCredentialBinding::new(
+            active_phy.to_string(),
+            token,
+            rel_ids.iter().copied().map(OwnerGrant::ManageRel),
+        )])
+        .install(&gateway)
+        .map_err(owner_error)?;
+        let dashboard_actor = dashboard_admission
+            .authenticate(token)
+            .map_err(owner_error)?;
         let grants = rel_ids
             .into_iter()
             .map(OwnerGrant::OperateRel)
@@ -211,11 +227,21 @@ impl Registry {
         }
         Ok(Self {
             admission,
+            dashboard_actor,
+            dashboard_intents: state_dir.join("dashboard-mutations-v1"),
             topology,
             session_projects: config.session_projects,
             sessions_dir,
             _lease: lease,
         })
+    }
+
+    pub(crate) fn dashboard_actor(&self) -> &Instance {
+        &self.dashboard_actor
+    }
+
+    pub(crate) fn dashboard_intents(&self) -> &Path {
+        &self.dashboard_intents
     }
 
     pub(crate) fn profile_id(&self) -> &str {
@@ -356,6 +382,47 @@ impl Registry {
         )
     }
 
+    pub(crate) fn dashboard_scope(
+        &self,
+        profile_id: &str,
+        principal_id: &str,
+        owner_id: &str,
+        session_id: Option<&str>,
+    ) -> Result<(OwnerId, OwnerKind, String), RegistryError> {
+        if profile_id != self.topology.profile_id
+            || principal_id != self.topology.active_phy.to_string()
+        {
+            return Err(RegistryError::Denied("owner_denied"));
+        }
+        let owner: OwnerId = owner_id
+            .parse()
+            .map_err(|_| RegistryError::Denied("owner_denied"))?;
+        let (kind, label) = if owner == self.topology.main_rel {
+            (OwnerKind::Rel, "Main REL".to_owned())
+        } else if owner == self.topology.active_phy {
+            (OwnerKind::Phylactery, "Active user".to_owned())
+        } else if let Some(index) = self
+            .topology
+            .projects
+            .values()
+            .position(|project| project.rel_id == owner)
+        {
+            (OwnerKind::Rel, format!("Project {}", index + 1))
+        } else {
+            return Err(RegistryError::Denied("owner_denied"));
+        };
+        if let Some(session) = session_id {
+            let route = self.route_for(session)?;
+            if kind != OwnerKind::Rel
+                || route.rel_id != owner
+                || (!self.session_projects.contains_key(session) && !self.is_bound(session)?)
+            {
+                return Err(RegistryError::Denied("unknown_session"));
+            }
+        }
+        Ok((owner, kind, label))
+    }
+
     fn route_for(&self, session_id: &str) -> Result<SessionRoute, RegistryError> {
         if !valid_id(session_id) {
             return Err(RegistryError::Invalid("invalid_session"));
@@ -393,12 +460,12 @@ impl Registry {
 }
 
 #[derive(Serialize)]
-struct DashboardOwnerBinding {
+pub(crate) struct DashboardOwnerBinding {
     owner_id: String,
     owner_kind: &'static str,
     display_label: String,
-    generation: String,
-    cut: String,
+    pub(crate) generation: String,
+    pub(crate) cut: String,
     capabilities: DashboardCapabilities,
 }
 
@@ -418,14 +485,23 @@ struct DashboardCapabilities {
     community_rename: bool,
 }
 
-fn owner_binding(
+pub(crate) fn owner_binding(
     instance: &Instance,
     owner: OwnerId,
     kind: OwnerKind,
     label: &str,
 ) -> Result<DashboardOwnerBinding, RegistryError> {
-    // Memory summaries expose the real accepted Root cut without reading body payloads.
-    let page = instance
+    let cut = inspect_dashboard_cut(instance, owner, kind)?;
+    Ok(dashboard_binding_at_cut(owner, kind, label, &cut))
+}
+
+pub(crate) fn inspect_dashboard_cut(
+    instance: &Instance,
+    owner: OwnerId,
+    kind: OwnerKind,
+) -> Result<reliquary_memory::InspectionCut, RegistryError> {
+    // A one-row summary query obtains the accepted Root cut without releasing bodies.
+    instance
         .inspect_owner(
             owner,
             kind,
@@ -433,37 +509,37 @@ fn owner_binding(
             None,
             1,
         )
-        .map_err(owner_error)?;
-    let cut = page.cut;
-    // The UI contract carries a decimal generation and opaque cut token. Preserve a
-    // stable 128-bit generation projection; hash the complete Root cut so every
-    // underlying generation/counter change changes the opaque cut token.
-    let generation =
-        u128::from_le_bytes(cut.generation[..16].try_into().expect("fixed generation"));
-    let cut_digest = Sha256::digest(
-        serde_json::to_vec(&cut).map_err(|_| RegistryError::Unavailable("owner_unavailable"))?,
-    );
-    Ok(DashboardOwnerBinding {
+        .map(|page| page.cut)
+        .map_err(owner_error)
+}
+
+pub(crate) fn dashboard_binding_at_cut(
+    owner: OwnerId,
+    kind: OwnerKind,
+    label: &str,
+    cut: &reliquary_memory::InspectionCut,
+) -> DashboardOwnerBinding {
+    DashboardOwnerBinding {
         owner_id: owner.to_string(),
         owner_kind: if kind == OwnerKind::Rel { "REL" } else { "PHY" },
         display_label: label.to_owned(),
-        generation: generation.to_string(),
-        cut: crate::service_http::hex(&cut_digest),
+        generation: crate::dashboard::generation_id(cut),
+        cut: crate::dashboard::cut_id(cut),
         capabilities: DashboardCapabilities {
             view: true,
-            manage: false,
-            history: false,
-            provenance: false,
-            graph: false,
-            community: false,
-            status: false,
-            memory_create: false,
-            memory_edit: false,
-            memory_retire: false,
-            relation_edit: false,
-            community_rename: false,
+            manage: kind == OwnerKind::Rel,
+            history: true,
+            provenance: true,
+            graph: true,
+            community: kind == OwnerKind::Rel,
+            status: kind == OwnerKind::Rel,
+            memory_create: kind == OwnerKind::Rel,
+            memory_edit: kind == OwnerKind::Rel,
+            memory_retire: kind == OwnerKind::Rel,
+            relation_edit: kind == OwnerKind::Rel,
+            community_rename: kind == OwnerKind::Rel,
         },
-    })
+    }
 }
 
 impl OwnerConfig {

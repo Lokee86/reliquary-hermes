@@ -5,7 +5,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 const { createClient } = require("../src/client.js");
 const { createFixtureClient } = require("../src/fixtures.js");
-const { createLiveClient } = require("../src/live_transport.js");
+const { createLiveClient, createLiveMutation } = require("../src/live_transport.js");
 const fixture = require("../fixtures/mock-responses.json");
 
 const general = fixture.owner_sessions["fixture-session"][0].result.owners.items.find((owner) => owner.owner_id === "fixture-rel");
@@ -173,7 +173,7 @@ test("live and fixture builds register separately with the host SDK", () => {
   assert.equal(registration.name, manifest.name);
 });
 
-test("live owner discovery uses only the scoped Hermes SDK route", async () => {
+test("live owner discovery and scoped reads use the Hermes SDK route", async () => {
   let calls = 0;
   const client = createLiveClient(async (url, init) => {
     calls += 1;
@@ -181,17 +181,49 @@ test("live owner discovery uses only the scoped Hermes SDK route", async () => {
     assert.equal(init.method, "POST");
     assert.equal(init.signal, signal);
     const request = JSON.parse(init.body);
-    assert.equal(request.operation, "ui.owner_sessions");
     assert.equal(request.profile_id, "dashboard");
     assert.equal(request.principal_id, "dashboard");
-    assert.equal(request.owner_id, null);
-    const base = fixture.owner_sessions["fixture-session"][0];
-    return Response.json({ ...base, request_id: request.request_id });
+    if (request.operation === "ui.owner_sessions") {
+      assert.equal(request.owner_id, null);
+      const base = fixture.owner_sessions["fixture-session"][0];
+      return Response.json({ ...base, request_id: request.request_id });
+    }
+    assert.equal(request.operation, "ui.memory_list");
+    assert.equal(request.owner_id, scope.owner.owner_id);
+    return Response.json({ protocol_version: 1, request_id: request.request_id, operation: request.operation,
+      status: "unavailable", binding: null, result: { code: "owner_unavailable", retryable: true } });
   });
   const result = await client.read("ui.owner_sessions", { owner: null, sessionId: "fixture-session" }, { cursor: null, limit: 128 }, signal);
   assert.equal(result.status, "ok");
-  assert.equal((await client.read("ui.memory_list", scope, list, signal)).status, "unsupported");
-  assert.equal(calls, 1);
+  assert.deepEqual(await client.read("ui.memory_list", scope, list, signal),
+    { status: "unavailable", code: "owner_unavailable", retryable: true });
+  assert.equal(calls, 2);
   const denied = createLiveClient(async () => new Response(null, { status: 401 }));
   assert.equal((await denied.read("ui.owner_sessions", { owner: null, sessionId: null }, { cursor: null, limit: 128 }, signal)).status, "denied");
+});
+
+test("live writes bind the submitted cut and correlate durable receipts", async () => {
+  const owner = { ...general, capabilities: { ...general.capabilities, manage: true, memory_edit: true } };
+  let calls = 0;
+  const args = { memory_id: "fixture-memory", title: "Updated title", body: "Body" };
+  const write = createLiveMutation(async (_url, init) => {
+    const request = JSON.parse(init.body);
+    calls += 1;
+    assert.equal(request.owner_id, owner.owner_id);
+    assert.equal(request.generation, owner.generation);
+    assert.equal(request.cut, owner.cut);
+    assert.equal(request.expected_revision, "1");
+    assert.equal(request.idempotency_key, "draft-key");
+    assert.notEqual(request.request_id, request.idempotency_key);
+    assert.deepEqual(request.arguments, args);
+    return Response.json({ protocol_version: 1, status: "ok", operation: request.operation,
+      request_id: request.request_id, binding: { ...owner, cut: "new-cut" },
+      result: { request_id: calls === 1 ? request.request_id : "other-request", idempotency_key: "draft-key",
+        receipt_id: "stable-receipt", changed: true, committed: {} } });
+  });
+  assert.equal((await write("ui.memory_edit", { ...scope, owner }, args, "1", "draft-key", signal)).status, "ok");
+  assert.equal((await write("ui.memory_edit", { ...scope, owner }, args, "1", "draft-key", signal)).status, "conflict");
+  const phy = { ...owner, owner_kind: "PHY" };
+  assert.equal((await write("ui.memory_edit", { ...scope, owner: phy }, args, "1", "draft-key", signal)).status, "denied");
+  assert.equal(calls, 2);
 });

@@ -23,7 +23,7 @@
 .rly-sidebar, .rly-main, .rly-inspector, .rly-status-card { background: var(--color-card, #fff); border: 1px solid var(--color-border, #dbe2e8); border-radius: .5rem; min-width: 0; padding: 1rem; }
 .rly-sidebar h2, .rly-inspector h2 { font-size: 1rem; margin-top: 0; }
 .rly-field { display: grid; gap: .35rem; font-size: .78rem; font-weight: 600; margin-bottom: .75rem; }
-.rly-field select, .rly-field input { background: var(--color-background, #fff); border: 1px solid var(--color-border, #dbe2e8); border-radius: .35rem; color: inherit; max-width: 100%; padding: .5rem; width: 100%; }
+.rly-field select, .rly-field input, .rly-field textarea { background: var(--color-background, #fff); border: 1px solid var(--color-border, #dbe2e8); border-radius: .35rem; color: inherit; max-width: 100%; padding: .5rem; width: 100%; }
 .rly-owner-meta, .rly-detail-meta { display: grid; gap: .4rem; margin: 1rem 0; }
 .rly-meta-row { border-bottom: 1px solid var(--color-border, #dbe2e8); display: flex; font-size: .78rem; gap: .75rem; justify-content: space-between; padding: .35rem 0; }
 .rly-meta-row dt { color: var(--color-muted-foreground, #64748b); }
@@ -47,7 +47,7 @@
 .rly-owner-content { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 1rem; align-items: start; min-width: 0; }
 .rly-view-switch { margin-bottom: 1rem; }
 .rly-dashboard button { max-width: 100%; }
-.rly-dashboard button:focus-visible, .rly-field :is(input, select):focus-visible { outline: 2px solid var(--color-primary, #168b83); outline-offset: 2px; }
+.rly-dashboard button:focus-visible, .rly-field :is(input, select, textarea):focus-visible { outline: 2px solid var(--color-primary, #168b83); outline-offset: 2px; }
 .rly-pager { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
 .rly-dashboard button:disabled { cursor: default; opacity: .5; }
 .rly-history { list-style: none; display: grid; gap: .4rem; padding: 0; }
@@ -119,6 +119,7 @@
 
 .rly-session-lookup { display: flex; align-items: end; gap: .75rem; flex-wrap: wrap; }
 .rly-session-lookup .rly-field { width: min(100%, 24rem); margin-bottom: 0; }
-.rly-live-owners { display: grid; gap: .5rem; list-style: none; margin: 0; padding: 0; }
-.rly-live-owners li { display: grid; gap: .25rem; padding: .55rem 0; border-bottom: 1px solid var(--color-border, #dbe2e8); }
-.rly-live-owners span { overflow-wrap: anywhere; color: var(--color-muted-foreground, #64748b); }
+.rly-sidebar .rly-session-lookup { margin: .75rem 0; }
+.rly-memory-write-form { border-top: 1px solid var(--color-border, #dbe2e8); margin-top: 1rem; padding-top: .75rem; }
+.rly-memory-write-form textarea { resize: vertical; }
+.rly-write-success, .rly-write-error { overflow-wrap: anywhere; }

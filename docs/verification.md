@@ -190,19 +190,24 @@ The dashboard build and TypeScript check passed. Eight Node tests exercised the 
 
 The [Hermes browser smoke commands](#hu01-r1-dashboard-host-acceptance) also exercise HU02 on the exact v0.23.0 dashboard. The enabled Chrome run covers independent REL, session and PHY controls, empty and invalid-filter states, keyboard selection, list paging, pruned history, graph expansion, edge inspection, community navigation and the copied-source tombstone. The disabled run verifies that Hermes withholds the tab and assets. Live transport and owner authorization remain HU03 scope.
 
-## HU03 live owner and session discovery
+## HU03 live dashboard verification
 
-The first HU03 slice uses the live Hermes plugin route and signed Rust service for `ui.owner_sessions`. The server derives the owner set from the admitted profile's mounted topology. The route supports configured project sessions and durably attached general sessions. It preserves the dashboard-v1 response shape and resolves one session mapping per request.
+The live plugin uses the approved Hermes profile and active-PHY boundary against the signed Rust service. The dashboard integrates the accepted HP05 host baseline, including HP04 source and runtime lifecycle. Owner, Memory, graph, community and status responses are bound to a verified owner cut. The active PHY remains read-only. User-origin writes use the private Root actor derived from that active PHY.
 
-The pinned profile test mounts the live plugin in isolated launch and secondary profiles and runs both Rust services. It checks authentication, body identity spoofing, foreign-session denial, unknown and disabled profiles, and typed unsupported operations. The secondary request runs through the actual hosted plugin worker. Chrome on the exact Hermes v0.23.0 frontend passed live owner enumeration and both session lookups, plus denial of an unknown session. The separate fixture bundle passed the HU02 enabled and disabled browser checks.
+The two-profile proof checks the pinned launch profile and the secondary hosted plugin worker. It exercises unauthenticated, disabled and unknown profiles, forged browser identity, foreign owners and sessions, stale cuts, cross-origin mutation denial and PHY write denial. The same pinned route verifies create, immutable correction, terminal retirement, association link/unlink, active-PHY provenance and exact mutation replay. An isolated signed-service proof with a real seeded Root community verified list, member paging, rename, stale cursor rejection and replay after a service restart.
 
-The dashboard build and TypeScript check passed, with 9 Node tests. The locked offline Rust host suite passed 19 tests. The full Python suite passed 387 tests with the pinned checkout and rebuilt host binary. The initial run hit `invalid_discovery` in the existing HP04 restart test on Windows. The test passed in isolation and in the full rerun.
+The HP04 proof verifies dashboard source tombstone status after restart. The HP05 process proof inspects three imported Memories and their bounded graph, checks exact copied-source receipt and cursor evidence, and verifies the returned Memory IDs and delivery ID after real Hermes retrieval. Prepared recall does not appear as a return. Read-only inspection leaves the retained Freshness receipt count unchanged.
 
-To repeat the two-profile proof, use the binaries and environment in [HP03 local process verification](#hp03-local-process-verification) with the current host build, then run:
+Chrome on Hermes v0.23.0 verified owner and session switching, read-only PHY controls, user-origin Memory creation, literal rendering of HTML-shaped text, and stale-cut conflict with the draft preserved through refresh. The fixture bundle passed the enabled and disabled Chrome checks and remains isolated from the live API. TypeScript passed, along with 10 Node tests, 20 locked offline Rust tests and 350 Python tests with the pinned binaries and checkout.
+
+To repeat the focused service proofs, use the environment from [HP03 local process verification](#hp03-local-process-verification) with the rebuilt dashboard host.
 
 ```powershell
-python -B -m pytest -q --basetemp .pytest_tmp tests/test_hu03_dashboard.py tests/test_dashboard_api.py
+python -B -m pytest -q --basetemp .pytest_tmp tests/test_hu03_dashboard.py tests/test_dashboard_api.py tests/test_hp04_host.py tests/test_hp05_retrieval.py
+npm.cmd --prefix dashboard run check
 ```
+
+Imported history and exact Hermes source byte ranges can return typed unavailable when the required evidence is absent. The live recall view reports confirmed returns and marks the wider candidate set unavailable. HU04 owns the installation-to-restart acceptance scenario.
 
 ## HP04 stable host and runtime verification
 

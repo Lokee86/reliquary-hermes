@@ -17,7 +17,7 @@ pub(super) const MAX_TOPOLOGY_BYTES: usize = 65_536;
 pub(super) const UNAVAILABLE: RegistryError = RegistryError::Unavailable("state_unavailable");
 const CORRUPT: RegistryError = RegistryError::Unavailable("state_corrupt");
 
-pub(super) fn read<T: DeserializeOwned>(
+pub(crate) fn read<T: DeserializeOwned>(
     path: &Path,
     maximum: usize,
 ) -> Result<Option<T>, RegistryError> {
@@ -59,7 +59,7 @@ pub(super) fn sessions_dir(path: &Path, accepted_topology: bool) -> Result<(), R
     Ok(())
 }
 
-pub(super) fn publish(path: &Path, value: &impl Serialize) -> Result<(), RegistryError> {
+pub(crate) fn publish(path: &Path, value: &impl Serialize) -> Result<(), RegistryError> {
     let directory = path.parent().ok_or(UNAVAILABLE)?;
     let mut temporary = tempfile::Builder::new()
         .prefix(".binding-")
@@ -78,7 +78,7 @@ pub(super) fn publish(path: &Path, value: &impl Serialize) -> Result<(), Registr
     sync_parent(path)
 }
 
-pub(super) fn sync_parent(path: &Path) -> Result<(), RegistryError> {
+pub(crate) fn sync_parent(path: &Path) -> Result<(), RegistryError> {
     #[cfg(unix)]
     {
         let directory = path.parent().ok_or(UNAVAILABLE)?;

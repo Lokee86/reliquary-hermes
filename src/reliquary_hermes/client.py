@@ -360,6 +360,24 @@ class HostClient:
             raise HostUnavailable("invalid_topology_response") from None
         return result
 
+    def read_dashboard_request(self, request_value: dict, cursor: dict | None, *, same_origin: bool = False) -> dict:
+        """Exchange an authorized dashboard DTO and a backend-only Root cursor."""
+        discovery = self._read_discovery()
+        if discovery is None:
+            raise HostUnavailable("host_unavailable")
+        body = canonical({"request": request_value, "cursor": cursor, "same_origin": same_origin})
+        if len(body) > MAX_WIRE_BYTES:
+            raise HostUnavailable("dashboard_request_too_large")
+        reply = self._exchange(discovery, "/v1/dashboard/read", body,
+                               time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS)
+        try:
+            value = obj(decode(reply), {"response", "cursor"})
+            require(type(value["response"]) is dict and
+                    (value["cursor"] is None or type(value["cursor"]) is dict), "invalid_dashboard_response")
+            return value
+        except ContractError:
+            raise HostUnavailable("invalid_dashboard_response") from None
+
     def deliver_source_job(self, job) -> str:
         """Deliver only scoped durable outbox work and verify the exact receipt."""
         if job._scope != (self._profile_id, self._principal_id):

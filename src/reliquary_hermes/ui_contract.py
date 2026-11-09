@@ -323,7 +323,7 @@ class VerifiedUIContext:
         require(self.active_session_id is None or self.active_session_id in values, "invalid_ui_sessions")
         return values
 
-    def authorize(self, request):
+    def authorize(self, request, *, allow_mutation_replay=False):
         require(type(request) is UIRequest and self.authenticated_by_hermes is True, "ui_denied")
         require((request.profile_id, request.principal_id) == (self.profile_id, self.principal_id), "ui_denied")
         owners = self.bindings()
@@ -333,15 +333,19 @@ class VerifiedUIContext:
             return
         owner = owners.get(request.owner_id)
         require(owner is not None and owner["capabilities"]["view"], "ui_denied")
-        require((request.generation, request.cut) == (owner["generation"], owner["cut"]), "ui_stale_resync")
+        # The private service must verify the exact original cut and durable
+        # idempotency intent before Root admits a replay after the cut advances.
+        replay = allow_mutation_replay and request.operation in MUTATIONS
+        require(request.generation == owner["generation"] and (replay or request.cut == owner["cut"]),
+                "ui_stale_resync")
         require(owner["capabilities"][OP_CAPABILITY[request.operation]], "ui_denied")
         if request.operation == "ui.operational_status" and request.session_id is not None and owner["owner_kind"] == "REL":
             require(sessions[request.session_id] == request.owner_id, "ui_denied")
         if request.operation in MUTATIONS:
             require(self.same_origin is True and owner["capabilities"]["manage"], "ui_denied")
 
-    def check_response(self, response, request):
-        self.authorize(request)
+    def check_response(self, response, request, *, allow_mutation_replay=False):
+        self.authorize(request, allow_mutation_replay=allow_mutation_replay)
         response.for_request(request)
         if response.value["status"] == "ok":
             owners = self.bindings()

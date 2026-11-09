@@ -1,4 +1,4 @@
-"""The first live dashboard-v1 read, admitted by the pinned Hermes plugin host."""
+"""Live dashboard-v1 requests admitted by the pinned Hermes plugin host."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -17,14 +18,15 @@ from starlette.concurrency import run_in_threadpool
 from reliquary_hermes.client import HostClient, HostUnavailable
 from reliquary_hermes.settings import Settings, profile_home, read_settings, read_token
 from reliquary_hermes.ui_contract import UIRequest, UIResponse, VerifiedUIContext
+from reliquary_hermes.ui_schema import MUTATIONS, OP_CAPABILITY
 from reliquary_hermes.validation import ContractError, MAX_WIRE_BYTES, canonical, require
 
 router = APIRouter()
 _CURSOR_TTL = 300.0
 _CURSOR_CAP = 256
 _cursors: OrderedDict[str, tuple[float, str, int]] = OrderedDict()
+_ui_cursors: OrderedDict[str, tuple[float, str, dict]] = OrderedDict()
 _cursor_lock = threading.Lock()
-
 
 def _host_home(request: Request) -> Path:
     """Return only the home bound by Hermes' plugin request scope."""
@@ -84,13 +86,74 @@ def _issue_cursor(fingerprint: str, offset: int) -> str:
     return token
 
 
+def _ui_cursor_binding(home: Path, context: VerifiedUIContext, topology: dict,
+                       request: UIRequest) -> str:
+    value = request.value
+    arguments = dict(value["arguments"])
+    arguments["cursor"] = None
+    binding = {
+        "home": str(home), "profile_id": context.profile_id,
+        "active_phy_id": context.active_phy_id, "principal_id": context.principal_id,
+        "owner_id": value["owner_id"], "generation": value["generation"], "cut": value["cut"],
+        "session_id": topology["session_id"], "session_owner_id": topology["session_owner_id"],
+        "operation": value["operation"], "arguments": arguments,
+    }
+    return hashlib.sha256(canonical(binding)).hexdigest()
+
+
+def _resolve_ui_cursor(token: str, fingerprint: str) -> dict:
+    now = time.monotonic()
+    with _cursor_lock:
+        for key, entry in list(_ui_cursors.items()):
+            if entry[0] <= now:
+                del _ui_cursors[key]
+        entry = _ui_cursors.get(token)
+        if entry is None or entry[1] != fingerprint:
+            raise ContractError("stale_cursor")
+        _ui_cursors.move_to_end(token)
+        return entry[2]
+
+
+def _issue_ui_cursor(fingerprint: str, cursor: dict) -> str:
+    token = secrets.token_hex(24)
+    now = time.monotonic()
+    with _cursor_lock:
+        for key, value in list(_ui_cursors.items()):
+            if value[0] <= now:
+                del _ui_cursors[key]
+        _ui_cursors[token] = (now + _CURSOR_TTL, fingerprint, cursor)
+        while len(_ui_cursors) > _CURSOR_CAP:
+            _ui_cursors.popitem(last=False)
+    return token
+
+
+def _set_result_cursor(result: dict, operation: str, token: str | None) -> None:
+    if operation == "ui.memory_list":
+        page = result
+    elif operation == "ui.memory_history":
+        page = result["revisions"]
+    elif operation == "ui.community_list":
+        page = result["communities"]
+    elif operation == "ui.community_members":
+        page = result["members"]
+    elif operation == "ui.graph_page":
+        page = result
+    else:
+        require(token is None, "unexpected_private_cursor")
+        return
+    require(page["next_cursor"] is None, "unexpected_private_cursor_placeholder")
+    page["next_cursor"] = token
+    if token is not None:
+        page["truncated"] = True
+
+
 def _error(request: UIRequest, status: str, code: str, *, retryable: bool = False) -> UIResponse:
     value = {"protocol_version": 1, "request_id": request.request_id, "operation": request.operation,
              "status": status, "binding": None, "result": {"code": code, "retryable": retryable}}
     return UIResponse.parse(canonical(value))
 
 
-def _verified_context(settings: Settings, topology: dict) -> VerifiedUIContext:
+def _verified_context(settings: Settings, topology: dict, *, same_origin: bool = False) -> VerifiedUIContext:
     phy_id = topology["active_phy_id"]
     require(phy_id is not None, "active_phy_unavailable")
     bindings = topology["owners"]
@@ -109,7 +172,7 @@ def _verified_context(settings: Settings, topology: dict) -> VerifiedUIContext:
         principal_id=phy_id,
         owner_bindings_json=canonical(bindings),
         authenticated_by_hermes=True,
-        same_origin=False,
+        same_origin=same_origin,
         session_rel_bindings=sessions,
         active_session_id=selected,
         active_phy_id=visible_phy_id,
@@ -154,7 +217,64 @@ def _service_owner_sessions(home: Path, browser_request: UIRequest) -> UIRespons
         return context.check_response(response, verified_request)
     except ContractError as exc:
         code = str(exc)
-        status = "stale_cursor" if code == "stale_cursor" else "denied" if code in {
+        status = "stale_cursor" if code in {"stale_cursor", "ui_stale_resync"} else "denied" if code in {
+            "ui_denied", "active_phy_unavailable", "unbound_session"} else "unavailable"
+        return _error(browser_request, status, status, retryable=status == "unavailable")
+    except HostUnavailable as exc:
+        status = "denied" if str(exc) == "host_denied" else "unavailable"
+        return _error(browser_request, status, status, retryable=status == "unavailable")
+    except Exception:
+        return _error(browser_request, "unavailable", "unavailable", retryable=True)
+
+
+def _service_dashboard_request(home: Path, browser_request: UIRequest, same_origin: bool) -> UIResponse:
+    """Dispatch one authorized operation and translate any private Root cursor."""
+    try:
+        settings = read_settings(home)
+        token = read_token(home)
+        client = HostClient(settings.state_dir, settings.profile_id, settings.principal_id, token)
+        topology = client.read_dashboard_topology(browser_request.session_id)
+        context = _verified_context(settings, topology, same_origin=same_origin)
+        request_value = browser_request.value
+        request_value["profile_id"] = settings.profile_id
+        request_value["principal_id"] = context.principal_id
+        verified_request = UIRequest.parse(canonical(request_value))
+        mutation = verified_request.operation in MUTATIONS
+        owners = context.bindings()
+        owner = owners.get(verified_request.owner_id)
+        require(owner is not None and owner["capabilities"]["view"], "ui_denied")
+        session = verified_request.session_id
+        require(session is None or context.sessions(owners).get(session) == verified_request.owner_id, "ui_denied")
+        if mutation:
+            require(same_origin and owner["owner_kind"] == "REL", "ui_denied")
+        if not owner["capabilities"][OP_CAPABILITY[verified_request.operation]]:
+            return _error(browser_request, "unsupported", "operation_unavailable")
+        context.authorize(verified_request, allow_mutation_replay=mutation)
+
+        fingerprint = _ui_cursor_binding(home, context, topology, verified_request)
+        opaque_cursor = verified_request.arguments.get("cursor")
+        private_cursor = None if opaque_cursor is None else _resolve_ui_cursor(opaque_cursor, fingerprint)
+        private_request = verified_request.value
+        if "cursor" in private_request["arguments"]:
+            private_request["arguments"]["cursor"] = None
+        exchange = client.read_dashboard_request(private_request, private_cursor, same_origin=same_origin)
+        require(type(exchange) is dict and set(exchange) == {"response", "cursor"}, "invalid_dashboard_response")
+        result_value = exchange["response"]
+        private_next = exchange["cursor"]
+        require(private_next is None or type(private_next) is dict, "invalid_dashboard_cursor")
+        require(type(result_value) is dict, "invalid_dashboard_response")
+        if result_value.get("status") == "ok":
+            result_value = dict(result_value)
+            result_value["result"] = dict(result_value["result"])
+            ui_next = None if private_next is None else _issue_ui_cursor(fingerprint, private_next)
+            _set_result_cursor(result_value["result"], verified_request.operation, ui_next)
+        else:
+            require(private_next is None, "unexpected_private_cursor")
+        response = UIResponse.parse(canonical(result_value))
+        return context.check_response(response, verified_request, allow_mutation_replay=mutation)
+    except ContractError as exc:
+        code = str(exc)
+        status = "stale_cursor" if code in {"stale_cursor", "ui_stale_resync"} else "denied" if code in {
             "ui_denied", "active_phy_unavailable", "unbound_session"} else "unavailable"
         return _error(browser_request, status, status, retryable=status == "unavailable")
     except HostUnavailable as exc:
@@ -173,6 +293,32 @@ async def _read_bounded_body(request: Request) -> bytes:
     return bytes(body)
 
 
+def _same_origin(request: Request) -> bool:
+    origins = request.headers.getlist("origin")
+    if len(origins) != 1:
+        return False
+
+    def origin_tuple(value: str):
+        parsed = urlsplit(value)
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname or
+                parsed.username is not None or parsed.path or parsed.query or parsed.fragment):
+            return None
+        return parsed.scheme, parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
+
+    try:
+        origin = origin_tuple(origins[0])
+        if origin is None:
+            return False
+        if getattr(request.state, "hosted_http_authenticated", False) is True:
+            # Pinned Hermes strips the public Host before private IPC. Fetch
+            # Metadata is set by the browser and cannot be set by page script.
+            return request.headers.getlist("sec-fetch-site") == ["same-origin"]
+        hosts = request.headers.getlist("host")
+        return len(hosts) == 1 and origin == origin_tuple(f"{request.url.scheme}://{hosts[0]}")
+    except ValueError:
+        return False
+
+
 @router.post("/dashboard-v1")
 async def dashboard_v1(request: Request):
     """Authenticated plugin API; the browser never selects profile or principal authority."""
@@ -188,10 +334,9 @@ async def dashboard_v1(request: Request):
         raise HTTPException(status_code=403, detail="dashboard_admission_failed") from None
 
     home = _host_home(request)
-    # Valid but not-yet-wired operations receive a typed result after admission and verified
-    # profile scope, without reading configuration or contacting the service.
-    if browser_request.operation != "ui.owner_sessions":
-        response = _error(browser_request, "unsupported", "operation_unavailable")
-    else:
+    if browser_request.operation == "ui.owner_sessions":
         response = await run_in_threadpool(_service_owner_sessions, home, browser_request)
+    else:
+        same_origin = browser_request.operation in MUTATIONS and _same_origin(request)
+        response = await run_in_threadpool(_service_dashboard_request, home, browser_request, same_origin)
     return JSONResponse(response.value, headers={"Cache-Control": "no-store"})

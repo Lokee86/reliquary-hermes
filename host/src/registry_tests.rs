@@ -124,7 +124,17 @@ fn dashboard_topology_is_read_only_and_rejects_unbound_unknown_sessions() {
     assert_eq!(main["owner_id"], fixture.main_id.to_string());
     assert_eq!(main["owner_kind"], "REL");
     assert_eq!(main["capabilities"]["view"], true);
-    assert_eq!(main["capabilities"]["manage"], false);
+    assert_eq!(main["capabilities"]["manage"], true);
+    assert_eq!(main["capabilities"]["memory_create"], true);
+    let phy = &configured["owners"][2];
+    assert_eq!(phy["owner_id"], fixture.phy_id.to_string());
+    assert_eq!(phy["capabilities"]["view"], true);
+    assert_eq!(phy["capabilities"]["manage"], false);
+    assert_eq!(phy["capabilities"]["memory_create"], false);
+    assert_eq!(
+        registry.dashboard_actor().principal(),
+        fixture.phy_id.to_string()
+    );
     let root_cut = instance
         .inspect_owner(
             fixture.main_id,

@@ -4,9 +4,10 @@ use crate::{
     retrieval::RetrievalService,
     runtime::{HEARTBEAT_SECONDS, ReconciliationScope, RuntimeRegistry},
     service_http::{
-        ATTACH, DASHBOARD_TOPOLOGY, FORBIDDEN, HttpError, HttpRequest, HttpResponse, INVALID, MAX_WIRE_BYTES,
-        RETRIEVAL_PREPARE, RUNTIME_ATTACH, RUNTIME_DETACH, RUNTIME_HEARTBEAT, RUNTIME_SCOPE,
-        SOURCE, TransportKey, UNAVAILABLE, hex, read_request, write_response,
+        ATTACH, DASHBOARD_READ, DASHBOARD_TOPOLOGY, FORBIDDEN, HttpError, HttpRequest,
+        HttpResponse, INVALID, MAX_WIRE_BYTES, RETRIEVAL_PREPARE, RUNTIME_ATTACH, RUNTIME_DETACH,
+        RUNTIME_HEARTBEAT, RUNTIME_SCOPE, SOURCE, TransportKey, UNAVAILABLE, hex, read_request,
+        write_response,
     },
     service_protocol::{
         AttachRequest, Discovery, HERMES_REVISION, Operation, PROTOCOL_VERSION, ProviderRequest,
@@ -84,6 +85,14 @@ impl Service {
         match request.path {
             ATTACH => self.attach(&request.body),
             SOURCE => self.source(&request.body),
+            DASHBOARD_READ => crate::dashboard::read(
+                &self.instance,
+                &self.registry,
+                &self.retrieval,
+                &self.sources,
+                &self.runtimes,
+                &request.body,
+            ),
             DASHBOARD_TOPOLOGY => self.dashboard_topology(&request.body),
             RETRIEVAL_PREPARE => self.prepare_retrieval(&request.body),
             RUNTIME_ATTACH => self.runtime_attach(&request.body),

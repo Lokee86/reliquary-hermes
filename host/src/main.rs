@@ -1,4 +1,5 @@
 //! Standalone HP03 loopback service. Standard input carries the startup secret.
+mod dashboard;
 mod registry;
 mod retrieval;
 mod runtime;

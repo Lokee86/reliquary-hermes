@@ -31,6 +31,7 @@ struct TurnState {
     last_search_id: Option<String>,
     last_cut: Option<String>,
     last_ids: Vec<String>,
+    last_delivery_id: Option<String>,
     staged: Option<(String, String, reliquary_memory::PreparedMemoryDelivery)>,
     completed: BTreeSet<String>,
     touched: Instant,
@@ -47,6 +48,25 @@ impl RetrievalService {
             runtime: crate::source_ingest::configured_runtime(state_dir)?.map(Arc::new),
             turns: BTreeMap::new(),
         })
+    }
+
+    pub(crate) fn dashboard_recall(&self, session: &str) -> Value {
+        let Some((_, state)) = self
+            .turns
+            .iter()
+            .filter(|(key, state)| key.2 == session && state.touched.elapsed() <= TURN_TTL)
+            .max_by_key(|(_, state)| state.touched)
+        else {
+            return no_dashboard_recall();
+        };
+        let (Some(search_id), Some(delivery_id)) = (&state.last_search_id, &state.last_delivery_id)
+        else {
+            return no_dashboard_recall();
+        };
+        // The Root preview exposes the exact approved selection. The wider
+        // pre-decision candidate set is not exposed by this public API.
+        json!({"state": "returned", "search_id": search_id, "delivery_id": delivery_id,
+            "candidate_ids": state.last_ids, "selected_ids": state.last_ids, "returned_ids": state.last_ids})
     }
 
     pub(crate) fn invalidate_session(&mut self, session_id: &str, instance: &Instance) {
@@ -196,6 +216,7 @@ impl RetrievalService {
                     &mut state.last_search_id,
                     &mut state.last_cut,
                     &mut state.last_ids,
+                    &mut state.last_delivery_id,
                     &mut state.completed,
                     fingerprint,
                     deadline,
@@ -226,6 +247,7 @@ impl RetrievalService {
                     &mut state.last_search_id,
                     &mut state.last_cut,
                     &mut state.last_ids,
+                    &mut state.last_delivery_id,
                     &mut state.completed,
                     fingerprint,
                     deadline,
@@ -264,6 +286,7 @@ impl RetrievalService {
                     &mut state.last_search_id,
                     &mut state.last_cut,
                     &mut state.last_ids,
+                    &mut state.last_delivery_id,
                     &mut state.completed,
                     fingerprint,
                     deadline,
@@ -286,6 +309,7 @@ impl RetrievalService {
         last_search_id: &mut Option<String>,
         last_cut: &mut Option<String>,
         last_ids: &mut Vec<String>,
+        last_delivery_id: &mut Option<String>,
         completed: &mut BTreeSet<String>,
         request_fingerprint: String,
         deadline: Instant,
@@ -369,6 +393,7 @@ impl RetrievalService {
                 *last_search_id = Some(search_id.clone());
                 *last_cut = Some(cut.clone());
                 *last_ids = ids.clone();
+                *last_delivery_id = Some(delivery_id.to_owned());
                 completed.insert(request_fingerprint);
                 Ok(json!({
                         "protocol_version": 1,
@@ -424,6 +449,7 @@ impl RetrievalService {
                     last_search_id: None,
                     last_cut: None,
                     last_ids: Vec::new(),
+                    last_delivery_id: None,
                     staged: None,
                     completed: BTreeSet::new(),
                     touched: Instant::now(),
@@ -443,6 +469,11 @@ impl RetrievalService {
             keep
         });
     }
+}
+
+pub(crate) fn no_dashboard_recall() -> Value {
+    json!({"state": "none", "search_id": null, "delivery_id": null,
+        "candidate_ids": [], "selected_ids": [], "returned_ids": []})
 }
 
 fn turn_key(request: &ProviderRequest) -> TurnKey {

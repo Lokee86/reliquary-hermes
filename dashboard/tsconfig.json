@@ -1,7 +1,10 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM"],
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
     "module": "commonjs",
     "allowJs": true,
     "checkJs": true,
@@ -19,6 +22,10 @@
     "src/graph.js",
     "src/index.js",
     "src/live_transport.js",
-    "src/live.js"
+    "src/live.js",
+    "types-owner-content.d.ts",
+    "src/owner_content.js",
+    "src/memory_mutations.js",
+    "src/graph_mutations.js"
   ]
 }

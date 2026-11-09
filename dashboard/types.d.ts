@@ -364,10 +364,11 @@ declare global {
     select(label: string, value: string, options: { value: string; label: string }[], onChange: (value: string) => void): unknown;
     MemoryList(props: { items: MemorySummary[]; selected: string | null; onSelect: (memoryId: string) => void }): unknown;
     Inspector(props: { client: DashboardClient; scope: ReadScope; memoryId: string }): unknown;
-    Status(props: { client: DashboardClient; scope: ReadScope }): unknown;
+    Status(props: { client: DashboardClient; scope: ReadScope; live?: boolean }): unknown;
   };
   var ReliquaryDashboardLive: {
     createLiveClient(authedFetch: HermesDashboardSDK["authedFetch"]): DashboardClient;
+    createLiveMutation(authedFetch: HermesDashboardSDK["authedFetch"]): import("./types-owner-content").DashboardMutationWriter;
   };
   var ReliquaryDashboardFixture: DashboardFixture;
 }

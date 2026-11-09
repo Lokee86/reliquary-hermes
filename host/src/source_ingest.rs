@@ -36,6 +36,13 @@ pub(crate) struct RetrievalProvenance {
     source_snapshot_digests: Vec<String>,
 }
 
+pub(crate) struct DashboardSourceStatus {
+    pub(crate) state: &'static str,
+    pub(crate) cursor: Option<String>,
+    pub(crate) receipt: Option<String>,
+    pub(crate) import_id: Option<String>,
+}
+
 pub(crate) struct SourceService {
     store: SourceStore,
     runtime: Option<ConfiguredRuntime>,
@@ -48,6 +55,47 @@ impl SourceService {
             store: SourceStore::open(state_dir)?,
             runtime: configured_runtime(state_dir)?,
             jobs: BTreeMap::new(),
+        })
+    }
+
+    pub(crate) fn dashboard_status(
+        &self,
+        session: &str,
+        runtimes: &mut RuntimeRegistry,
+    ) -> Result<DashboardSourceStatus, HttpError> {
+        let state = self.store.read(&self.store.path(session))?;
+        let fenced = runtimes
+            .has_fence("hermes", session)
+            .map_err(|_| UNAVAILABLE)?;
+        let label = if state.terminal {
+            "tombstoned"
+        } else if state.stale || fenced {
+            "stale"
+        } else if state.available && state.accepted.is_some() {
+            "active"
+        } else if state.accepted.is_none() && state.pending.is_none() {
+            "none"
+        } else {
+            "unavailable"
+        };
+        // The accepted snapshot digest identifies the source head without exposing
+        // a Hermes message UID, outbox key, content, or a storage path.
+        let cursor = state.accepted.as_ref().map(|head| head.wire_digest.clone());
+        let receipt = state
+            .accepted
+            .as_ref()
+            .and_then(|head| head.receipt)
+            .map(|receipt| hex(&receipt));
+        let import_id = state
+            .pending
+            .as_ref()
+            .or(state.accepted.as_ref())
+            .map(|head| head.import_id.clone());
+        Ok(DashboardSourceStatus {
+            state: label,
+            cursor,
+            receipt,
+            import_id,
         })
     }
 

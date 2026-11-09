@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from reliquary_hermes.client import HostClient, HostUnavailable
 from reliquary_hermes.outbox import SourceOutbox
 from reliquary_hermes.settings import TOKEN_VAR, save_settings
+from reliquary_hermes.ui_contract import UIResponse
 from reliquary_hermes.validation import canonical, decode
 from test_host_client import TOKEN
 from test_hp03_host import binaries, config, owner, stop
@@ -140,6 +141,51 @@ def _settled(provider, status="attached"):
     _wait(lambda: provider.lifecycle_status == status, seconds=10)
 
 
+def _dashboard_binding(client, session_id):
+    topology = client.read_dashboard_topology(session_id)
+    owner = next(row for row in topology["owners"]
+                 if row["owner_id"] == topology["session_owner_id"]
+                 and row["owner_kind"] == "REL")
+    assert owner["capabilities"]["view"]
+    assert owner["capabilities"]["graph"]
+    assert owner["capabilities"]["status"]
+    return topology, owner
+
+
+def _dashboard_exchange(client, topology, owner, operation, arguments, *, cursor=None):
+    request_value = {
+        "protocol_version": 1,
+        "request_id": "hp05-dashboard-read",
+        "operation": operation,
+        "profile_id": PROFILE,
+        # UI principal is the configured active PHY identity, not the private
+        # HP03/HP05 service principal.
+        "principal_id": topology["active_phy_id"],
+        "session_id": topology["session_id"],
+        "owner_id": owner["owner_id"],
+        "generation": owner["generation"],
+        "cut": owner["cut"],
+        "expected_revision": None,
+        "idempotency_key": None,
+        "arguments": arguments,
+    }
+    exchange = client.read_dashboard_request(request_value, cursor)
+    assert type(exchange) is dict and set(exchange) == {"response", "cursor"}, exchange
+    parsed = UIResponse.parse(canonical(exchange["response"]))
+    return parsed.value, exchange["cursor"]
+
+
+def _dashboard_status(client, session_id):
+    topology, owner = _dashboard_binding(client, session_id)
+    response, cursor = _dashboard_exchange(
+        client, topology, owner, "ui.operational_status", {},
+    )
+    assert cursor is None
+    assert response["status"] == "ok", response
+    assert response["binding"] == owner
+    return response["result"]
+
+
 def _provider_profile(home, state, rel, phy, binary):
     home.mkdir(exist_ok=True)
     save_settings(home, {
@@ -245,7 +291,77 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
         before_candidate = rel.read_bytes()
         initial_records = historical_records()
         manager, provider, provider_process = start_provider()
+        topology, dashboard_owner = _dashboard_binding(provider._client, SESSION)
+        accepted_status = _dashboard_status(provider._client, SESSION)
+        assert accepted_status["source_state"] == "active", accepted_status
+        assert accepted_status["accepted_source_cursor"] == job.snapshot.snapshot_digest
+        assert accepted_status["last_completed_receipt"] is not None
+        assert accepted_status["latest_recall"] == {
+            "state": "none", "search_id": None, "delivery_id": None,
+            "candidate_ids": [], "selected_ids": [], "returned_ids": [],
+        }
+
+        # Exercise a nonempty paged list and follow its actual private cursor.
+        filters = {"query": "", "category": None, "memory_type": None,
+                   "lifecycle": None, "community_id": None}
+        first, private_cursor = _dashboard_exchange(
+            provider._client, topology, dashboard_owner, "ui.memory_list",
+            {"cursor": None, "limit": 2, "filters": filters},
+        )
+        assert first["status"] == "ok", first
+        assert first["binding"] == dashboard_owner
+        assert len(first["result"]["items"]) == 2
+        assert first["result"]["truncated"] and private_cursor is not None
+        second, final_cursor = _dashboard_exchange(
+            provider._client, topology, dashboard_owner, "ui.memory_list",
+            {"cursor": None, "limit": 2, "filters": filters}, cursor=private_cursor,
+        )
+        assert second["status"] == "ok", second
+        assert not second["result"]["truncated"] and final_cursor is None
+        summaries = first["result"]["items"] + second["result"]["items"]
+        assert len(summaries) == 3
+        memory_ids = {row["memory_id"] for row in summaries}
+        assert len(memory_ids) == 3
+
+        # Current detail is checked for every imported Memory at its actual current
+        # revision, with readable content. Dashboard reads must not record a return.
+        for summary in summaries:
+            detail, detail_cursor = _dashboard_exchange(
+                provider._client, topology, dashboard_owner, "ui.memory_detail",
+                {"memory_id": summary["memory_id"], "revision": None},
+            )
+            assert detail["status"] == "ok", detail
+            assert detail["binding"] == dashboard_owner
+            assert detail_cursor is None
+            body = detail["result"]["body"]
+            assert detail["result"]["memory"]["memory_id"] == summary["memory_id"]
+            assert body["revision"] == summary["revision"]
+            assert body["availability"] == "available" and isinstance(body["content"], str)
+
+        # Bounded Root graph projection over all three imported Memories.
+        graph, graph_cursor = _dashboard_exchange(
+            provider._client, topology, dashboard_owner, "ui.graph_page",
+            {"seed_ids": sorted(memory_ids), "community_id": None, "depth": 1,
+             "node_limit": 3, "edge_limit": 100, "cursor": None},
+        )
+        assert graph["status"] == "ok", graph
+        assert graph["binding"] == dashboard_owner
+        assert graph_cursor is None
+        assert graph["result"]["routing_state"] == "available"
+        node_ids = {node["memory_id"] for node in graph["result"]["nodes"]}
+        assert node_ids == memory_ids
+        assert all(node["cut"] == dashboard_owner["cut"] for node in graph["result"]["nodes"])
+        assert all(edge["cut"] == dashboard_owner["cut"]
+                   and edge["source_id"] in {node["node_id"] for node in graph["result"]["nodes"]}
+                   and edge["target_id"] in {node["node_id"] for node in graph["result"]["nodes"]}
+                   for edge in graph["result"]["edges"])
+
+        # A staged preview is not a SelectedReturn receipt and must not be displayed.
         prepare(manager, provider)
+        staged_status = _dashboard_status(provider._client, SESSION)
+        assert staged_status["source_state"] == "active"
+        assert staged_status["latest_recall"]["state"] == "none"
+        assert staged_status["latest_recall"]["candidate_ids"] == []
         manager.shutdown_all()
         assert provider_process.wait(timeout=10) == 0
         assert rel.read_bytes() == before_candidate
@@ -284,6 +400,14 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
         ))
         assert query_json["status"] == "ok", query_json
         result = query_json["result"]
+        returned_status = _dashboard_status(provider._client, SESSION)
+        recall = returned_status["latest_recall"]
+        assert recall["state"] == "returned", recall
+        assert recall["search_id"] == result["search_id"]
+        assert recall["delivery_id"] == result["delivery_id"]
+        assert recall["selected_ids"] == result["memory_ids"]
+        assert recall["returned_ids"] == result["memory_ids"]
+        assert set(recall["candidate_ids"]) >= set(result["memory_ids"])
         assert len(result["memory_ids"]) == 1
         [memory_id] = result["memory_ids"]
         assert result["provenance"] == [{

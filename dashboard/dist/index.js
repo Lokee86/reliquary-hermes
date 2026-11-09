@@ -145,6 +145,15 @@
 
   const endpoint = "/api/plugins/reliquary-hermes/dashboard-v1";
 
+  function newRequestId() {
+    const bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+
   /** @param {import("../types").HermesDashboardSDK["authedFetch"]} authedFetch */
   function createLiveClient(authedFetch) {
     return root.ReliquaryDashboardClient.createClient(async (request, signal) => {
@@ -156,23 +165,115 @@
         });
       }
 
-      if (request.operation !== "ui.owner_sessions") {
-        return failure("unsupported", "operation_unwired", false);
+      let response;
+      try {
+        response = await authedFetch(endpoint, {
+          method: "POST", cache: "no-store", signal,
+          headers: { "Content-Type": "application/json" },
+          // Host-authenticated identity and authority are resolved server-side.
+          body: JSON.stringify({ ...request, profile_id: "dashboard", principal_id: "dashboard" }),
+        });
+      } catch {
+        signal.throwIfAborted();
+        return failure("unavailable", "dashboard_unavailable", true);
       }
-      const response = await authedFetch(endpoint, {
-        method: "POST", cache: "no-store", signal,
-        headers: { "Content-Type": "application/json" },
-        // The profile and principal fields are wire placeholders. Hermes and the service supply authority.
-        body: JSON.stringify({ ...request, profile_id: "dashboard", principal_id: "dashboard" }),
-      });
       if (response.status === 401 || response.status === 403) return failure("denied", "dashboard_denied", false);
       if (response.status === 400) return failure("invalid", "invalid_request", false);
+      if (response.status === 409) return failure("conflict", "dashboard_conflict", false);
       if (!response.ok) return failure("unavailable", "dashboard_unavailable", true);
-      return response.json();
+      try {
+        return await response.json();
+      } catch {
+        return failure("unavailable", "invalid_dashboard_response", false);
+      }
     });
   }
 
-  const api = { createLiveClient };
+  /**
+   * @param {import("../types").HermesDashboardSDK["authedFetch"]} authedFetch
+   * @returns {import("../types-owner-content").DashboardMutationWriter}
+   */
+  function createLiveMutation(authedFetch) {
+    /**
+     * @param {import("../types-owner-content").DashboardMutationOperation} operation
+     * @param {import("../types").ReadScope & {owner:import("../types").OwnerBinding}} scope
+     * @param {Record<string,string|null>} args
+     * @param {string|null} expectedRevision
+     * @param {string} idempotencyKey
+     * @param {AbortSignal} signal
+     * @returns {Promise<import("../types-owner-content").DashboardMutationOutcome>}
+     */
+    return async function write(operation, scope, args, expectedRevision, idempotencyKey, signal) {
+      const owner = scope.owner;
+      const capability = {
+        "ui.memory_create": "memory_create", "ui.memory_edit": "memory_edit", "ui.memory_retire": "memory_retire",
+        "ui.relation_change": "relation_edit", "ui.community_rename": "community_rename",
+      }[operation];
+      const capabilityKey = /** @type {keyof import("../types").CapabilityFlags} */ (capability);
+      if (owner.owner_kind !== "REL" || !owner.capabilities.view || !owner.capabilities.manage || !owner.capabilities[capabilityKey]) {
+        return { status: "denied", code: "capability_denied", retryable: false };
+      }
+      const request = {
+        protocol_version: 1,
+        request_id: newRequestId(),
+        operation,
+        profile_id: "dashboard",
+        principal_id: "dashboard",
+        session_id: scope.sessionId,
+        owner_id: owner.owner_id,
+        generation: owner.generation,
+        cut: owner.cut,
+        expected_revision: expectedRevision,
+        idempotency_key: idempotencyKey,
+        arguments: args,
+      };
+      let response;
+      try {
+        response = await authedFetch(endpoint, {
+          method: "POST", cache: "no-store", signal,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+        });
+      } catch {
+        signal.throwIfAborted();
+        return { status: "error", code: "dashboard_unavailable", retryable: true };
+      }
+      if (response.status === 401 || response.status === 403) {
+        return { status: "denied", code: "dashboard_denied", retryable: false };
+      }
+      if (response.status === 400) return { status: "invalid", code: "invalid_request", retryable: false };
+      if (response.status === 409) return { status: "conflict", code: "dashboard_conflict", retryable: false };
+      if (!response.ok) return { status: "unavailable", code: "dashboard_unavailable", retryable: true };
+
+      let value;
+      try { value = await response.json(); }
+      catch { return { status: "unavailable", code: "invalid_dashboard_response", retryable: false }; }
+      if (value.protocol_version !== 1 || value.request_id !== request.request_id || value.operation !== operation) {
+        return { status: "conflict", code: "response_correlation_mismatch", retryable: false };
+      }
+      if (value.status !== "ok") {
+        if (value.binding !== null) return { status: "conflict", code: "invalid_error_binding", retryable: false };
+        return { status: value.status, code: value.result.code, retryable: value.result.retryable };
+      }
+      signal.throwIfAborted();
+      const binding = value.binding;
+      const result = value.result;
+      const capsDoNotWiden = Object.entries(binding?.capabilities ?? {}).every(([key, granted]) =>
+        !granted || owner.capabilities[/** @type {keyof import("../types").CapabilityFlags} */ (key)]);
+      const validBinding = binding && binding.owner_id === owner.owner_id && binding.owner_kind === owner.owner_kind &&
+        binding.display_label === owner.display_label && binding.generation === owner.generation &&
+        capsDoNotWiden && binding.capabilities.view && binding.capabilities.manage &&
+        binding.capabilities[capabilityKey] && (!result.changed || binding.cut !== owner.cut);
+      const validReceipt = result.request_id === request.request_id && result.idempotency_key === idempotencyKey &&
+        typeof result.receipt_id === "string" && typeof result.changed === "boolean";
+      if (!validBinding || !validReceipt) {
+        return { status: "conflict", code: "response_binding_mismatch", retryable: false };
+      }
+      return { status: "ok", value: { binding, result } };
+    };
+  }
+
+  const api = { createLiveClient, createLiveMutation };
   root.ReliquaryDashboardLive = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(globalThis);
@@ -366,11 +467,11 @@
       exactRevision && readContent("provenance", provenance, (value) => provenanceList(value.sources)));
   }
 
-  /** @param {{client:import("../types").DashboardClient,scope:import("../types").ReadScope}} props */
-  function Status({ client, scope }) {
+  /** @param {{client:import("../types").DashboardClient,scope:import("../types").ReadScope,live?:boolean}} props */
+  function Status({ client, scope, live = false }) {
     const read = ReliquaryDashboardState.useRead(client, "ui.operational_status", scope, scope.owner?.capabilities.status ? {} : null);
     return h("div", { className: "rly-status-card" },
-      h("strong", null, "Fixture activity"),
+      h("strong", null, "Operational activity"),
       readContent("operational status", read, (status) => h("dl", null,
         meta("Copied source", status.source_state === "tombstoned" ? "Tombstoned source" : status.source_state),
         meta("Worker", status.worker_state),
@@ -378,7 +479,7 @@
         status.accepted_source_cursor && meta("Source cursor", status.accepted_source_cursor),
         status.last_completed_receipt && meta("Last completed receipt", status.last_completed_receipt),
         meta("Latest recall", status.latest_recall.state),
-        meta("Candidate Memories", status.latest_recall.candidate_ids.join(", ") || "None"),
+        meta("Candidate Memories", live ? "Unavailable" : status.latest_recall.candidate_ids.join(", ") || "None"),
         meta("Selected Memories", status.latest_recall.selected_ids.join(", ") || "None"),
         meta("Returned Memories", status.latest_recall.returned_ids.join(", ") || "None"))));
   }
@@ -387,64 +488,870 @@
 })(globalThis);
 
 
+(function (root) {
+  "use strict";
+
+  /** @typedef {import("../types").GraphViewProps} GraphViewProps */
+  /** @typedef {import("../types").CommunityViewProps} CommunityViewProps */
+
+  function getReact() {
+    const sdk = globalThis.window && globalThis.window.__HERMES_PLUGIN_SDK__;
+    if (!sdk || !sdk.React) throw new Error("Hermes host React is unavailable");
+    return sdk.React;
+  }
+
+  /** @param {GraphViewProps} props */
+  function GraphView(props) {
+    const React = getReact();
+    const h = React.createElement;
+    const { nodes, edges, truncated, next_cursor } = props.graph;
+    const pageNote = next_cursor ? " · more pages" : truncated ? " · result limited" : "";
+    const width = 760;
+    const height = 420;
+    const positioned = nodes.map((node, index) => {
+      const angle = (2 * Math.PI * index) / Math.max(nodes.length, 1) - Math.PI / 2;
+      const radiusX = Math.min(265, Math.max(72, 38 * nodes.length));
+      const radiusY = Math.min(135, Math.max(52, 22 * nodes.length));
+      return { node, x: width / 2 + Math.cos(angle) * radiusX, y: height / 2 + Math.sin(angle) * radiusY };
+    });
+    const coords = new Map(positioned.map((entry) => [entry.node.node_id, entry]));
+    const selectedNode = props.selected?.kind === "node" ? nodes.find((node) => node.node_id === props.selected?.id) : null;
+    const selectedEdge = props.selected?.kind === "edge" ? edges.find((edge) => edge.edge_id === props.selected?.id) : null;
+
+    /** @param {{key:string,currentTarget:SVGElement,preventDefault():void}} event */
+    function navigateNodes(event) {
+      if (!["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"].includes(event.key)) return;
+      const current = event.currentTarget;
+      const group = current.closest("svg");
+      const controls = group ? Array.from(group.querySelectorAll("g.rly-graph-node"), (item) => /** @type {SVGElement} */ (item)) : [];
+      const index = controls.indexOf(current);
+      if (index < 0 || controls.length === 0) return;
+      event.preventDefault();
+      const delta = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1;
+      controls[(index + delta + controls.length) % controls.length].focus();
+    }
+
+    return h("section", { className: "rly-graph-view", "aria-label": "Bounded Memory graph" },
+      h("p", { className: "rly-graph-summary" }, `${nodes.length} nodes · ${edges.length} edges${pageNote}`),
+      nodes.length > 0
+        ? h("div", { className: "rly-graph-canvas" },
+          h("svg", { viewBox: `0 0 ${width} ${height}`, role: "group", "aria-label": "Graph connections. Focus a node and use arrow keys to move between nodes." },
+            h("g", { className: "rly-graph-edges", "aria-label": "Connections" }, ...edges.map((edge) => {
+              const from = coords.get(edge.source_id);
+              const to = coords.get(edge.target_id);
+              if (!from || !to) return null;
+              const active = props.selected?.kind === "edge" && props.selected.id === edge.edge_id;
+              return h("g", { key: `edge:${edge.edge_id}`, className: `rly-graph-edge${active ? " is-selected" : ""}` },
+                h("line", { x1: from.x, y1: from.y, x2: to.x, y2: to.y, className: "rly-graph-edge-line", "aria-hidden": "true" }),
+                h("line", {
+                  x1: from.x, y1: from.y, x2: to.x, y2: to.y,
+                  className: "rly-graph-edge-hit", stroke: "transparent", strokeWidth: 16,
+                  role: "button", tabIndex: 0, "aria-pressed": active, "aria-label": `${edge.kind} connection from ${from.node.label} to ${to.node.label}${edge.active ? "" : " (inactive)"}`,
+                  onClick: () => props.onSelect({ kind: "edge", id: edge.edge_id }),
+                  onKeyDown: (/** @type {KeyboardEvent} */ event) => {
+                    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onSelect({ kind: "edge", id: edge.edge_id }); }
+                  },
+                }));
+            })),
+            h("g", { className: "rly-graph-nodes" }, ...positioned.map(({ node, x, y }) => {
+              const active = props.selected?.kind === "node" && props.selected.id === node.node_id;
+              return h("g", {
+                key: `node:${node.node_id}`, transform: `translate(${x} ${y})`,
+                className: `rly-graph-node${active ? " is-selected" : ""}`,
+                role: "button", tabIndex: 0, "aria-pressed": active,
+                "aria-label": `${node.kind}: ${node.label}${node.memory_id ? ", open Memory" : ""}`,
+                onClick: () => props.onSelect({ kind: "node", id: node.node_id }),
+                onDoubleClick: () => props.onExpand(node.node_id),
+                onKeyDown: (/** @type {{key:string,currentTarget:SVGElement,preventDefault():void}} */ event) => {
+                  navigateNodes(event);
+                  if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onSelect({ kind: "node", id: node.node_id }); }
+                  if (event.key === "e" || event.key === "E") { event.preventDefault(); props.onExpand(node.node_id); }
+                },
+              },
+                h("rect", { x: -77, y: -23, width: 154, height: 46, rx: 10 }),
+                h("text", { x: 0, y: 5, textAnchor: "middle" }, node.label.length > 22 ? `${node.label.slice(0, 20)}…` : node.label));
+            }))))
+        : h("p", { className: "rly-graph-empty" }, "No graph nodes on this page."),
+      (selectedNode || selectedEdge) && h("aside", { className: "rly-graph-inspector", "aria-live": "polite", "aria-label": "Selected graph item" },
+        selectedNode && h("div", { className: "rly-graph-selection-details" },
+          h("h3", null, selectedNode.label),
+          h("dl", null,
+            h("dt", null, "Type"), h("dd", null, selectedNode.kind),
+            h("dt", null, "Origin"), h("dd", null, selectedNode.origin),
+            h("dt", null, "Revision / cut"), h("dd", null, `${selectedNode.revision} · ${selectedNode.cut}`)),
+          h("button", { type: "button", onClick: () => props.onExpand(selectedNode.node_id) }, "Expand neighborhood")),
+        selectedEdge && h("div", { className: "rly-graph-selection-details" },
+          h("h3", null, `${selectedEdge.kind} connection`),
+          h("dl", null,
+            h("dt", null, "Origin"), h("dd", null, selectedEdge.origin),
+            h("dt", null, "Status"), h("dd", null, selectedEdge.active ? "Active" : "Inactive"),
+            h("dt", null, "From / to"), h("dd", null, `${selectedEdge.source_id} → ${selectedEdge.target_id}`),
+            h("dt", null, "Revision / cut"), h("dd", null, `${selectedEdge.revision} · ${selectedEdge.cut}`)))));
+  }
+
+  /** @param {CommunityViewProps} props */
+  function CommunityView(props) {
+    const React = getReact();
+    const h = React.createElement;
+    const { communities, members, selected, onCommunity, onMemory, onNextCommunities, onNextMembers } = props;
+    const communityRows = communities.items.map((community) => h("li", { key: community.community_id },
+      h("button", {
+        type: "button", className: `rly-community-button${selected?.community_id === community.community_id ? " is-selected" : ""}`,
+        "aria-pressed": selected?.community_id === community.community_id, onClick: () => onCommunity(community),
+      }, h("strong", null, community.name ?? `Community ${community.community_id}`),
+      h("span", null, `${community.member_count} members · ${community.name_origin}`))));
+    const memberRows = members?.items.map((memoryId) => h("li", { key: memoryId },
+      h("button", { type: "button", onClick: () => onMemory(memoryId) }, memoryId))) ?? [];
+    const nextCommunity = communities.next_cursor;
+    const nextMember = members?.next_cursor;
+
+    return h("section", { className: "rly-community-view", "aria-label": "Communities" },
+      h("div", { className: "rly-community-layout" },
+        h("div", { className: "rly-community-list-pane" },
+          communityRows.length ? h("ul", { className: "rly-community-list" }, ...communityRows)
+            : h("p", { className: "rly-muted" }, "No communities on this page."),
+          nextCommunity && h("button", { type: "button", onClick: () => onNextCommunities(nextCommunity) }, "Next community page")),
+        h("div", { className: "rly-community-members-pane" },
+          h("h3", null, "Members"),
+          selected && h("p", { className: "rly-muted" }, `Community generation ${selected.generation}`),
+          memberRows.length ? h("ul", { className: "rly-community-members" }, ...memberRows) : null,
+          members && !memberRows.length && h("p", { className: "rly-muted" }, "No members on this page."),
+          !selected && h("p", { className: "rly-muted" }, "Choose a community to inspect its members."),
+          nextMember && h("button", { type: "button", onClick: () => onNextMembers(nextMember) }, "Next member page"))));
+  }
+
+  root.ReliquaryDashboardGraph = { GraphView, CommunityView };
+})(globalThis);
+
+
+(function (root) {
+  "use strict";
+
+  const sdk = /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__);
+  const h = sdk.React.createElement;
+  const { useState, useEffect, useRef } = sdk.hooks;
+  const { useRead } = root.ReliquaryDashboardState;
+
+  function requestKey() {
+    const bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+
+  /** @param {import("../types-owner-content").DashboardMutationOutcome|null} outcome @param {(()=>void)|undefined} onRefresh */
+  function resultMessage(outcome, onRefresh) {
+    if (!outcome) return null;
+    if (outcome.status === "ok") {
+      return h("p", { className: "rly-write-success", role: "status" },
+        `Saved. Receipt ${outcome.value.result.receipt_id}. Use Refresh owner data to inspect the committed Memory.`);
+    }
+    const conflict = outcome.status === "conflict" || outcome.status === "stale_cursor";
+    return h("div", { className: "rly-write-error", role: "status" },
+      h("p", null, conflict ? "The owner changed after this draft was loaded." :
+        `Could not save this draft (${outcome.code}). The draft and request key are preserved.`),
+      conflict && onRefresh && h("button", { type: "button", onClick: onRefresh }, "Refresh owner data"),
+      !conflict && outcome.retryable && h("p", { className: "rly-muted" }, "Submit again to retry this same draft."));
+  }
+
+  /** @param {{client:import("../types").DashboardClient,scope:import("../types").ReadScope & {owner:import("../types").OwnerBinding},memoryId:string,detail:import("../types").MemoryDetail|null,detailState:import("../types").ReadState<import("../types").MemoryDetail>,write:import("../types-owner-content").DashboardMutationWriter,onRefresh?:()=>void,refreshing:boolean}} props */
+  function CorrectionForm({ scope, memoryId, detail, detailState, write, onRefresh, refreshing }) {
+    const [draft, setDraft] = useState(() => /** @type {{title:string,body:string,key:string,baseRevision:string|null,initialized:boolean}} */
+      ({ title: "", body: "", key: requestKey(), baseRevision: null, initialized: false }));
+    const [outcome, setOutcome] = useState(/** @type {import("../types-owner-content").DashboardMutationOutcome|null} */ (null));
+    const [pending, setPending] = useState(false);
+    const controller = useRef(/** @type {AbortController|null} */ (null));
+    useEffect(() => {
+      setPending(false);
+      return () => controller.current?.abort();
+    }, [scope.owner.owner_id, scope.owner.generation, scope.owner.cut, scope.sessionId]);
+    useEffect(() => {
+      if (detail?.body.availability === "available" && !draft.initialized) {
+        setDraft((old) => old.initialized ? old : {
+          ...old, title: detail.memory.title ?? "", body: detail.body.content ?? "",
+          baseRevision: detail.body.revision, initialized: true,
+        });
+      }
+    }, [detail?.body.revision, detail?.body.availability]);
+
+    /** @param {"title"|"body"} field @param {string} value */
+    function edit(field, value) {
+      setDraft((old) => ({ ...old, [field]: value, key: requestKey() }));
+      setOutcome(null);
+    }
+    /** @param {{preventDefault():void}} event */
+    async function submit(event) {
+      event.preventDefault();
+      if (pending || refreshing || outcome?.status === "ok" || !detail || detail.memory.lifecycle !== "active" ||
+          detail.body.availability !== "available" || !draft.initialized ||
+          !draft.title.trim() || !draft.body.trim() || !detail.body.revision) return;
+      const active = new AbortController();
+      controller.current?.abort();
+      controller.current = active;
+      setPending(true);
+      try {
+        const result = await write("ui.memory_edit", scope, {
+          memory_id: memoryId, title: draft.title, body: draft.body,
+        }, detail.body.revision, draft.key, active.signal);
+        if (!active.signal.aborted) setOutcome(result);
+      } catch {
+        if (!active.signal.aborted) setOutcome({ status: "error", code: "request_failed", retryable: true });
+      } finally {
+        if (!active.signal.aborted) setPending(false);
+      }
+    }
+    return h("form", { className: "rly-memory-write-form", onSubmit: submit },
+      h("h3", null, "Correct selected Memory"),
+      detailState.status !== "ok" && h("p", { className: "rly-muted", role: "status" },
+        detailState.status === "loading" ? "Loading the exact current Memory revision…" :
+          `Current Memory detail is unavailable (${detailState.status === "idle" ? "unavailable" : detailState.code}).`),
+      draft.baseRevision && detail && draft.baseRevision !== detail.body.revision &&
+        h("p", { className: "rly-write-conflict", role: "status" },
+          `Draft started from revision ${draft.baseRevision}; latest revision is ${detail.body.revision}. Review before resubmitting.`),
+      detail && detail.memory.revision !== detail.body.revision && h("p", { className: "rly-muted" }, "The exact body revision differs from the summary revision."),
+      h("label", { className: "rly-field" }, h("span", null, "Replacement title"), h("input", {
+        value: draft.title, maxLength: 128,
+        onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => edit("title", event.currentTarget.value),
+      })),
+      h("label", { className: "rly-field" }, h("span", null, "Replacement body"), h("textarea", {
+        value: draft.body, maxLength: 32768, rows: 5,
+        onChange: (/** @type {{currentTarget:HTMLTextAreaElement}} */ event) => edit("body", event.currentTarget.value),
+      })),
+      h("button", { type: "submit", disabled: pending || refreshing || outcome?.status === "ok" || !detail || detail.memory.lifecycle !== "active" ||
+        detail.body.availability !== "available" ||
+        !draft.initialized || !draft.title.trim() || !draft.body.trim() }, pending ? "Saving…" : "Save correction"),
+      resultMessage(outcome, onRefresh));
+  }
+
+  /** @param {{client:import("../types").DashboardClient,scope:import("../types").ReadScope & {owner:import("../types").OwnerBinding},memoryId:string|null,write?:import("../types-owner-content").DashboardMutationWriter,onRefresh?:()=>void,refreshing?:boolean}} props */
+  function MemoryMutationPanel({ client, scope, memoryId, write, onRefresh, refreshing = false }) {
+    const [draft, setDraft] = useState(() => ({ title: "", body: "", category: "fact", memory_type: "general", key: requestKey() }));
+    const [outcome, setOutcome] = useState(/** @type {import("../types-owner-content").DashboardMutationOutcome|null} */ (null));
+    const [pending, setPending] = useState(false);
+    const controller = useRef(/** @type {AbortController|null} */ (null));
+    const capabilities = scope.owner.capabilities;
+    const canCreate = !!write && scope.owner.owner_kind === "REL" && capabilities.manage && capabilities.memory_create;
+    const canEdit = !!write && scope.owner.owner_kind === "REL" && capabilities.manage && capabilities.memory_edit;
+    const canRetire = !!write && scope.owner.owner_kind === "REL" && capabilities.manage && capabilities.memory_retire;
+    const detail = useRead(client, "ui.memory_detail", scope, memoryId && (canEdit || canRetire)
+      ? { memory_id: memoryId, revision: null } : null);
+    useEffect(() => {
+      setPending(false);
+      return () => controller.current?.abort();
+    }, [scope.owner.owner_id, scope.owner.generation, scope.owner.cut, scope.sessionId]);
+
+    /** @param {"title"|"body"|"category"|"memory_type"} field @param {string} value */
+    function edit(field, value) {
+      setDraft((old) => ({ ...old, [field]: value, key: requestKey() }));
+      setOutcome(null);
+    }
+    /** @param {{preventDefault():void}} event */
+    async function submitCreate(event) {
+      event.preventDefault();
+      if (!write || pending || refreshing || outcome?.status === "ok" || !draft.title.trim() || !draft.body.trim()) return;
+      const active = new AbortController();
+      controller.current?.abort();
+      controller.current = active;
+      setPending(true);
+      try {
+        const result = await write("ui.memory_create", scope, {
+          title: draft.title, body: draft.body, category: draft.category, memory_type: draft.memory_type,
+        }, null, draft.key, active.signal);
+        if (!active.signal.aborted) setOutcome(result);
+      } catch {
+        if (!active.signal.aborted) setOutcome({ status: "error", code: "request_failed", retryable: true });
+      } finally {
+        if (!active.signal.aborted) setPending(false);
+      }
+    }
+
+    if (scope.owner.owner_kind !== "REL" || !write || (!canCreate && !canEdit && !canRetire)) return null;
+    return h("section", { className: "rly-memory-write-panel", "aria-label": "Memory management" },
+      canCreate && h("form", { className: "rly-memory-write-form", onSubmit: submitCreate },
+        h("h3", null, "Create user-origin Memory"),
+        h("label", { className: "rly-field" }, h("span", null, "Title"), h("input", {
+          value: draft.title, maxLength: 128,
+          onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => edit("title", event.currentTarget.value),
+        })),
+        h("label", { className: "rly-field" }, h("span", null, "Body"), h("textarea", {
+          value: draft.body, maxLength: 32768, rows: 5,
+          onChange: (/** @type {{currentTarget:HTMLTextAreaElement}} */ event) => edit("body", event.currentTarget.value),
+        })),
+        h("label", { className: "rly-field" }, h("span", null, "Category"), h("input", {
+          value: draft.category, maxLength: 128,
+          onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => edit("category", event.currentTarget.value),
+        })),
+        h("label", { className: "rly-field" }, h("span", null, "Memory type"), h("input", {
+          value: draft.memory_type, maxLength: 128,
+          onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => edit("memory_type", event.currentTarget.value),
+        })),
+        h("button", { type: "submit", disabled: pending || refreshing || outcome?.status === "ok" || !draft.title.trim() || !draft.body.trim() || !draft.category.trim() || !draft.memory_type.trim() },
+          pending ? "Saving…" : "Create Memory"), resultMessage(outcome, onRefresh)),
+      canEdit && memoryId && h(CorrectionForm, { key: memoryId, client, scope, memoryId,
+        detail: detail.state.status === "ok" ? detail.state.value : null,
+        detailState: detail.state, write, onRefresh, refreshing }),
+      canRetire && detail.state.status === "ok" && detail.state.value.memory.lifecycle === "superseded" &&
+        detail.state.value.superseded_by && h(RetirementForm, {
+          key: detail.state.value.memory.memory_id, scope, write, onRefresh, refreshing,
+          memory: detail.state.value.memory,
+        }));
+  }
+
+  /** @param {{scope:import("../types").ReadScope & {owner:import("../types").OwnerBinding},
+   * memory:import("../types").MemorySummary,write:import("../types-owner-content").DashboardMutationWriter,
+   * onRefresh?:()=>void,refreshing:boolean}} props */
+  function RetirementForm({ scope, memory, write, onRefresh, refreshing }) {
+    const [key] = useState(requestKey);
+    const [confirmed, setConfirmed] = useState(false);
+    const [pending, setPending] = useState(false);
+    const [outcome, setOutcome] = useState(/** @type {import("../types-owner-content").DashboardMutationOutcome|null} */ (null));
+    const controller = useRef(/** @type {AbortController|null} */ (null));
+    useEffect(() => {
+      setPending(false);
+      setConfirmed(false);
+      return () => controller.current?.abort();
+    }, [scope.owner.cut, memory.revision]);
+
+    /** @param {{preventDefault():void}} event */
+    async function submit(event) {
+      event.preventDefault();
+      if (!confirmed || pending || refreshing || outcome?.status === "ok") return;
+      const active = new AbortController();
+      controller.current = active;
+      setPending(true);
+      try {
+        const result = await write("ui.memory_retire", scope, { memory_id: memory.memory_id, effect: "retire" },
+          memory.revision, key, active.signal);
+        if (!active.signal.aborted) setOutcome(result);
+      } catch {
+        if (!active.signal.aborted) setOutcome({ status: "error", code: "request_failed", retryable: true });
+      } finally {
+        if (!active.signal.aborted) setPending(false);
+      }
+    }
+
+    return h("form", { className: "rly-memory-write-form", onSubmit: submit },
+      h("h3", null, "Retire superseded Memory"),
+      h("label", { className: "rly-confirmation" },
+        h("input", { type: "checkbox", checked: confirmed, disabled: pending,
+          onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => setConfirmed(event.currentTarget.checked),
+        }), " Confirm terminal retirement of this revision"),
+      h("button", { type: "submit", disabled: !confirmed || pending || refreshing || outcome?.status === "ok" },
+        pending ? "Saving…" : "Retire Memory"),
+      resultMessage(outcome, onRefresh));
+  }
+
+  root.ReliquaryDashboardMutations = /** @type {typeof root.ReliquaryDashboardMutations} */ ({ MemoryMutationPanel });
+})(globalThis);
+
+
+(function (root) {
+  "use strict";
+
+  /** @typedef {import("../types").GraphPageResponse["result"]} GraphPage */
+  /** @typedef {import("../types").OwnerBinding} OwnerBinding */
+  /** @typedef {import("../types").ReadScope & {owner: OwnerBinding}} MutationScope */
+  /** @typedef {import("../types-owner-content").DashboardMutationWriter} DashboardMutationWriter */
+  /** @typedef {import("../types-owner-content").DashboardMutationOutcome} DashboardMutationOutcome */
+
+  const sdk = /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__);
+  const h = sdk.React.createElement;
+  const { useState, useEffect, useRef } = sdk.hooks;
+
+  function requestKey() {
+    const bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return hex;
+  }
+
+  /** @param {unknown} value */
+  function safeCode(value) {
+    return typeof value === "string" && /^[a-zA-Z0-9_.:-]{1,80}$/.test(value)
+      ? value : "unknown_error";
+  }
+
+  /** @param {{outcome:DashboardMutationOutcome|null,onRefresh?:()=>void}} props */
+  function OutcomeMessage({ outcome, onRefresh }) {
+    if (!outcome) return null;
+    if (outcome.status === "ok") {
+      return h("div", { className: "rly-write-success", role: "status" },
+        h("p", null, "Saved. Receipt ", outcome.value.result.receipt_id,
+          ". Refresh owner data to inspect the committed change."),
+        onRefresh && h("button", { type: "button", onClick: onRefresh }, "Refresh owner data"));
+    }
+    const conflict = outcome.status === "conflict" || outcome.status === "stale_cursor";
+    return h("div", { className: "rly-write-error", role: "status" },
+      h("p", null, conflict ? "The owner changed after this draft was loaded."
+        : "Could not save this draft (", safeCode(outcome.code), "). The draft and request key are preserved."),
+      conflict && onRefresh && h("button", { type: "button", onClick: onRefresh }, "Refresh owner data"),
+      !conflict && outcome.retryable && h("p", { className: "rly-muted" }, "Submit again to retry this same draft."));
+  }
+
+  /** @param {{scope:MutationScope,graph:GraphPage|null,write?:DashboardMutationWriter,onRefresh?:()=>void,refreshing?:boolean}} props */
+  function RelationMutationPanel({ scope, graph, write, onRefresh, refreshing = false }) {
+    const [mode, setMode] = useState(/** @type {"link"|"unlink"} */ ("link"));
+    const [sourceId, setSourceId] = useState("");
+    const [targetId, setTargetId] = useState("");
+    const [edgeId, setEdgeId] = useState("");
+    const [draftKey, setDraftKey] = useState(requestKey);
+    const [outcome, setOutcome] = useState(/** @type {DashboardMutationOutcome|null} */ (null));
+    const [pending, setPending] = useState(false);
+    const controller = useRef(/** @type {AbortController|null} */ (null));
+
+    const owner = scope.owner;
+    const canEdit = !!write && owner.owner_kind === "REL"
+      && owner.capabilities.view && owner.capabilities.manage && owner.capabilities.relation_edit;
+    useEffect(() => {
+      setPending(false);
+      return () => controller.current?.abort();
+    }, [owner.owner_id, owner.generation, owner.cut, scope.sessionId]);
+
+    const nodes = (graph?.nodes ?? []).filter((node) => node.kind === "memory" && node.memory_id
+      && node.cut === owner.cut && node.node_id === node.memory_id);
+    const byId = new Map(nodes.map((node) => [node.memory_id, node]));
+    const edges = (graph?.edges ?? []).filter((edge) => edge.kind === "user_association"
+      && edge.origin === "user" && edge.active && edge.cut === owner.cut
+      && byId.has(edge.source_id) && byId.has(edge.target_id));
+    const source = byId.get(sourceId);
+    const target = byId.get(targetId);
+    const selectedEdge = edges.find((edge) => edge.edge_id === edgeId);
+    const duplicate = !!source && !!target && (graph?.edges ?? []).some((edge) => edge.active
+      && edge.kind === "user_association" && edge.origin === "user"
+      && ((edge.source_id === sourceId && edge.target_id === targetId)
+        || (edge.source_id === targetId && edge.target_id === sourceId)));
+    const canSubmit = canEdit && !!graph && !pending && !refreshing && (mode === "link"
+      ? !!source && !!target && sourceId !== targetId && !duplicate
+      : !!selectedEdge);
+
+    /** @param {()=>void} edit */
+    function changed(edit) {
+      edit();
+      setDraftKey(requestKey());
+      setOutcome(null);
+    }
+
+    /** @param {{preventDefault():void}} event */
+    async function submit(event) {
+      event.preventDefault();
+      if (!canSubmit || !write || !graph) return;
+      // The visible graph page, selected endpoints, and action all belong to the
+      // exact owner cut sent by the shared mutation writer.
+      if (graph.nodes.some((node) => node.cut !== owner.cut) || graph.edges.some((edge) => edge.cut !== owner.cut)) {
+        setOutcome({ status: "conflict", code: "graph_cut_changed", retryable: false });
+        return;
+      }
+      const endpoints = mode === "link" ? [source, target]
+        : selectedEdge ? [byId.get(selectedEdge.source_id), byId.get(selectedEdge.target_id)] : [];
+      const [from, to] = endpoints;
+      if (!from?.memory_id || !to?.memory_id || (mode === "unlink" && !selectedEdge)) return;
+      const active = new AbortController();
+      controller.current?.abort();
+      controller.current = active;
+      setPending(true);
+      const args = mode === "link"
+        ? {
+            source_id: from.memory_id,
+            target_id: to.memory_id,
+            source_revision: from.revision,
+            target_revision: to.revision,
+            action: "link",
+            relation_kind: "user_association",
+            edge_id: null,
+          }
+        : {
+            source_id: from.memory_id,
+            target_id: to.memory_id,
+            source_revision: from.revision,
+            target_revision: to.revision,
+            action: "unlink",
+            relation_kind: "user_association",
+            edge_id: selectedEdge?.edge_id ?? null,
+          };
+      const expectedRevision = mode === "link" ? null : selectedEdge?.revision ?? null;
+      try {
+        const result = await write("ui.relation_change", scope, args, expectedRevision, draftKey, active.signal);
+        if (!active.signal.aborted) setOutcome(result);
+      } catch {
+        if (!active.signal.aborted) setOutcome({ status: "error", code: "request_failed", retryable: true });
+      } finally {
+        if (!active.signal.aborted) setPending(false);
+      }
+    }
+
+    if (!canEdit) return null;
+    return h("section", { className: "rly-graph-write-panel", "aria-label": "User association" },
+      h("h3", null, "User association"),
+      h("p", { className: "rly-muted" }, "Changes are checked against the current owner cut and Memory revisions."),
+      h("form", { className: "rly-memory-write-form", onSubmit: submit },
+        h("label", { className: "rly-field" },
+          h("span", null, "Action"),
+          h("select", {
+            value: mode, disabled: pending,
+            onChange: (/** @type {{currentTarget:HTMLSelectElement}} */ event) => changed(() => {
+              setMode(/** @type {"link"|"unlink"} */ (event.currentTarget.value));
+              setOutcome(null);
+            }),
+          }, h("option", { value: "link" }, "Link two Memories"),
+          h("option", { value: "unlink" }, "Unlink an existing user association"))),
+        mode === "link"
+          ? h("div", null,
+            h("label", { className: "rly-field" }, h("span", null, "From Memory"), h("select", {
+              value: sourceId, disabled: pending,
+              onChange: (/** @type {{currentTarget:HTMLSelectElement}} */ event) =>
+                changed(() => setSourceId(event.currentTarget.value)),
+            }, h("option", { value: "" }, "Choose a Memory"),
+            ...nodes.map((node) => h("option", { key: node.memory_id, value: node.memory_id }, node.label)))),
+            h("label", { className: "rly-field" }, h("span", null, "To Memory"), h("select", {
+              value: targetId, disabled: pending,
+              onChange: (/** @type {{currentTarget:HTMLSelectElement}} */ event) =>
+                changed(() => setTargetId(event.currentTarget.value)),
+            }, h("option", { value: "" }, "Choose a Memory"),
+            ...nodes.map((node) => h("option", { key: node.memory_id, value: node.memory_id }, node.label)))),
+            duplicate && h("p", { className: "rly-muted" }, "These Memories already have an active user association."),
+          )
+          : h("label", { className: "rly-field" }, h("span", null, "Active user association"), h("select", {
+            value: edgeId, disabled: pending,
+            onChange: (/** @type {{currentTarget:HTMLSelectElement}} */ event) =>
+              changed(() => setEdgeId(event.currentTarget.value)),
+          }, h("option", { value: "" }, "Choose an association"),
+          ...edges.map((edge) => h("option", { key: edge.edge_id, value: edge.edge_id },
+            `${byId.get(edge.source_id)?.label} → ${byId.get(edge.target_id)?.label}`)))),
+        h("button", { type: "submit", disabled: !canSubmit },
+          pending ? "Saving…" : mode === "link" ? "Link Memories" : "Unlink association"),
+        h(OutcomeMessage, { outcome, onRefresh })));
+  }
+
+  /** @param {{scope:MutationScope,community:import("../types").Community|null,write?:DashboardMutationWriter,onRefresh?:()=>void,refreshing?:boolean}} props */
+  function CommunityRenamePanel({ scope, community, write, onRefresh, refreshing = false }) {
+    const [name, setName] = useState(() => community?.name ?? "");
+    const [draftKey, setDraftKey] = useState(requestKey);
+    const [outcome, setOutcome] = useState(/** @type {DashboardMutationOutcome|null} */ (null));
+    const [pending, setPending] = useState(false);
+    const controller = useRef(/** @type {AbortController|null} */ (null));
+    const owner = scope.owner;
+    const canRename = !!write && owner.owner_kind === "REL"
+      && owner.capabilities.view && owner.capabilities.manage && owner.capabilities.community_rename;
+
+    useEffect(() => {
+      setPending(false);
+      return () => controller.current?.abort();
+    }, [owner.owner_id, owner.generation, owner.cut, scope.sessionId]);
+
+    /** @param {{preventDefault():void}} event */
+    async function submit(event) {
+      event.preventDefault();
+      if (!canRename || pending || refreshing || !community || !write || !name.trim()) return;
+      const active = new AbortController();
+      controller.current?.abort();
+      controller.current = active;
+      setPending(true);
+      try {
+        const result = await write("ui.community_rename", scope, {
+          community_id: community.community_id,
+          name,
+        }, community.generation, draftKey, active.signal);
+        if (!active.signal.aborted) setOutcome(result);
+      } catch {
+        if (!active.signal.aborted) setOutcome({ status: "error", code: "request_failed", retryable: true });
+      } finally {
+        if (!active.signal.aborted) setPending(false);
+      }
+    }
+
+    if (!canRename) return null;
+    return h("section", { className: "rly-community-rename", "aria-label": "Rename community" },
+      h("form", { className: "rly-memory-write-form", onSubmit: submit },
+        h("h3", null, "Rename selected community"),
+        !community && h("p", { className: "rly-muted" }, "Current community metadata is unavailable."),
+        h("label", { className: "rly-field" }, h("span", null, "Community name"), h("input", {
+          value: name, maxLength: 128, disabled: pending,
+          onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => {
+            const value = event.currentTarget.value;
+            setName(value); setDraftKey(requestKey()); setOutcome(null);
+          },
+        })),
+        h("button", { type: "submit", disabled: pending || refreshing || !community || !name.trim() },
+          pending ? "Saving…" : "Save community name"),
+        h(OutcomeMessage, { outcome, onRefresh })));
+  }
+
+  root.ReliquaryDashboardMutations = Object.assign(
+    root.ReliquaryDashboardMutations || {},
+    { RelationMutationPanel, CommunityRenamePanel },
+  );
+  if (typeof module !== "undefined" && module.exports) module.exports = { RelationMutationPanel, CommunityRenamePanel };
+})(globalThis);
+
+
+(function (root) {
+  "use strict";
+
+  /** @param {any} type @param {any} props @param {...any} children */
+  const h = (type, props, ...children) => /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__).React.createElement(type, props, ...children);
+  const { useState, useEffect } = /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__).hooks;
+  const { useRead, useCursor } = root.ReliquaryDashboardState;
+  const { meta, readContent, select, pager, MemoryList, Inspector } = root.ReliquaryDashboardViews;
+  const { GraphView, CommunityView } = root.ReliquaryDashboardGraph;
+  const { MemoryMutationPanel, RelationMutationPanel, CommunityRenamePanel } = root.ReliquaryDashboardMutations;
+  const initialFilters = { query: "", category: null, memory_type: null, lifecycle: null, community_id: null };
+  const lifecycleOptions = ["active", "retired", "tombstoned", "superseded", "unavailable"];
+
+  /** @param {{filters:import("../types").MemoryFilters,communities:import("../types").Community[],onChange:(filters:import("../types").MemoryFilters)=>void}} props */
+  function Filters({ filters, communities, onChange }) {
+    /** @param {"query"|"category"|"memory_type"} key @param {string} label */
+    function input(key, label) {
+      return h("label", { className: "rly-field" }, h("span", null, label), h("input", {
+        type: key === "query" ? "search" : "text", value: filters[key] ?? "",
+        maxLength: key === "query" ? 1024 : 128,
+        onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => {
+          const value = event.currentTarget.value;
+          onChange({ ...filters, [key]: key === "query" ? value : value || null });
+        },
+      }));
+    }
+    return h("div", { className: "rly-filters" }, input("query", "Search Memories"),
+      h("details", null, h("summary", null, "Filters"), h("div", { className: "rly-filter-fields" },
+        input("category", "Category"), input("memory_type", "Memory type"),
+        select("Lifecycle", filters.lifecycle ?? "", [{ value: "", label: "Any" },
+          ...lifecycleOptions.map((value) => ({ value, label: value }))],
+        (value) => onChange({ ...filters, lifecycle: /** @type {import("../types").MemoryFilters["lifecycle"]} */
+          (lifecycleOptions.find((option) => option === value) ?? null) })),
+        select("Community", filters.community_id ?? "", [{ value: "", label: "Any" },
+          ...communities.map((item) => ({ value: item.community_id, label: item.name ?? item.community_id }))],
+        (value) => onChange({ ...filters, community_id: value || null })),
+        h("button", { type: "button", onClick: () => onChange(initialFilters) }, "Clear filters"))));
+  }
+
+  /** Shared HU02 owner content. Scope is always bound to an admitted owner.
+   * @param {{client:import("../types").DashboardClient,scope:import("../types").ReadScope & {owner:import("../types").OwnerBinding},write?:import("../types-owner-content").DashboardMutationWriter,onRefresh?:()=>void,refreshing?:boolean}} props
+   */
+  function OwnerContent({ client, scope, write, onRefresh, refreshing = false }) {
+    const [mode, setMode] = useState(/** @type {import("../types").ViewMode} */ ("graph"));
+    const [filters, setFilters] = useState(/** @type {import("../types").MemoryFilters} */ (initialFilters));
+    const [memoryId, setMemoryId] = useState(/** @type {string|null} */ (null));
+    const [selection, setSelection] = useState(/** @type {import("../types").GraphSelection|null} */ (null));
+    const [seedId, setSeedId] = useState(/** @type {string|null} */ (null));
+    const [graphCommunity, setGraphCommunity] = useState(/** @type {string|null} */ (null));
+    const [community, setCommunity] = useState(/** @type {import("../types").Community|null} */ (null));
+    const listCursor = useCursor();
+    const graphCursor = useCursor();
+    const communitiesCursor = useCursor();
+    const membersCursor = useCursor();
+    useEffect(() => {
+      listCursor.reset(); graphCursor.reset(); communitiesCursor.reset(); membersCursor.reset();
+      setSelection(null); setSeedId(null); setGraphCommunity(null);
+    }, [scope.owner.owner_id, scope.owner.generation, scope.owner.cut, scope.sessionId]);
+    const grants = scope.owner?.capabilities;
+    const list = useRead(client, "ui.memory_list", scope, mode === "list" && grants?.view
+      ? { cursor: listCursor.current, limit: 3, filters } : null);
+    const graph = useRead(client, "ui.graph_page", scope, mode === "graph" && grants?.graph
+      ? { cursor: graphCursor.current, seed_ids: seedId ? [seedId] : [], community_id: graphCommunity,
+        depth: seedId ? 2 : 1, node_limit: seedId ? 6 : 4, edge_limit: 12 } : null);
+    const communities = useRead(client, "ui.community_list", scope, grants?.community
+      ? { cursor: communitiesCursor.current, limit: 3 } : null);
+    const availableCommunities = communities.state.status === "ok" ? communities.state.value.communities.items : [];
+    const currentCommunity = availableCommunities.find((item) => item.community_id === community?.community_id) ?? null;
+    const members = useRead(client, "ui.community_members", scope, currentCommunity && grants?.community
+      ? { cursor: membersCursor.current, limit: 3, community_id: currentCommunity.community_id,
+        expected_generation: currentCommunity.generation } : null);
+
+    /** @param {string} id */
+    function selectMemory(id) { setMemoryId(id); setSelection(null); }
+    /** @param {import("../types").MemoryFilters} next */
+    function changeFilters(next) {
+      setFilters(next); listCursor.reset(); setMemoryId(null); setSelection(null);
+    }
+    /** @param {import("../types").Community|null} next */
+    function changeCommunity(next) { setCommunity(next); membersCursor.reset(); }
+    /** @param {import("../types").GraphPageResponse["result"]} page */
+    function graphContent(page) {
+      const memoryNode = page.nodes.find((node) => node.memory_id && node.memory_id === memoryId);
+      const selected = selection ?? (memoryNode ? { kind: "node", id: memoryNode.node_id } : null);
+      return h("div", null, h(GraphView, {
+        graph: page, selected,
+        onSelect: (/** @type {import("../types").GraphSelection} */ next) => {
+          setSelection(next);
+          const node = next.kind === "node" ? page.nodes.find((item) => item.node_id === next.id) : null;
+          setMemoryId(node?.memory_id ?? null);
+          if (node?.community_id && node.kind === "community") {
+            changeCommunity(availableCommunities.find((item) => item.community_id === node.community_id) ?? null);
+          }
+        },
+        onExpand: (/** @type {string} */ nodeId) => { graphCursor.reset(); setSeedId(nodeId); },
+      }), pager("graph", {
+        ...graphCursor,
+        next: (cursor) => { setSelection(null); graphCursor.next(cursor); },
+        previous: () => { setSelection(null); graphCursor.previous(); },
+      }, page.next_cursor));
+    }
+
+    return h("div", { className: "rly-owner-content" },
+      h("main", { className: "rly-main", "aria-label": "Memory graph or list" },
+        h("div", { className: "rly-view-switch", role: "group", "aria-label": "Memory view" },
+          h("button", { type: "button", "aria-pressed": mode === "graph", onClick: () => setMode("graph") }, "Graph page"),
+          h("button", { type: "button", "aria-pressed": mode === "list", onClick: () => setMode("list") }, "List page")),
+        mode === "graph" ? h("section", { "aria-label": "Memory graph" },
+          (seedId || graphCommunity) && h("button", { type: "button", onClick: () => {
+            graphCursor.reset(); setSelection(null); setSeedId(null); setGraphCommunity(null);
+          } }, "Reset graph"),
+          readContent("graph", graph, graphContent, graphCursor.reset),
+          write && h(RelationMutationPanel, { scope, write, onRefresh, refreshing,
+            graph: graph.state.status === "ok" ? graph.state.value : null }))
+          : h("section", { "aria-label": "Memory list" }, h(Filters, { filters, communities: availableCommunities, onChange: changeFilters }),
+            readContent("Memory list", list, (page) => h("div", null,
+              h(MemoryList, { items: page.items, selected: memoryId, onSelect: selectMemory }),
+              pager("Memory", listCursor, page.next_cursor)), listCursor.reset)),
+        grants?.community && h("section", { className: "rly-communities", "aria-label": "Communities" },
+          h("h2", null, "Communities"), readContent("communities", communities, (value) => h("div", null,
+            h(CommunityView, {
+              communities: value.communities, selected: community,
+              members: members.state.status === "ok" ? members.state.value.members : null,
+              onCommunity: changeCommunity, onMemory: selectMemory,
+              onNextCommunities: (/** @type {string} */ cursor) => { changeCommunity(null); communitiesCursor.next(cursor); },
+              onNextMembers: membersCursor.next,
+            }),
+            communitiesCursor.current && h("button", { type: "button", onClick: () => {
+              changeCommunity(null); communitiesCursor.previous();
+            } }, "Previous community page"),
+            membersCursor.current && h("button", { type: "button", onClick: membersCursor.previous }, "Previous member page"),
+            community && members.state.status !== "ok" && readContent("community members", members, () => null, membersCursor.reset),
+            community && grants.graph && h("button", { type: "button", onClick: () => {
+              graphCursor.reset(); setSeedId(null); setSelection(null); setGraphCommunity(community.community_id); setMode("graph");
+            } }, "Show community in graph")), communitiesCursor.reset),
+          write && community && h(CommunityRenamePanel, { key: community.community_id, scope, write,
+            onRefresh, refreshing, community: currentCommunity }))),
+      h("aside", { className: "rly-inspector", "aria-label": "Selected Memory inspector" },
+        h("p", { className: "rly-eyebrow" }, "INSPECTOR"),
+        h("p", { className: "rly-owner-label" }, scope.owner.owner_kind + " · " + scope.owner.display_label),
+        memoryId && scope.owner.capabilities.view
+          ? h(Inspector, { key: memoryId, client, scope, memoryId })
+          : h("p", { className: "rly-muted" }, scope.owner.capabilities.view
+            ? "Select a Memory to inspect its detail, history, and provenance."
+            : "Memory detail is unavailable for this owner."),
+        h(MemoryMutationPanel, { client, scope, memoryId, write, onRefresh, refreshing })));
+  }
+
+  root.ReliquaryDashboardOwner = { OwnerContent };
+})(globalThis);
+
+
 (function (browser) {
   "use strict";
 
-  const sdk = browser.__HERMES_PLUGIN_SDK__;
+  const sdk = /** @type {import("../types").HermesDashboardSDK} */ (browser.__HERMES_PLUGIN_SDK__);
   const registry = browser.__HERMES_PLUGINS__;
   if (!sdk || !registry || sdk.sdkVersion !== "1.1.0" || typeof sdk.authedFetch !== "function") {
     throw new Error("Reliquary requires the Hermes web dashboard plugin SDK 1.1.0.");
   }
 
   const h = sdk.React.createElement;
-  const authedFetch = sdk.authedFetch;
-  const { useState } = sdk.hooks;
+  const { useState, useEffect } = sdk.hooks;
   const { useRead, useCursor } = ReliquaryDashboardState;
-  const { meta, readContent, pager } = ReliquaryDashboardViews;
+  const { meta, readContent, select, pager, Status } = ReliquaryDashboardViews;
+  const { OwnerContent } = ReliquaryDashboardOwner;
+  const { createLiveMutation } = ReliquaryDashboardLive;
 
   function DashboardTab() {
-    const [client] = useState(() => ReliquaryDashboardLive.createLiveClient(authedFetch));
-    const [sessionId, setSession] = useState(/** @type {string | null} */ (null));
+    const [client] = useState(() => ReliquaryDashboardLive.createLiveClient(sdk.authedFetch));
+    const [write] = useState(() => createLiveMutation(sdk.authedFetch));
+    const [sessionId, setSessionId] = useState(/** @type {string | null} */ (null));
     const [sessionInput, setSessionInput] = useState("");
-    const cursor = useCursor();
-    const read = useRead(client, "ui.owner_sessions", { owner: null, sessionId }, { cursor: cursor.current, limit: 128 });
+    const [selectedOwnerId, setSelectedOwnerId] = useState(/** @type {string | null} */ (null));
+    const [lastGood, setLastGood] = useState(/** @type {{sessionId:string|null,cursor:string|null,value:import("../types").ReadResults["ui.owner_sessions"]}|null} */ (null));
+    const ownerCursor = useCursor();
+    const discovery = useRead(client, "ui.owner_sessions", { owner: null, sessionId },
+      { cursor: ownerCursor.current, limit: 128 });
+
+    useEffect(() => {
+      if (discovery.state.status === "ok") {
+        setLastGood({ sessionId, cursor: ownerCursor.current, value: discovery.state.value });
+      }
+    }, [client, sessionId, ownerCursor.current, discovery.state]);
+    useEffect(() => { setLastGood(null); }, [sessionId, ownerCursor.current]);
+    const sameBindingPage = lastGood?.sessionId === sessionId && lastGood.cursor === ownerCursor.current;
+    const refreshing = sameBindingPage && discovery.state.status === "loading";
+    /** @type {import("../types").ReadHandle<import("../types").ReadResults["ui.owner_sessions"]>} */
+    const visibleDiscovery = refreshing && lastGood
+      ? { ...discovery, state: { status: "ok", value: lastGood.value } }
+      : discovery;
+
+    function refreshOwnerData() {
+      client.invalidate();
+      discovery.retry();
+    }
 
     /** @param {{preventDefault():void}} event */
     function findSession(event) {
       event.preventDefault();
-      const next = sessionInput.trim() || null;
-      cursor.reset();
+      const requested = sessionInput.trim() || null;
+      if (requested === sessionId) { discovery.retry(); return; }
       client.invalidate();
-      setSession(next);
-      read.retry();
+      ownerCursor.reset();
+      setSelectedOwnerId(null);
+      setLastGood(null);
+      setSessionId(requested);
     }
 
-    return h("section", { className: "rly-dashboard", "aria-label": "Reliquary dashboard" },
+    return h("section", { className: "rly-dashboard", "aria-label": "Reliquary live dashboard" },
       h("header", { className: "rly-header" }, h("div", null,
         h("p", { className: "rly-eyebrow" }, "HERMES WEB DASHBOARD PLUGIN"),
         h("h1", null, "Reliquary Memory"),
-        h("p", { className: "rly-subtitle" }, "Owners in this Hermes profile"))),
-      h("div", { className: "rly-main" },
-        h("form", { onSubmit: findSession, className: "rly-session-lookup" },
-          h("label", { className: "rly-field" }, "Hermes session ID", h("input", {
-            value: sessionInput, maxLength: 128, autoComplete: "off",
-            onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => setSessionInput(event.currentTarget.value),
-          })),
-          h("button", { type: "submit" }, "Look up session")),
-        readContent("owner and session bindings", read, (data) => h("section", { "aria-label": "Owner and session bindings" },
-          h("dl", { className: "rly-owner-meta" },
-            meta("Selected session", data.active_session_id ?? "None"),
-            meta("Session REL", data.session_owner_id ?? "None"),
-            meta("Active PHY", data.active_phy_id ?? "None")),
-          h("h2", null, "Configured owners"),
-          data.owners.items.length
-            ? h("ul", { className: "rly-live-owners" }, ...data.owners.items.map((owner) =>
-              h("li", { key: owner.owner_id }, h("strong", null, owner.display_label),
-                h("span", null, owner.owner_kind + " · " + owner.owner_id))))
-            : h("p", { className: "rly-empty" }, "No owners on this page."),
-          pager("owner", cursor, data.owners.next_cursor)), cursor.reset)),
-      h("p", { className: "rly-live-notice", role: "note" },
-        "Memory, graph, community, and activity reads are unavailable in this live slice."));
+        h("p", { className: "rly-subtitle" }, "Configured owners in this Hermes profile"))),
+      refreshing && h("p", { className: "rly-refreshing", role: "status" }, "Refreshing owner binding. Writes are paused until it completes."),
+      readContent("owner and session bindings", visibleDiscovery, (data) => {
+        const owners = data.owners.items.filter((owner) => owner.capabilities.view &&
+          (owner.owner_kind === "REL" || owner.owner_id === data.active_phy_id));
+        const mappedRel = owners.find((owner) => owner.owner_kind === "REL" && owner.owner_id === data.session_owner_id) ?? null;
+        const phy = owners.find((owner) => owner.owner_kind === "PHY" && owner.owner_id === data.active_phy_id) ?? null;
+        const selected = owners.find((owner) => owner.owner_id === selectedOwnerId) ?? null;
+        const defaultOwner = mappedRel ?? owners.find((owner) => owner.owner_kind === "REL") ?? phy;
+        const owner = selected ?? defaultOwner;
+        const sessionMatchesOwner = !!owner && owner.owner_kind === "REL" &&
+          data.active_session_id !== null && data.session_owner_id === owner.owner_id &&
+          (sessionId === null || data.active_session_id === sessionId);
+        // Session scope is sent only when the server returned the exact mapping for this REL.
+        const scope = { owner, sessionId: sessionMatchesOwner ? data.active_session_id : null };
+        const scopeKey = JSON.stringify([owner?.owner_id ?? null, owner?.generation ?? null, scope.sessionId]);
+        const ownerOptions = owners.map((item) => ({
+          value: item.owner_id,
+          label: item.owner_kind + " · " + item.display_label,
+        }));
+
+        return h("div", { className: "rly-layout" },
+          h("aside", { className: "rly-sidebar", "aria-label": "Owner and scope" },
+            h("h2", null, "Owner / scope"),
+            h("button", { type: "button", onClick: refreshOwnerData }, "Refresh owner data"),
+            h("form", { onSubmit: findSession, className: "rly-session-lookup" },
+              h("label", { className: "rly-field" }, h("span", null, "Hermes session ID"), h("input", {
+                value: sessionInput, maxLength: 128, autoComplete: "off",
+                onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => setSessionInput(event.currentTarget.value),
+              })), h("button", { type: "submit" }, "Look up session")),
+            ownerOptions.length ? select("Browse authorized owner", owner?.owner_id ?? "", ownerOptions, (id) => {
+              if (id !== selectedOwnerId) {
+                client.invalidate();
+                setSelectedOwnerId(id || null);
+              }
+            }) : h("p", { className: "rly-empty" }, "No viewable owner is available on this page."),
+            h("dl", { className: "rly-owner-meta" },
+              meta("Selected session", data.active_session_id ?? "None"),
+              meta("Session REL", mappedRel?.display_label ?? (data.session_owner_id ? "Not on this page" : "None")),
+              meta("Active PHY", phy?.owner_id ?? "None"),
+              owner && meta("Owner kind", owner.owner_kind),
+              owner && meta("Generation", owner.generation),
+              owner && meta("Cut", owner.cut),
+              owner && owner.owner_kind === "REL" && data.active_session_id && !sessionMatchesOwner &&
+                meta("Session scope", "Owner-level view; selected session maps to another REL")),
+            owner && h(Status, { key: scopeKey, client, scope, live: true }),
+            pager("owner", ownerCursor, data.owners.next_cursor)),
+          owner ? h(OwnerContent, { key: scopeKey, client, write, onRefresh: refreshOwnerData, refreshing,
+            scope: /** @type {import("../types").ReadScope & {owner:import("../types").OwnerBinding}} */ (scope) })
+            : h("p", { className: "rly-empty" }, "No authorized owner is available for this scope."));
+      }, ownerCursor.reset));
   }
 
   registry.register("reliquary-hermes", DashboardTab);

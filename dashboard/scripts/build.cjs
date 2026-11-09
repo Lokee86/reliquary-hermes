@@ -9,8 +9,8 @@ if (args.length && !fixtureMode) throw new Error("Usage: node dashboard/scripts/
 const packageDir = fixtureMode ? path.resolve(root, "../host/.test-tmp/dashboard-fixture") : root;
 const outputDir = path.join(packageDir, "dist");
 const sources = fixtureMode
-  ? ["client.js", "fixtures.js", "state.js", "views.js", "graph.js", "index.js"]
-  : ["client.js", "live_transport.js", "state.js", "views.js", "live.js"];
+  ? ["client.js", "fixtures.js", "state.js", "views.js", "graph.js", "memory_mutations.js", "graph_mutations.js", "owner_content.js", "index.js"]
+  : ["client.js", "live_transport.js", "state.js", "views.js", "graph.js", "memory_mutations.js", "graph_mutations.js", "owner_content.js", "live.js"];
 const sourceText = sources.map((name) => fs.readFileSync(path.join(root, "src", name), "utf8"));
 const forbidden = /@tauri-apps|@hermes\/plugin-sdk|\binvoke\s*\(|__HERMES_SESSION_TOKEN__/;
 if (forbidden.test(sourceText.join("\n"))) throw new Error("Dashboard source includes a forbidden native, direct invoke, or credential surface.");

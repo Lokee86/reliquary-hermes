@@ -127,7 +127,7 @@ DTO validation does not prove a server actually committed a mutation. Durable re
 
 The host uses `Instance::begin_retrieval`, `memory_query`, `refine_query` and `traverse_graph` for the existing retrieval workflow. `Instance::processing_status`, `live_stage_status` and `host_operation_status` expose owner work through the authenticated public API. The dashboard uses `WorkspaceManagement::inspect` for bounded, cut-bound reads. The [dashboard contract](ui-contract.md) defines its separate mutation vocabulary.
 
-The REL management facade exposes `create_memory_at_cut`, `correct_memory_at_cut`, `retire_memory_at_cut`, `change_memory_association` and `rename_community_at_cut`. The service will translate their durable receipts into the dashboard result DTOs. The community projection requires a current accepted partition and returns unavailable when one is absent.
+The REL management facade exposes `create_memory_at_cut`, `correct_memory_at_cut`, `retire_memory_at_cut`, `change_memory_association` and `rename_community_at_cut`. The dashboard service translates their durable receipts into dashboard result DTOs. The community projection requires a current accepted partition and returns unavailable when one is absent.
 
 ### Copied-source product boundary
 
@@ -148,6 +148,12 @@ The Rust host's `SelectedReturn` uses the authorized Root preview of one opaque 
 The temporary `HACK` checks the stable delivery ID and SHA-256 of the exact operation provided by the Gateway. A second operation with different evidence fails. Root owns the durable accepted-use receipt and updates Freshness. The host releases the selection only after Root reports the first durable write. A duplicate returns `AlreadyRecorded` without a second content release. A truncated Root projection fails before the receipt gate so the bridge only credits exact selected content. After a projection rejection, the caller can cancel the pending Root retrieval or discard its turn.
 
 Retain the return object for an in-process retry. The adapter retains the exact operation in memory and rechecks the current cut before retrying a pending write. A new process can deduplicate an exact re-preparation through Root's durable receipt. An uncommitted operation has no separately durable adapter state. Remove this module and its compatibility tests when Reliquary records retrieval directly at the selected-result return boundary.
+
+## HU03 dashboard requests
+
+Hermes authenticates and profile-scopes the plugin route `/api/plugins/reliquary-hermes/dashboard-v1`. The backend loads that profile's configured Reliquary topology through the authenticated loopback service. The private topology route returns the configured RELs, active PHY and verified session mapping. The private dashboard request route carries the canonical dashboard DTO, a private Root continuation if present, and the result of the host's same-origin check. Python rebinds profile and principal, and Rust checks the topology, selected session, owner generation and exact accepted cut. Only the bounded dashboard DTO and a server-issued cursor token reach the browser.
+
+Same-origin writes use the Origin against Hermes' admitted Host and scheme. Hosted plugins receive request-local sensitive-route admission from Hermes over private IPC. Because the pinned host strips Host before forwarding, hosted mutations also require the browser's same-origin Fetch Metadata. The signed private service route accepts only the named public Root workflows for mutations and uses the configured active PHY as their actor. Provider operations keep their original service principal. A private durable intent retains the accepted original cut and exact inputs required for Root replay.
 
 ## Related docs
 

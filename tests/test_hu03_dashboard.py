@@ -77,6 +77,108 @@ with TestClient(web_server.app) as client:
         response = client.post(route, headers={} if label == "unauthenticated" else headers,
                                params=params, json=body)
         responses[label] = [response.status_code, response.json()]
+    for label, profile in (("primary", None), ("secondary", "secondary")):
+        rows = responses[label][1]["result"]["owners"]["items"]
+        params = {"profile": profile} if profile is not None else {}
+        for row in rows:
+            for operation, args in (
+                ("ui.memory_list", {"cursor": None, "limit": 1, "filters": {
+                    "query": "", "category": None, "memory_type": None, "lifecycle": None, "community_id": None,
+                }}),
+                ("ui.graph_page", {"seed_ids": [], "community_id": None, "depth": 1,
+                                   "node_limit": 2, "edge_limit": 2, "cursor": None}),
+                ("ui.operational_status", {}),
+            ):
+                if operation == "ui.operational_status" and not row["capabilities"]["status"]:
+                    continue
+                body = {"protocol_version": 1, "request_id": "scoped-test", "operation": operation,
+                        "profile_id": "browser-profile", "principal_id": "browser-principal",
+                        "owner_id": row["owner_id"], "generation": row["generation"], "cut": row["cut"],
+                        "session_id": None, "expected_revision": None, "idempotency_key": None,
+                        "arguments": args}
+                response = client.post(route, headers=headers, params=params, json=body)
+                responses[f"{label}/{row['owner_id']}/{operation}"] = [response.status_code, response.json()]
+                if operation == "ui.memory_list":
+                    forged = client.post(route, headers=headers, params={"profile": "secondary"} if profile is None else {},
+                                         json=body)
+                    assert forged.status_code == 200 and forged.json()["status"] == "denied"
+                    stale = client.post(route, headers=headers, params=params, json={**body, "cut": "stale-cut"})
+                    assert stale.status_code == 200 and stale.json()["status"] == "stale_cursor"
+
+    primary = next(row for row in responses["primary"][1]["result"]["owners"]["items"]
+                   if row["display_label"] == "Main REL")
+    phy = next(row for row in responses["primary"][1]["result"]["owners"]["items"] if row["owner_kind"] == "PHY")
+    mutation = {"protocol_version": 1, "request_id": "mutation-test", "operation": "ui.memory_create",
+                "profile_id": "forged-profile", "principal_id": "forged-principal",
+                "owner_id": primary["owner_id"], "generation": primary["generation"], "cut": primary["cut"],
+                "session_id": None, "expected_revision": None, "idempotency_key": "create-one",
+                "arguments": {"title": "Dashboard proof", "body": "Safe <b>text</b>", "category": "fact",
+                              "memory_type": "semantic"}}
+    local = {**headers, "Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
+    blocked = client.post(route, headers={**headers, "Origin": "http://different.invalid"}, json=mutation)
+    responses["cross_origin"] = [blocked.status_code, blocked.json()]
+    blocked_phy = client.post(route, headers=local, json={**mutation, "owner_id": phy["owner_id"],
+                             "generation": phy["generation"], "cut": phy["cut"]})
+    responses["phy_write"] = [blocked_phy.status_code, blocked_phy.json()]
+    create = client.post(route, headers=local, json=mutation)
+    responses["create"] = [create.status_code, create.json()]
+    if create.json()["status"] == "ok":
+        replay = client.post(route, headers=local, json={**mutation, "request_id": "create-retry"})
+        responses["create_replay"] = [replay.status_code, replay.json()]
+        different = client.post(route, headers=local, json={**mutation,
+                                "arguments": {**mutation["arguments"], "title": "Other title"}})
+        responses["create_reused_key"] = [different.status_code, different.json()]
+        accepted = create.json()["binding"]
+        memory = create.json()["result"]["committed"]["memory"]
+        scoped = {**mutation, "generation": accepted["generation"], "cut": accepted["cut"]}
+        read = client.post(route, headers=headers, json={**scoped, "operation": "ui.memory_detail",
+                           "idempotency_key": None, "arguments": {"memory_id": memory["memory_id"], "revision": None}})
+        responses["detail_after_create"] = [read.status_code, read.json()]
+        history = client.post(route, headers=headers, json={**scoped, "operation": "ui.memory_history",
+                              "idempotency_key": None, "arguments": {"memory_id": memory["memory_id"], "limit": 1, "cursor": None}})
+        responses["history_after_create"] = [history.status_code, history.json()]
+        correct = {**scoped, "operation": "ui.memory_edit", "idempotency_key": "correct-one",
+                   "expected_revision": memory["revision"], "arguments": {
+                       "memory_id": memory["memory_id"], "title": "Dashboard correction", "body": "Corrected text"}}
+        corrected = client.post(route, headers=local, json=correct)
+        responses["correction"] = [corrected.status_code, corrected.json()]
+        replay = client.post(route, headers=local, json={**correct, "request_id": "correct-retry"})
+        responses["correction_replay"] = [replay.status_code, replay.json()]
+        if corrected.json()["status"] == "ok":
+            corrected_binding = corrected.json()["binding"]
+            corrected_result = corrected.json()["result"]["committed"]
+            retirement = {**correct, "operation": "ui.memory_retire", "idempotency_key": "retire-one",
+                          "cut": corrected_binding["cut"], "expected_revision": corrected_result["original_revision"],
+                          "arguments": {"memory_id": memory["memory_id"], "effect": "retire"}}
+            retired = client.post(route, headers=local, json=retirement)
+            responses["retired"] = [retired.status_code, retired.json()]
+            replay = client.post(route, headers=local, json={**retirement, "request_id": "retire-retry"})
+            responses["retirement_replay"] = [replay.status_code, replay.json()]
+            if retired.json()["status"] == "ok":
+                tombstone = client.post(route, headers=headers, json={**scoped, "operation": "ui.memory_detail",
+                    "cut": retired.json()["binding"]["cut"], "idempotency_key": None,
+                    "arguments": {"memory_id": memory["memory_id"], "revision": None}})
+                responses["retirement_detail"] = [tombstone.status_code, tombstone.json()]
+                other = client.post(route, headers=local, json={**mutation, "cut": retired.json()["binding"]["cut"],
+                    "idempotency_key": "create-two", "arguments": {**mutation["arguments"], "title": "Another Memory"}})
+                responses["create_other"] = [other.status_code, other.json()]
+                if other.json()["status"] == "ok":
+                    source = corrected_result["replacement"]["memory"]
+                    target = other.json()["result"]["committed"]["memory"]
+                    link = {**scoped, "operation": "ui.relation_change", "cut": other.json()["binding"]["cut"],
+                            "idempotency_key": "link-one", "arguments": {"source_id": source["memory_id"],
+                            "source_revision": source["revision"], "target_id": target["memory_id"],
+                            "target_revision": target["revision"], "action": "link",
+                            "relation_kind": "user_association", "edge_id": None}}
+                    linked = client.post(route, headers=local, json=link)
+                    responses["linked"] = [linked.status_code, linked.json()]
+                    if linked.json()["status"] == "ok":
+                        edge = linked.json()["result"]["committed"]
+                        unlink = {**link, "cut": linked.json()["binding"]["cut"], "idempotency_key": "unlink-one",
+                                  "expected_revision": edge["revision"], "arguments": {
+                                      **link["arguments"], "edge_id": edge["edge_id"], "action": "unlink"}}
+                        unlinked = client.post(route, headers=local, json=unlink)
+                        responses["unlinked"] = [unlinked.status_code, unlinked.json()]
 os.write(1, json.dumps(responses).encode("utf-8"))
 """
     env = {key: value for key, value in os.environ.items()
@@ -130,14 +232,52 @@ def test_pinned_dashboard_scope_does_not_follow_browser_identity(tmp_path, binar
         result = UIResponse.parse(canonical(payload)).value["result"]
         assert {row["owner_id"] for row in result["owners"]["items"]} == set(ids.values())
         assert result["active_phy_id"] == ids["phy"]
-        assert all(row["capabilities"]["view"] and sum(row["capabilities"].values()) == 1
-                   for row in result["owners"]["items"])
+        assert all(row["capabilities"]["view"] for row in result["owners"]["items"])
+        assert all(not row["capabilities"]["manage"] for row in result["owners"]["items"] if row["owner_kind"] == "PHY")
+        for row in result["owners"]["items"]:
+            key = f"{label}/{row['owner_id']}"
+            for operation in ("ui.memory_list", "ui.graph_page", "ui.operational_status"):
+                if operation == "ui.operational_status" and not row["capabilities"]["status"]:
+                    continue
+                http, value = replies[f"{key}/{operation}"]
+                assert http == 200 and value["status"] == "ok", (key, operation, value)
+                assert UIResponse.parse(canonical(value)).value["binding"] == row
     assert replies["primary"][1]["result"]["session_owner_id"] == primary_ids["project"]
     assert replies["secondary"][1]["result"]["session_owner_id"] is None
     assert replies["foreign_session"][0] == 200
     assert replies["foreign_session"][1]["status"] == "denied"
     assert replies["unsupported"][0] == 200
-    assert replies["unsupported"][1]["status"] == "unsupported"
+    assert replies["unsupported"][1]["status"] == "stale_cursor"
+    assert replies["cross_origin"][1]["status"] == "denied"
+    assert replies["phy_write"][1]["status"] == "denied"
+    accepted = replies["create"][1]
+    assert accepted["status"] == "ok", accepted
+    result = UIResponse.parse(canonical(accepted)).value["result"]
+    assert result["committed"]["provenance"][0]["principal_id"] == primary_ids["phy"]
+    assert result["committed"]["body"]["content"] == "Safe <b>text</b>"
+    replay = UIResponse.parse(canonical(replies["create_replay"][1])).value
+    assert replay["status"] == "ok" and replay["result"]["receipt_id"] == result["receipt_id"]
+    assert replay["result"]["committed"] == result["committed"]
+    assert replies["create_reused_key"][1]["status"] == "conflict"
+    assert replies["detail_after_create"][1]["status"] == "ok", replies["detail_after_create"]
+    assert replies["history_after_create"][1]["status"] == "ok", replies["history_after_create"]
+    correction = UIResponse.parse(canonical(replies["correction"][1])).value
+    assert correction["status"] == "ok", correction
+    assert correction["result"]["committed"]["replacement"]["memory"]["memory_id"] != result["committed"]["memory"]["memory_id"]
+    retry = UIResponse.parse(canonical(replies["correction_replay"][1])).value
+    assert retry["status"] == "ok" and retry["result"]["receipt_id"] == correction["result"]["receipt_id"]
+    retired = UIResponse.parse(canonical(replies["retired"][1])).value
+    assert retired["status"] == "ok", retired
+    assert retired["result"]["committed"]["lifecycle"] == "tombstoned"
+    assert replies["retirement_replay"][1]["result"]["receipt_id"] == retired["result"]["receipt_id"]
+    detail = replies["retirement_detail"][1]
+    assert detail["status"] == "ok" and detail["result"]["body"]["content"] is None
+    assert detail["result"]["tombstone"]
+    assert replies["create_other"][1]["status"] == "ok", replies["create_other"]
+    linked, unlinked = (UIResponse.parse(canonical(replies[label][1])).value for label in ("linked", "unlinked"))
+    assert linked["status"] == "ok" and linked["result"]["committed"]["active"], linked
+    assert unlinked["status"] == "ok" and not unlinked["result"]["committed"]["active"], unlinked
+    assert linked["result"]["committed"]["edge_id"] == unlinked["result"]["committed"]["edge_id"]
     wire = json.dumps(replies)
     assert all(secret not in wire for secret in (primary_token, secondary_token, "principal-a"))
     assert json.dumps(str(home))[1:-1] not in wire

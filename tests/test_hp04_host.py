@@ -226,6 +226,17 @@ def test_hp04_processed_append_tombstones_both_exact_source_turns(tmp_path, bina
         terminal_bytes = rel.read_bytes()
         reopened = _host(binary, state, cleanup)
         assert reopened.deliver_source_job(terminal) == terminal_receipt
+        topology = reopened.read_dashboard_topology(SESSION)
+        owner = next(row for row in topology["owners"] if row["owner_id"] == topology["session_owner_id"])
+        status = reopened.read_dashboard_request({
+            "protocol_version": 1, "request_id": "terminal-dashboard-status", "operation": "ui.operational_status",
+            "profile_id": PROFILE, "principal_id": topology["active_phy_id"], "session_id": SESSION,
+            "owner_id": owner["owner_id"], "generation": owner["generation"], "cut": owner["cut"],
+            "expected_revision": None, "idempotency_key": None, "arguments": {},
+        }, None)["response"]
+        assert status["status"] == "ok", status
+        assert status["result"]["source_state"] == "tombstoned"
+        assert status["result"]["latest_recall"]["state"] == "none"
         with pytest.raises(HostUnavailable, match="source_terminal"):
             reopened.deliver_source_job(initial)
         stop(reopened._process)

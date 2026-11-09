@@ -2,7 +2,7 @@
   "name": "reliquary-hermes",
   "label": "Reliquary",
   "api": "plugin_api.py",
-  "description": "Reliquary owners and session scope",
+  "description": "Browse and manage Reliquary Memories in Hermes",
   "icon": "Database",
   "version": "0.1.0",
   "tab": {
