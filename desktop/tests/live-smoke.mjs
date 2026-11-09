@@ -79,11 +79,11 @@ const app = await _electron.launch({
 
 try {
   if (fixture.candidate) {
-    const { mainRel, activePhy, configPath } = fixture.candidate;
+    const { mainRel, activePhy, configPath, createPhy, projectRel } = fixture.candidate;
     await app.evaluate(({ dialog }, files) => {
       const showOpenDialog = dialog.showOpenDialog.bind(dialog);
       const queues = new Map([
-        ["Choose a Reliquary REL", [null, files.mainRel]],
+        ["Choose a Reliquary REL", [null, files.mainRel, files.projectRel]],
         ["Choose a Reliquary PHY", [files.activePhy]],
         ["Choose a Reliquary configuration", [files.configPath]],
       ]);
@@ -93,7 +93,16 @@ try {
         const path = queue.shift();
         return { canceled: !path, filePaths: path ? [path] : [] };
       };
-    }, { mainRel, activePhy, configPath });
+      if (files.createPhy) {
+        const showSaveDialog = dialog.showSaveDialog.bind(dialog);
+        const destinations = [null, files.createPhy];
+        dialog.showSaveDialog = async (...args) => {
+          if (args.at(-1)?.title !== "Create a Reliquary PHY") return showSaveDialog(...args);
+          const path = destinations.shift();
+          return { canceled: !path, filePath: path ?? undefined };
+        };
+      }
+    }, { mainRel, activePhy, configPath, createPhy, projectRel });
   }
 
   const page = await app.firstWindow({ timeout: 90_000 });
@@ -114,29 +123,54 @@ try {
   if (appearance) await page.waitForFunction((mode) => document.documentElement.dataset.hermesMode === mode, appearance);
   if (HU07_SCREENSHOT_DIR) await mkdir(HU07_SCREENSHOT_DIR, { recursive: true });
 
-  const connect = root.getByRole("button", { name: "Connect Reliquary", exact: true });
+  const connect = root.getByRole("button", { name: "Review and connect", exact: true });
   const compatibilityNotice = root.getByRole("note").filter({
     hasText: "Use the Reliquary web dashboard for setup and write management.",
   });
   if (readOnly) await compatibilityNotice.waitFor();
   if (fixture.candidate) {
-    const { mainRel, activePhy, configPath } = fixture.candidate;
-    const browse = (label) => root.getByRole("button", { name: "Browse for " + label, exact: true });
+    const { mainRel, activePhy, configPath, createPhy, projectRel, projectName } = fixture.candidate;
+    const general = root.getByRole("region", { name: "General memory", exact: true });
+    const identity = root.getByRole("region", { name: "Active identity", exact: true });
+    const selectRel = general.getByRole("button", { name: "Select REL", exact: true });
     const input = (label) => root.getByRole("textbox", { name: label, exact: true });
     await connect.waitFor();
-    await browse("Main REL path").click();
-    assert.equal(await input("Main REL path").inputValue(), "");
-    await browse("Main REL path").click();
-    await browse("Active PHY path").click();
-    assert.equal(await input("Main REL path").inputValue(), mainRel);
-    assert.equal(await input("Active PHY path").inputValue(), activePhy);
+    await selectRel.click();
+    await general.getByText("A General REL is required.", { exact: true }).waitFor();
+    await selectRel.click();
+    await general.getByText(mainRel, { exact: true }).waitFor();
+    if (createPhy && !readOnly) {
+      const create = identity.getByRole("button", { name: "Create PHY", exact: true });
+      const confirm = root.getByRole("region", { name: "Confirm owner creation", exact: true });
+      await create.click();
+      await identity.getByText("An active PHY is required.", { exact: true }).waitFor();
+      await create.click();
+      await confirm.getByText(createPhy, { exact: true }).waitFor();
+      await confirm.getByRole("button", { name: "Create owner file", exact: true }).click();
+      await root.getByText("Created owner files remain on disk if connection fails.").waitFor();
+      await identity.getByText(createPhy, { exact: true }).waitFor();
+    } else {
+      await identity.getByRole("button", { name: "Select PHY", exact: true }).click();
+      await identity.getByText(activePhy, { exact: true }).waitFor();
+    }
+    await root.getByRole("button", { name: "Create Hermes project", exact: true }).click();
+    await root.getByText(/In Hermes Desktop Chat, choose New project/).waitFor();
+    await root.getByRole("button", { name: "Refresh projects", exact: true }).click();
+    if (projectRel) {
+      assert(projectName);
+      const project = root.getByRole("region", { name: projectName, exact: true });
+      await project.getByRole("button", { name: "Select REL", exact: true }).click();
+      await project.getByText(projectRel, { exact: true }).waitFor();
+    }
+    await root.getByText("Advanced", { exact: true }).click();
     const main = input("Main REL path");
+    assert.equal(await main.inputValue(), mainRel);
     assert.equal(await main.getAttribute("data-slot"), "input");
     await main.press("Tab");
-    assert.equal(await browse("Main REL path").evaluate((button) => button.matches(":focus-visible")), true);
+    assert.equal(await input("Active PHY path").evaluate((field) => field.matches(":focus-visible")), true);
     assert.equal(await root.evaluate((element) => element.scrollWidth <= element.clientWidth + 1), true);
     if (configPath) {
-      await browse("Reliquary config path (optional)").click();
+      await root.getByRole("button", { name: "Select configuration", exact: true }).click();
       assert.equal(await input("Reliquary config path (optional)").inputValue(), configPath);
     }
     const validate = root.getByRole("button", { name: "Validate", exact: true });
@@ -146,8 +180,16 @@ try {
       assert(await connect.isDisabled());
     } else {
       await validate.click();
+      await root.getByText("Validation passed.", { exact: true }).waitFor();
+      if (createPhy) {
+        const result = await identity.getByText(/^Accepted · PHY · /).textContent();
+        fixture.ownerIds[1] = result.split(" · ")[2];
+      }
       for (const id of fixture.ownerIds) await root.getByText(id, { exact: false }).first().waitFor();
       await connect.click();
+      const review = root.getByRole("region", { name: "Review connection", exact: true });
+      if (fixture.fallbackCount) await review.getByText(new RegExp("^" + fixture.fallbackCount + " projects? will use General memory")).waitFor();
+      await review.getByRole("button", { name: /^(Continue|Connect Reliquary)$/ }).click();
     }
   }
 

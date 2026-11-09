@@ -2,7 +2,7 @@
   "use strict";
 
   /** @type {import("../types").CreateReliquarySurface} */
-  function createSurface({ authedFetch, pickOpenPath, mutationBlockReason, surfaceLabel }) {
+  function createSurface({ authedFetch, pickOpenPath, pickSavePath, mutationBlockReason, surfaceLabel }) {
     const { React, hooks, components } = root.ReliquaryDashboardHost;
     const h = React.createElement;
     const { Button, Input } = components;
@@ -12,8 +12,9 @@
     const { OwnerContent } = root.ReliquaryDashboardOwner;
     const { createLiveMutation } = root.ReliquaryDashboardLive;
 
-    /** @param {{client: import("../types").DashboardClient, configPath: string | null, blockReason?: string}} props */
-    function DashboardTab({ client, configPath, blockReason }) {
+    /** @param {{client: import("../types").DashboardClient, configPath: string | null,
+     *   blockReason?: string, onManageSetup(): void}} props */
+    function DashboardTab({ client, configPath, blockReason, onManageSetup }) {
       const [write] = useState(() => blockReason ? undefined : createLiveMutation(authedFetch));
       const [sessionId, setSessionId] = useState(/** @type {string | null} */ (null));
       const [sessionInput, setSessionInput] = useState("");
@@ -57,7 +58,8 @@
         h("header", { className: "rly-header" }, h("div", null,
           h("p", { className: "rly-eyebrow" }, surfaceLabel),
           h("h1", null, "Reliquary Memory"),
-          h("p", { className: "rly-subtitle" }, "Configured owners in this Hermes profile"))),
+          h("p", { className: "rly-subtitle" }, "Configured owners in this Hermes profile")),
+          h(Button, { type: "button", onClick: onManageSetup }, "Manage memory setup")),
         blockReason && h("p", { className: "rly-live-notice", role: "note" }, blockReason),
         refreshing && h("p", { className: "rly-refreshing", role: "status" },
           write ? "Refreshing owner binding. Writes are paused until it completes." : "Refreshing owner binding."),
@@ -120,6 +122,7 @@
     return function ReliquarySurface() {
       const [client] = useState(() => root.ReliquaryDashboardLive.createLiveClient(authedFetch));
       const [attempt, setAttempt] = useState(0);
+      const [managing, setManaging] = useState(false);
       const [snapshot, setSnapshot] = useState(/** @type {{
         attempt:number, status?:import("../types").SetupStatus, error?:string
       } | null} */ (null));
@@ -140,15 +143,19 @@
 
       const current = snapshot?.attempt === attempt ? snapshot : null;
       const blockReason = current?.status && mutationBlockReason?.(current.status);
-      if (current?.status?.configured) return h(DashboardTab, { client, configPath: current.status.config_path, blockReason });
+      if (current?.status?.configured && !managing) return h(DashboardTab, {
+        client, configPath: current.status.config_path, blockReason, onManageSetup: () => setManaging(true),
+      });
       return h("section", { className: "rly-dashboard", "aria-label": current?.status ? "Reliquary setup" : "Reliquary" },
         h("header", { className: "rly-header" }, h("div", null,
           h("p", { className: "rly-eyebrow" }, surfaceLabel),
-          h("h1", null, current?.status ? "Set up Reliquary" : "Reliquary Memory"),
-          current?.status && h("p", { className: "rly-subtitle" }, "Connect existing Reliquary owners to this Hermes profile."))),
+          h("h1", null, current?.status?.configured ? "Manage memory setup"
+            : current?.status ? "Set up Reliquary" : "Reliquary Memory"),
+          current?.status && h("p", { className: "rly-subtitle" }, "Select or create Reliquary owners for this Hermes profile.")),
+          current?.status?.configured && h(Button, { type: "button", onClick: () => setManaging(false) }, "Back to dashboard")),
         blockReason && h("p", { className: "rly-live-notice", role: "note" }, blockReason),
-        current?.status ? h(Onboarding, { status: current.status, setup, pickOpenPath,
-          mutationsEnabled: !blockReason, onConnected: refresh }) :
+        current?.status ? h(Onboarding, { status: current.status, setup, pickOpenPath, pickSavePath,
+          mutationsEnabled: !blockReason, onConnected: () => { setManaging(false); refresh(); } }) :
           current?.error ? h("div", { role: "alert" },
             h("p", null, current.error), h(Button, { type: "button", onClick: refresh }, "Retry setup status")) :
             h("p", { role: "status" }, "Checking Reliquary setup…"));

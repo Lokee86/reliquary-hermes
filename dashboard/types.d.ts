@@ -389,8 +389,38 @@ export interface SetupReport {
   topology_error: string | null;
 }
 
+export interface SetupProject {
+  id: string;
+  name: string;
+}
+
+export interface SetupProjectInventory {
+  projects: SetupProject[];
+  routing_available: boolean;
+}
+
+export type SetupBrowseKind = "rel" | "phy" | "config";
+
+export interface SetupListing {
+  path: string | null;
+  parent: string | null;
+  entries: { path: string; name: string; kind: "directory" | "file" }[];
+  truncated: boolean;
+}
+
+export type SetupCreateKind = "general_rel" | "project_rel" | "phy";
+
+export interface SetupCreateRequest {
+  kind: SetupCreateKind;
+  path: string;
+  project_id?: string;
+}
+
 export interface SetupClient {
   status(signal: AbortSignal): Promise<SetupStatus>;
+  projects(signal: AbortSignal): Promise<SetupProjectInventory>;
+  browse(kind: SetupBrowseKind, path: string | null, signal: AbortSignal): Promise<SetupListing>;
+  create(value: SetupCreateRequest, signal: AbortSignal): Promise<SetupOwner & { path: string }>;
   validate(candidate: SetupCandidate, signal: AbortSignal): Promise<SetupReport>;
   apply(candidate: SetupCandidate, signal: AbortSignal): Promise<
     { valid: true; configured: true } | (SetupReport & { configured: false })
@@ -406,6 +436,7 @@ export interface CreateReliquarySurface {
     components: HostComponents;
     authedFetch: HermesDashboardSDK["authedFetch"];
     pickOpenPath?: SetupPicker;
+    pickSavePath?: SetupPicker;
     mutationBlockReason?(status: SetupStatus): string | undefined;
     surfaceLabel: string;
   }): () => unknown;
@@ -430,7 +461,7 @@ declare global {
   };
   var ReliquaryOnboarding: {
     Onboarding(props: { status: SetupStatus; setup: SetupClient; pickOpenPath?: SetupPicker;
-      mutationsEnabled: boolean; onConnected(): void }): unknown;
+      pickSavePath?: SetupPicker; mutationsEnabled: boolean; onConnected(): void }): unknown;
   };
   var ReliquaryDashboardClient: {
     createClient(transport: DashboardTransport, sessions?: SessionChoice[], phys?: PhyChoice[], resetTransport?: () => void): DashboardClient;

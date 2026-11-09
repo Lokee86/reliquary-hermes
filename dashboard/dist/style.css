@@ -93,10 +93,10 @@
 
 .rly-setup-form { width: min(100%, 46rem); }
 .rly-setup-form fieldset { border: 0; margin: 0; min-width: 0; padding: 0; }
-.rly-setup-form legend { margin: .75rem 0; }
 .rly-setup-form h2 { margin: 1rem 0 .6rem; }
-.rly-setup-path { align-items: end; display: flex; flex-wrap: wrap; gap: .35rem .65rem; margin-bottom: .75rem; }
-.rly-setup-path .rly-field { flex: 1 1 15rem; min-width: 0; margin: 0; }
-.rly-setup-check { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
-.rly-setup-project { margin-bottom: .75rem; padding-bottom: .75rem; }
-.rly-setup-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
+.rly-setup-card, .rly-setup-picker { margin-block: 1rem; }
+.rly-setup-card .rly-setup-card { padding-inline-start: 1rem; }
+.rly-setup-check, .rly-setup-value { overflow-wrap: anywhere; }
+.rly-setup-entries { display: grid; gap: .4rem; max-height: 16rem; overflow: auto; padding-inline-start: 0; list-style: none; }
+.rly-setup-entries button { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
+.rly-setup-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .65rem; }

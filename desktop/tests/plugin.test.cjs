@@ -10,7 +10,7 @@ const sharedStub = [
   "}",
 ].join("\n");
 
-async function load({ rest, pickOpenPath } = {}) {
+async function load({ rest, pickOpenPath, pickSavePath } = {}) {
   const contributions = [];
   const options = [];
   const routing = { epoch: 1, profile: "default" };
@@ -42,7 +42,7 @@ async function load({ rest, pickOpenPath } = {}) {
   contribution.register({
     registerMany(items) { contributions.push(...items); },
     rest,
-    os: { pickOpenPath },
+    os: { pickOpenPath, pickSavePath },
   });
 
   function render() {
@@ -108,7 +108,7 @@ test("passes Desktop SDK controls and keeps empty select options usable", async 
   assert.equal(selected, "");
 });
 
-test("uses the SDK profile scope for status, validate, apply and management", async () => {
+test("uses the SDK profile scope for status, project inventory, creation, validation and management", async () => {
   const calls = [];
   const { render, routing } = await load({
     rest: async (path, options) => {
@@ -122,6 +122,9 @@ test("uses the SDK profile scope for status, validate, apply and management", as
   routing.epoch += 1;
   await assert.rejects(surface.authedFetch(url("/setup-v1/status")), { name: "AbortError" });
   const current = render().surface;
+  assert((await current.authedFetch(url("/setup-v1/projects"))).ok);
+  const creation = JSON.stringify({ kind: "phy", path: "C:/work/user.phy" });
+  await current.authedFetch(url("/setup-v1/create"), { method: "POST", body: creation });
   const body = JSON.stringify({ main_rel: "C:/work/main.rel", active_phy: "C:/work/user.phy" });
   assert((await current.authedFetch(url("/setup-v1/validate"), { method: "POST", body })).ok);
   const applied = await current.authedFetch(url("/setup-v1/apply"), { method: "POST", body });
@@ -130,13 +133,16 @@ test("uses the SDK profile scope for status, validate, apply and management", as
   await current.authedFetch(url("/dashboard-v1"), { method: "POST", body: dashboard });
   assert.deepEqual(calls.map(({ path, profile, method }) => [path, profile, method]), [
     ["/setup-v1/status", "default", "GET"],
+    ["/setup-v1/projects", "work", "GET"],
+    ["/setup-v1/create", "work", "POST"],
     ["/setup-v1/validate", "work", "POST"],
     ["/setup-v1/apply", "work", "POST"],
     ["/dashboard-v1", "work", "POST"],
   ]);
-  assert.equal(JSON.stringify(calls[2].body), body);
+  assert.equal(JSON.stringify(calls[2].body), creation);
+  assert.equal(JSON.stringify(calls[4].body), body);
   await assert.rejects(current.authedFetch("/api/config"), /Unsupported Reliquary API request/);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 6);
 });
 
 test("uses the native picker for REL, PHY and config and keeps cancel inert", async () => {
@@ -157,6 +163,22 @@ test("uses the native picker for REL, PHY and config and keeps cancel inert", as
   assert.match(calls[2].title, /configuration/);
 });
 
+test("uses the native save picker for new owners and discards canceled destinations", async () => {
+  const calls = [];
+  const selections = [null, "C:/work/new.phy"];
+  const { render } = await load({
+    pickSavePath: async (options) => {
+      calls.push(options);
+      return selections.shift();
+    },
+  });
+  const { surface } = render();
+  assert.equal(await surface.pickSavePath("REL"), null);
+  assert.equal(await surface.pickSavePath("PHY"), "C:/work/new.phy");
+  assert.equal(calls[0].title, "Create a Reliquary REL");
+  assert.equal(calls[1].filters[0].extensions[0], "phy");
+});
+
 test("drops an in-flight path or response after a same-profile backend switch", async () => {
   let finishRead, finishPicker;
   const { render, routing } = await load({
@@ -171,6 +193,15 @@ test("drops an in-flight path or response after a same-profile backend switch", 
   finishPicker("C:/work/old.rel");
   await assert.rejects(response, { name: "AbortError" });
   assert.equal(await selection, null);
+});
+
+test("keeps typed setup errors from the bridge", async () => {
+  const { render } = await load({
+    rest: async () => { throw new Error('Error invoking remote method: Error: 409: {"detail":"service_restart_required"}'); },
+  });
+  const response = await render().surface.authedFetch(url("/setup-v1/apply"), { method: "POST" });
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).detail, "service_restart_required");
 });
 
 test("reports Hermes REST failures without forwarding bridge diagnostics", async () => {

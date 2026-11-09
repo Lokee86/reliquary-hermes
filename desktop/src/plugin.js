@@ -11,6 +11,8 @@ const nativeWriteNotice = "This Hermes build does not yet support secure Desktop
   "Use the Reliquary web dashboard for setup and write management.";
 const methods = new Map([
   ["/setup-v1/status", "GET"],
+  ["/setup-v1/projects", "GET"],
+  ["/setup-v1/create", "POST"],
   ["/setup-v1/validate", "POST"],
   ["/setup-v1/apply", "POST"],
   ["/dashboard-v1", "POST"],
@@ -24,6 +26,19 @@ const pickers = {
 function httpStatus(error) {
   const status = error?.statusCode ?? Number(/(?:^|: )([45][0-9]{2}):/.exec(error?.message ?? "")?.[1]);
   return Number.isInteger(status) && status >= 400 && status <= 599 ? status : 503;
+}
+
+function setupFailure(error) {
+  // Electron's REST bridge preserves the HTTP response text in the Error message.
+  // Keep only a short typed detail for the shared client's message allowlist.
+  const text = /(?:^|: )[45][0-9]{2}: (\{[^\n]{0,256}\})$/.exec(error?.message ?? "")?.[1];
+  if (!text) return null;
+  try {
+    const { detail } = JSON.parse(text);
+    return typeof detail === "string" && /^[a-z_]{1,64}$/.test(detail) ? { detail } : null;
+  } catch {
+    return null;
+  }
 }
 
 function restResponse(status, value = null) {
@@ -48,7 +63,7 @@ function dashboardTransport(ctx, current) {
       // The SDK resolves the active backend and profile before dispatch.
       response = restResponse(200, await ctx.rest(suffix, options));
     } catch (error) {
-      response = restResponse(httpStatus(error));
+      response = restResponse(httpStatus(error), suffix.startsWith("/setup-v1/") ? setupFailure(error) : null);
     }
     checkScope();
     return response;
@@ -83,6 +98,12 @@ function ReliquaryPane({ ctx }) {
       async pickOpenPath(kind) {
         if (!current()) return null;
         const path = await ctx.os.pickOpenPath(pickers[kind]);
+        return current() ? path : null;
+      },
+      async pickSavePath(kind) {
+        if (!current()) return null;
+        const options = { ...pickers[kind], title: "Create a Reliquary " + kind };
+        const path = await ctx.os.pickSavePath(options);
         return current() ? path : null;
       },
       mutationBlockReason: (status) => status.desktop_native_mutations === true ? undefined : nativeWriteNotice,

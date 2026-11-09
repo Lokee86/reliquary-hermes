@@ -1,5 +1,5 @@
 /* Generated from dashboard/src and desktop/src. Rebuild with node desktop/scripts/build.cjs. */
-const reliquaryStyles = ".rly-dashboard {\n  display: flex;\n  flex-direction: column;\n  gap: 1rem;\n  margin: 0 auto;\n  max-width: 1680px;\n  min-height: 75vh;\n  padding: 1.25rem;\n}\n.rly-header, .rly-view-switch, .rly-memory-button, .rly-fixture-pill {\n  align-items: center;\n  display: flex;\n}\n.rly-header, .rly-toolbar { justify-content: space-between; gap: 1rem; }\n.rly-header h1 { margin: 0; }\n.rly-eyebrow { margin: 0 0 .35rem; }\n.rly-subtitle { margin: .3rem 0 0; }\n.rly-fixture-pill, .rly-live-notice { padding: .45rem .75rem; }\n.rly-layout { display: grid; gap: 1rem; grid-template-columns: minmax(180px, 220px) minmax(0, 1fr); align-items: start; }\n.rly-sidebar, .rly-main, .rly-inspector { min-width: 0; padding: 1rem; }\n.rly-sidebar h2, .rly-inspector h2 { margin-top: 0; }\n.rly-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: .35rem; margin-bottom: .75rem; }\n.rly-field :is(input, textarea, [role=\"combobox\"]) { min-width: 0; width: 100%; }\n.rly-owner-meta, .rly-detail-meta { display: grid; gap: .4rem; margin: 1rem 0; }\n.rly-meta-row { display: flex; gap: .75rem; justify-content: space-between; padding: .35rem 0; }\n.rly-meta-row dd { margin: 0; max-width: 65%; overflow-wrap: anywhere; text-align: right; }\n.rly-status-card { display: grid; gap: .3rem; margin-top: 1rem; padding: .75rem; }\n.rly-view-switch { gap: .35rem; margin-bottom: 1rem; }\n.rly-memory-list, .rly-provenance-list { display: grid; gap: .6rem; list-style: none; margin: 0; padding: 0; }\n.rly-memory-button { align-items: flex-start; flex-direction: column; }\n.rly-memory-button, .rly-community-button, .rly-community-members button {\n  line-height: normal;\n  overflow-wrap: anywhere;\n  text-align: left;\n  white-space: normal;\n  width: 100%;\n}\n.rly-empty { padding: 2rem; text-align: center; }\n.rly-owner-label { overflow-wrap: anywhere; }\n.rly-inspector h3 { margin-bottom: .4rem; }\n.rly-body { overflow-wrap: anywhere; white-space: pre-wrap; }\n.rly-provenance-list li { display: grid; gap: .3rem; overflow-wrap: anywhere; padding-left: .65rem; }\n.rly-provenance-list blockquote { margin: .2rem 0; padding-left: .6rem; white-space: pre-wrap; }\n\n.rly-owner-content { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 1rem; align-items: start; min-width: 0; }\n.rly-pager { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }\n.rly-history { list-style: none; display: grid; gap: .4rem; padding: 0; }\n.rly-filters { margin-bottom: 1rem; }\n.rly-filter-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .5rem; padding-top: .5rem; }\n.rly-communities { margin-top: 1rem; padding-top: 1rem; }\n.rly-read-message { overflow-wrap: anywhere; }\n\n@media (max-width: 1180px) {\n  .rly-owner-content { grid-template-columns: minmax(0, 1fr); }\n}\n@media (max-width: 730px) {\n  .rly-layout { grid-template-columns: minmax(0, 1fr); }\n}\n\n.rly-graph-view, .rly-community-view { min-width: 0; }\n.rly-graph-canvas { overflow: auto; }\n.rly-graph-canvas svg { display: block; width: 100%; min-width: 34rem; height: auto; }\n.rly-graph-edge-line { stroke: currentColor; stroke-opacity: .4; stroke-width: 2; }\n.rly-graph-edge.is-selected .rly-graph-edge-line { stroke-opacity: 1; stroke-width: 4; }\n.rly-graph-edge-hit, .rly-graph-node { cursor: pointer; }\n.rly-graph-edge-hit:focus { stroke: currentColor; stroke-opacity: .35; }\n.rly-graph-node rect { fill: var(--ui-bg-primary, var(--background-base, transparent)); stroke: currentColor; stroke-width: 2; }\n.rly-graph-node text { fill: currentColor; font-size: 13px; pointer-events: none; }\n.rly-graph-node:hover rect,\n.rly-graph-node:focus rect,\n.rly-graph-node.is-selected rect { stroke-width: 3; }\n\n.rly-graph-inspector { margin-top: .8rem; padding: .85rem 1rem; }\n.rly-graph-inspector h3 { margin: 0 0 .6rem; }\n.rly-graph-inspector dl { display: grid; grid-template-columns: minmax(7rem, auto) 1fr; gap: .3rem .8rem; margin: 0; }\n.rly-graph-inspector dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }\n\n.rly-community-layout { display: grid; grid-template-columns: minmax(14rem, .8fr) minmax(16rem, 1.2fr); gap: 1rem; }\n.rly-community-list-pane, .rly-community-members-pane { min-width: 0; }\n.rly-community-list, .rly-community-members { display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none; }\n.rly-community-button { display: grid; gap: .25rem; }\n\n@media (max-width: 700px) {\n  .rly-community-layout { grid-template-columns: 1fr; }\n}\n\n.rly-session-lookup { display: flex; align-items: end; gap: .75rem; flex-wrap: wrap; }\n.rly-session-lookup .rly-field { width: min(100%, 24rem); margin-bottom: 0; }\n.rly-sidebar .rly-session-lookup { margin: .75rem 0; }\n.rly-memory-write-form { margin-top: 1rem; padding-top: .75rem; }\n.rly-confirmation { display: flex; align-items: center; gap: .5rem; }\n.rly-write-success, .rly-write-error { overflow-wrap: anywhere; }\n\n.rly-setup-form { width: min(100%, 46rem); }\n.rly-setup-form fieldset { border: 0; margin: 0; min-width: 0; padding: 0; }\n.rly-setup-form legend { margin: .75rem 0; }\n.rly-setup-form h2 { margin: 1rem 0 .6rem; }\n.rly-setup-path { align-items: end; display: flex; flex-wrap: wrap; gap: .35rem .65rem; margin-bottom: .75rem; }\n.rly-setup-path .rly-field { flex: 1 1 15rem; min-width: 0; margin: 0; }\n.rly-setup-check { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }\n.rly-setup-project { margin-bottom: .75rem; padding-bottom: .75rem; }\n.rly-setup-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }\n";
+const reliquaryStyles = ".rly-dashboard {\n  display: flex;\n  flex-direction: column;\n  gap: 1rem;\n  margin: 0 auto;\n  max-width: 1680px;\n  min-height: 75vh;\n  padding: 1.25rem;\n}\n.rly-header, .rly-view-switch, .rly-memory-button, .rly-fixture-pill {\n  align-items: center;\n  display: flex;\n}\n.rly-header, .rly-toolbar { justify-content: space-between; gap: 1rem; }\n.rly-header h1 { margin: 0; }\n.rly-eyebrow { margin: 0 0 .35rem; }\n.rly-subtitle { margin: .3rem 0 0; }\n.rly-fixture-pill, .rly-live-notice { padding: .45rem .75rem; }\n.rly-layout { display: grid; gap: 1rem; grid-template-columns: minmax(180px, 220px) minmax(0, 1fr); align-items: start; }\n.rly-sidebar, .rly-main, .rly-inspector { min-width: 0; padding: 1rem; }\n.rly-sidebar h2, .rly-inspector h2 { margin-top: 0; }\n.rly-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: .35rem; margin-bottom: .75rem; }\n.rly-field :is(input, textarea, [role=\"combobox\"]) { min-width: 0; width: 100%; }\n.rly-owner-meta, .rly-detail-meta { display: grid; gap: .4rem; margin: 1rem 0; }\n.rly-meta-row { display: flex; gap: .75rem; justify-content: space-between; padding: .35rem 0; }\n.rly-meta-row dd { margin: 0; max-width: 65%; overflow-wrap: anywhere; text-align: right; }\n.rly-status-card { display: grid; gap: .3rem; margin-top: 1rem; padding: .75rem; }\n.rly-view-switch { gap: .35rem; margin-bottom: 1rem; }\n.rly-memory-list, .rly-provenance-list { display: grid; gap: .6rem; list-style: none; margin: 0; padding: 0; }\n.rly-memory-button { align-items: flex-start; flex-direction: column; }\n.rly-memory-button, .rly-community-button, .rly-community-members button {\n  line-height: normal;\n  overflow-wrap: anywhere;\n  text-align: left;\n  white-space: normal;\n  width: 100%;\n}\n.rly-empty { padding: 2rem; text-align: center; }\n.rly-owner-label { overflow-wrap: anywhere; }\n.rly-inspector h3 { margin-bottom: .4rem; }\n.rly-body { overflow-wrap: anywhere; white-space: pre-wrap; }\n.rly-provenance-list li { display: grid; gap: .3rem; overflow-wrap: anywhere; padding-left: .65rem; }\n.rly-provenance-list blockquote { margin: .2rem 0; padding-left: .6rem; white-space: pre-wrap; }\n\n.rly-owner-content { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 1rem; align-items: start; min-width: 0; }\n.rly-pager { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }\n.rly-history { list-style: none; display: grid; gap: .4rem; padding: 0; }\n.rly-filters { margin-bottom: 1rem; }\n.rly-filter-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .5rem; padding-top: .5rem; }\n.rly-communities { margin-top: 1rem; padding-top: 1rem; }\n.rly-read-message { overflow-wrap: anywhere; }\n\n@media (max-width: 1180px) {\n  .rly-owner-content { grid-template-columns: minmax(0, 1fr); }\n}\n@media (max-width: 730px) {\n  .rly-layout { grid-template-columns: minmax(0, 1fr); }\n}\n\n.rly-graph-view, .rly-community-view { min-width: 0; }\n.rly-graph-canvas { overflow: auto; }\n.rly-graph-canvas svg { display: block; width: 100%; min-width: 34rem; height: auto; }\n.rly-graph-edge-line { stroke: currentColor; stroke-opacity: .4; stroke-width: 2; }\n.rly-graph-edge.is-selected .rly-graph-edge-line { stroke-opacity: 1; stroke-width: 4; }\n.rly-graph-edge-hit, .rly-graph-node { cursor: pointer; }\n.rly-graph-edge-hit:focus { stroke: currentColor; stroke-opacity: .35; }\n.rly-graph-node rect { fill: var(--ui-bg-primary, var(--background-base, transparent)); stroke: currentColor; stroke-width: 2; }\n.rly-graph-node text { fill: currentColor; font-size: 13px; pointer-events: none; }\n.rly-graph-node:hover rect,\n.rly-graph-node:focus rect,\n.rly-graph-node.is-selected rect { stroke-width: 3; }\n\n.rly-graph-inspector { margin-top: .8rem; padding: .85rem 1rem; }\n.rly-graph-inspector h3 { margin: 0 0 .6rem; }\n.rly-graph-inspector dl { display: grid; grid-template-columns: minmax(7rem, auto) 1fr; gap: .3rem .8rem; margin: 0; }\n.rly-graph-inspector dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }\n\n.rly-community-layout { display: grid; grid-template-columns: minmax(14rem, .8fr) minmax(16rem, 1.2fr); gap: 1rem; }\n.rly-community-list-pane, .rly-community-members-pane { min-width: 0; }\n.rly-community-list, .rly-community-members { display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none; }\n.rly-community-button { display: grid; gap: .25rem; }\n\n@media (max-width: 700px) {\n  .rly-community-layout { grid-template-columns: 1fr; }\n}\n\n.rly-session-lookup { display: flex; align-items: end; gap: .75rem; flex-wrap: wrap; }\n.rly-session-lookup .rly-field { width: min(100%, 24rem); margin-bottom: 0; }\n.rly-sidebar .rly-session-lookup { margin: .75rem 0; }\n.rly-memory-write-form { margin-top: 1rem; padding-top: .75rem; }\n.rly-confirmation { display: flex; align-items: center; gap: .5rem; }\n.rly-write-success, .rly-write-error { overflow-wrap: anywhere; }\n\n.rly-setup-form { width: min(100%, 46rem); }\n.rly-setup-form fieldset { border: 0; margin: 0; min-width: 0; padding: 0; }\n.rly-setup-form h2 { margin: 1rem 0 .6rem; }\n.rly-setup-card, .rly-setup-picker { margin-block: 1rem; }\n.rly-setup-card .rly-setup-card { padding-inline-start: 1rem; }\n.rly-setup-check, .rly-setup-value { overflow-wrap: anywhere; }\n.rly-setup-entries { display: grid; gap: .4rem; max-height: 16rem; overflow: auto; padding-inline-start: 0; list-style: none; }\n.rly-setup-entries button { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }\n.rly-setup-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .65rem; }\n";
 function createReliquarySurface(options) {
   const { React, hooks = React, components } = options;
   const runtime = { crypto: globalThis.crypto, ReliquaryDashboardHost: { React, hooks, components } };
@@ -1239,9 +1239,9 @@ function createReliquarySurface(options) {
     ["runtime_unavailable", "The Reliquary host is unavailable. Check the plugin installation."],
     ["preflight_unavailable", "The Reliquary host could not validate these files."],
     ["managed_setup", "This Hermes profile is managed and does not allow local setup changes."],
-    ["service_restart_required", "Stop the running Reliquary service before changing these settings."],
+    ["service_restart_required", "Stop the running Reliquary service for this profile, then retry connecting to start it with the new settings."],
     ["setup_request_too_large", "The selected paths exceed the setup request limit."],
-    ["invalid_setup_request", "Check the paths and project IDs, then try again."],
+    ["invalid_setup_request", "Check the selected owner paths and refresh the Hermes projects list."],
     ["setup_denied", "Hermes did not authorize setup in this profile."],
     ["setup_unavailable", "Could not reach Reliquary setup. Try again."],
     ["invalid_setup_response", "Reliquary returned an invalid setup response."],
@@ -1250,7 +1250,24 @@ function createReliquarySurface(options) {
     ["phy_path", "Enter an absolute local path for the active PHY."],
     ["config_path", "Enter an absolute local path for the Reliquary config."],
     ["project_path", "Enter an absolute local path for each project REL."],
-    ["project_id", "Use a distinct ID for each project, starting with a letter or number."],
+    ["project_id", "Refresh the Hermes projects list and try again."],
+    ["project_discovery_unavailable", "Refresh the projects list to try again."],
+    ["unknown_hermes_project", "The selected project is unavailable in this Hermes profile. Refresh the projects list."],
+    ["same_origin_required", "Hermes did not authorize a setup write from this surface."],
+    ["invalid_browse_kind", "Hermes could not determine which files to list."],
+    ["invalid_local_path", "Hermes rejected this host path."],
+    ["browse_outside_roots", "This location is outside the folders permitted for browsing in this profile."],
+    ["browse_reparse_point", "This location goes through a filesystem link. Choose a permitted local folder."],
+    ["browse_not_directory", "This location is no longer a folder."],
+    ["browse_not_found", "This folder is no longer available."],
+    ["browse_unreadable", "Hermes could not list this folder. Choose another folder or use an Advanced path."],
+    ["browse_timeout", "Hermes could not finish listing this folder. Try again or choose another folder."],
+    ["invalid_owner_path", "Choose a valid local destination for the new owner file."],
+    ["owner_already_exists", "A file already exists at that location. Select it or choose another destination."],
+    ["owner_creation_failed", "Reliquary could not create the owner file. Check the destination before retrying."],
+    ["owner_creation_unavailable", "The Reliquary host could not start owner creation."],
+    ["owner_created_unverified", "Reliquary created the file but could not verify it. Use Select to check the file before retrying."],
+    ["owner_creation_unconfirmed", "Reliquary could not confirm creation. Use Select to check whether the file exists before retrying."],
   ]);
 
   /** @param {unknown} error */
@@ -1295,9 +1312,9 @@ function createReliquarySurface(options) {
    */
   function createSetupClient(authedFetch) {
     /**
-     * @param {"status"|"validate"|"apply"} operation
+     * @param {string} operation
      * @param {AbortSignal} signal
-     * @param {import("../types").SetupCandidate} [value]
+     * @param {import("../types").SetupCandidate | import("../types").SetupCreateRequest} [value]
      */
     async function request(operation, signal, value) {
       signal.throwIfAborted();
@@ -1317,22 +1334,64 @@ function createReliquarySurface(options) {
         const known = messages.has(data?.detail) ? data.detail : null;
         throw new Error(known ?? (response.status === 401 || response.status === 403 ? "setup_denied" : "setup_unavailable"));
       }
-      if (operation === "status") {
-        if (typeof data?.configured !== "boolean" || typeof data.runtime_detected !== "boolean" ||
-            !data.defaults || !data.defaults.projects) throw new Error("invalid_setup_response");
-        return { ...data, desktop_native_mutations: data.desktop_native_mutations === true };
-      }
-      if (!(operation === "apply" && data?.valid === true && data.configured === true)) {
-        if (typeof data?.valid !== "boolean" || !data.main_rel || !data.active_phy || !data.projects || !data.config ||
-            (operation === "apply" && data.configured !== false)) throw new Error("invalid_setup_response");
-      }
       return data;
     }
 
+    /** @param {unknown} data @param {boolean} applying */
+    function checkReport(data, applying) {
+      const report = /** @type {Partial<import("../types").SetupReport> & {configured?: boolean} | null} */ (data);
+      if (applying && report?.configured === true && report.valid === true) return report;
+      if (typeof report?.valid !== "boolean" || !report.main_rel || !report.active_phy || !report.projects ||
+          !report.config || (applying && report.configured !== false)) throw new Error("invalid_setup_response");
+      return report;
+    }
+
     return {
-      status: (signal) => request("status", signal),
-      validate: (value, signal) => request("validate", signal, value),
-      apply: (value, signal) => request("apply", signal, value),
+      async status(signal) {
+        const data = await request("status", signal);
+        if (typeof data?.configured !== "boolean" || typeof data.runtime_detected !== "boolean" ||
+            !data.defaults?.projects) throw new Error("invalid_setup_response");
+        return { ...data, desktop_native_mutations: data.desktop_native_mutations === true };
+      },
+      async projects(signal) {
+        const data = await request("projects", signal);
+        const projects = data?.projects;
+        if (!Array.isArray(projects) || typeof data.routing_available !== "boolean" ||
+            projects.some((project) =>
+          typeof project?.name !== "string" || typeof project.id !== "string" ||
+          !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(project.id)) ||
+          new Set(projects.map((project) => project.id)).size !== projects.length) {
+          throw new Error("invalid_setup_response");
+        }
+        return data;
+      },
+      async browse(kind, path, signal) {
+        const query = new URLSearchParams({ kind });
+        if (path !== null) query.set("path", path);
+        const data = await request("browse?" + query, signal);
+        const entries = data?.entries;
+        if (!Array.isArray(entries) || typeof data.truncated !== "boolean" ||
+            (data.path !== null && typeof data.path !== "string") ||
+            (data.parent !== null && typeof data.parent !== "string") ||
+            entries.some((entry) => typeof entry?.name !== "string" || typeof entry.path !== "string" ||
+              (entry.kind !== "directory" && entry.kind !== "file"))) throw new Error("invalid_setup_response");
+        return data;
+      },
+      async create(value, signal) {
+        const data = await request("create", signal, value);
+        if (data?.accepted !== true || data.opened !== true || typeof data.owner_id !== "string" ||
+            typeof data.path !== "string" || data.kind !== (value.kind === "phy" ? "phy" : "rel")) {
+          throw new Error("owner_creation_unconfirmed");
+        }
+        return data;
+      },
+      async validate(value, signal) {
+        return /** @type {import("../types").SetupReport} */ (checkReport(await request("validate", signal, value), false));
+      },
+      async apply(value, signal) {
+        const data = checkReport(await request("apply", signal, value), true);
+        return /** @type {Awaited<ReturnType<import("../types").SetupClient["apply"]>>} */ (data);
+      },
     };
   }
 
@@ -1355,7 +1414,8 @@ function createReliquarySurface(options) {
   /** @typedef {import("../types").SetupCheck} SetupCheck */
   /** @typedef {import("../types").SetupPicker} SetupPicker */
   /** @typedef {Parameters<SetupPicker>[0]} PathKind */
-  /** @typedef {{ key: number, id: string, path: string }} Project */
+  /** @typedef {import("../types").SetupCreateKind} CreateKind */
+  /** @typedef {{ label: string, kind: PathKind, update(path: string): void, createKind?: CreateKind, projectId?: string }} PickerTarget */
 
   /** @param {SetupCheck | SetupOwner} result */
   function checkText(result) {
@@ -1367,50 +1427,119 @@ function createReliquarySurface(options) {
     return [state, details, error].filter(Boolean).join(" · ");
   }
 
+  /**
+   * @param {{setup: import("../types").SetupClient, target: PickerTarget, creating: boolean,
+   *   onPick(path: string): void, onCancel(): void}} props
+   */
+  function HostFilePicker({ setup, target, creating, onPick, onCancel }) {
+    const [path, setPath] = useState(/** @type {string | null} */ (null));
+    const [attempt, setAttempt] = useState(0);
+    const [state, setState] = useState(/** @type {{
+      path: string | null, attempt: number, listing?: import("../types").SetupListing, error?: string
+    } | null} */ (null));
+    const extension = target.kind === "PHY" ? ".phy" : ".rel";
+    const [name, setName] = useState("");
+    const kind = /** @type {import("../types").SetupBrowseKind} */ (target.kind.toLowerCase());
+
+    useEffect(() => {
+      const controller = new AbortController();
+      setup.browse(kind, path, controller.signal).then((listing) => {
+        if (!controller.signal.aborted) setState({ path, attempt, listing });
+      }, (reason) => {
+        if (!controller.signal.aborted) setState({ path, attempt, error: message(reason) });
+      });
+      return () => controller.abort();
+    }, [setup, kind, path, attempt]);
+
+    const current = state?.path === path && state.attempt === attempt ? state : null;
+    const listing = current?.listing;
+    const filename = name.trim();
+    const validName = filename.length > 0 && !/[<>:"/\\|?*\x00-\x1f]/.test(filename) &&
+      !filename.endsWith(".") && filename !== "..";
+    const basename = filename.toLowerCase().endsWith(extension) ? filename : filename + extension;
+    const directory = listing?.path;
+    const separator = directory?.includes("\\") ? "\\" : "/";
+    const destination = directory && validName ? directory.replace(/[\\/]$/, "") + separator + basename : null;
+
+    return h("section", { className: "rly-setup-picker", "aria-label": "Browse Hermes host files" },
+      h("h2", null, (creating ? "Choose a destination for " : "Select a file for ") + target.label),
+      h("p", null, "Browsing files on the machine hosting Hermes."),
+      path !== null && h(Button, { type: "button", onClick: () => setPath(listing?.parent ?? null) },
+        listing?.parent ? "Up one folder" : "Back to permitted folders"),
+      current?.error && h("p", { role: "alert" }, current.error),
+      current?.error && h(Button, { type: "button", onClick: () => setAttempt((count) => count + 1) }, "Retry folder"),
+      !current && h("p", { role: "status" }, "Loading folders…"),
+      listing && h("p", { className: "rly-setup-value" }, directory ?? "Permitted folders"),
+      listing?.truncated && h("p", { role: "status" }, "This listing is capped. Use Advanced for a known path."),
+      listing && h("ul", { className: "rly-setup-entries" },
+        listing.entries.filter((entry) => !creating || entry.kind === "directory").map((entry) =>
+          h("li", { key: entry.path }, h(Button, {
+            type: "button", title: entry.path,
+            onClick: () => entry.kind === "directory" ? setPath(entry.path) : onPick(entry.path),
+          }, entry.name + (entry.kind === "directory" ? " /" : ""))))),
+      creating && directory && h("label", { className: "rly-field" }, h("span", null, "New file name"),
+        h(Input, { value: name, placeholder: "memory" + extension, maxLength: 200, autoComplete: "off",
+          onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => setName(event.currentTarget.value) })),
+      h("div", { className: "rly-setup-actions" },
+        creating && h(Button, { type: "button", disabled: !destination,
+          onClick: () => { if (destination) onPick(destination); } }, "Use this destination"),
+        h(Button, { type: "button", onClick: onCancel }, "Cancel")));
+  }
+
   /** @type {typeof root.ReliquaryOnboarding.Onboarding} */
-  function Onboarding({ status, setup, pickOpenPath, mutationsEnabled, onConnected }) {
+  function Onboarding({ status, setup, pickOpenPath, pickSavePath, mutationsEnabled, onConnected }) {
     const [main, setMain] = useState(status.defaults.main_rel ?? "");
     const [phy, setPhy] = useState(status.defaults.active_phy ?? "");
     const [config, setConfig] = useState(status.defaults.config_path ?? "");
-    const [projects, setProjects] = useState(/** @type {Project[]} */ (
-      Object.entries(status.defaults.projects).map(([id, path], key) => ({ id, path, key }))
-    ));
-    const nextKey = useRef(projects.length);
+    const [assignments, setAssignments] = useState(() => new Map(Object.entries(status.defaults.projects)));
+    const [inventoryAttempt, setInventoryAttempt] = useState(0);
+    const [inventory, setInventory] = useState(/** @type {{
+      attempt: number, value?: import("../types").SetupProjectInventory, error?: string
+    } | null} */ (null));
+    const [showProjectHelp, setShowProjectHelp] = useState(false);
     const pending = useRef(/** @type {AbortController | null} */ (null));
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
     const [report, setReport] = useState(/** @type {import("../types").SetupReport | null} */ (null));
+    const [browser, setBrowser] = useState(/** @type {{ target: PickerTarget, creating: boolean } | null} */ (null));
+    const [destination, setDestination] = useState(/** @type {{target: PickerTarget, path: string} | null} */ (null));
+    const [created, setCreated] = useState(/** @type {string[]} */ ([]));
+    const [review, setReview] = useState(/** @type {{
+      selected: import("../types").SetupCandidate, fallback: number
+    } | null} */ (null));
     const canSubmit = mutationsEnabled && status.runtime_detected;
+    const currentInventory = inventory?.attempt === inventoryAttempt ? inventory : null;
+    const projects = currentInventory?.value?.projects ?? [];
+    const routingAvailable = currentInventory?.value?.routing_available === true;
+    const controlsLocked = !!(browser || destination || review || busy);
 
     useEffect(() => () => pending.current?.abort(), []);
+    useEffect(() => {
+      const controller = new AbortController();
+      setup.projects(controller.signal).then((value) => {
+        if (!controller.signal.aborted) setInventory({ attempt: inventoryAttempt, value });
+      }, (reason) => {
+        if (!controller.signal.aborted) setInventory({
+          attempt: inventoryAttempt, error: "Could not load Hermes projects. " + message(reason),
+        });
+      });
+      return () => controller.abort();
+    }, [setup, inventoryAttempt]);
 
     function clearResult() {
       setReport(null);
       setError("");
     }
 
-    /** @param {"validate"|"apply"} action */
-    async function submit(action) {
-      if (!canSubmit || pending.current) return;
-      clearResult();
-      let selected;
-      try {
-        selected = candidate(main, phy, config, projects);
-      } catch (reason) {
-        setError(message(reason));
-        return;
-      }
+    /** @param {(signal: AbortSignal) => Promise<void>} operation */
+    async function run(operation) {
+      if (pending.current) return;
       const controller = new AbortController();
       pending.current = controller;
+      setError("");
       setBusy(true);
       try {
-        const result = await setup[action](selected, controller.signal);
-        if (controller.signal.aborted) return;
-        if ("configured" in result && result.configured === true) {
-          onConnected();
-          return;
-        }
-        setReport(result);
+        await operation(controller.signal);
       } catch (reason) {
         if (!controller.signal.aborted) setError(message(reason));
       } finally {
@@ -1419,51 +1548,124 @@ function createReliquarySurface(options) {
       }
     }
 
-    /** @param {PathKind} kind @param {(path: string) => void} update */
-    async function browse(kind, update) {
-      if (!pickOpenPath || pending.current) return;
-      const controller = new AbortController();
-      pending.current = controller;
-      setBusy(true);
-      try {
-        const path = await pickOpenPath(kind);
-        if (path && !controller.signal.aborted) {
-          clearResult();
-          update(path);
+    /** @param {boolean} reviewing */
+    function validate(reviewing) {
+      if (!canSubmit || controlsLocked || (reviewing && !currentInventory)) return;
+      setReport(null);
+      return run(async (signal) => {
+        const selected = candidate(main, phy, config, Array.from(assignments, ([id, path]) => ({ id, path })));
+        const result = await setup.validate(selected, signal);
+        if (signal.aborted) return;
+        setReport(result);
+        if (reviewing && result.valid) setReview({
+          selected, fallback: projects.filter(({ id }) => !routingAvailable || !assignments.has(id)).length,
+        });
+      });
+    }
+
+    function connect() {
+      if (!canSubmit || !review) return;
+      return run(async (signal) => {
+        const result = await setup.apply(review.selected, signal);
+        if (signal.aborted) return;
+        if (result.configured) {
+          onConnected();
+          return;
         }
-      } catch {
-        if (!controller.signal.aborted) setError(message(new Error("picker_failed")));
-      } finally {
-        pending.current = null;
-        if (!controller.signal.aborted) setBusy(false);
+        setReport(result);
+        setReview(null);
+      });
+    }
+
+    /** @param {PickerTarget} target @param {boolean} creating @param {string} path */
+    function acceptPath(target, creating, path) {
+      setBrowser(null);
+      if (creating) {
+        setDestination({ target, path });
+      } else {
+        clearResult();
+        target.update(path);
       }
     }
 
-    /**
-     * @param {string} label
-     * @param {string} value
-     * @param {(next: string) => void} update
-     * @param {PathKind} kind
-     * @param {SetupCheck | SetupOwner} [result]
-     */
-    function pathField(label, value, update, kind, result) {
-      return h("div", { className: "rly-setup-path" },
-        h("label", { className: "rly-field" }, h("span", null, label), h(Input, {
-          type: "text", value, autoComplete: "off", maxLength: 4096,
-          onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => {
-            clearResult();
-            update(event.currentTarget.value);
-          },
-        })),
-        pickOpenPath && h(Button, { type: "button", onClick: () => browse(kind, update), "aria-label": "Browse for " + label }, "Browse…"),
-        result && h("p", { className: "rly-setup-check", role: "status" }, checkText(result)));
+    /** @param {PickerTarget} target @param {boolean} [creating] */
+    function choose(target, creating = false) {
+      if (controlsLocked || (creating && !canSubmit)) return;
+      const picker = creating ? pickSavePath : pickOpenPath;
+      if (!picker) {
+        setBrowser({ target, creating });
+        return;
+      }
+      return run(async (signal) => {
+        const path = await picker(target.kind).catch(() => { throw new Error("picker_failed"); });
+        if (path && !signal.aborted) acceptPath(target, creating, path);
+      });
     }
 
-    /** @param {number} key @param {Partial<Project>} update */
-    function changeProject(key, update) {
-      clearResult();
-      setProjects((current) => current.map((row) => row.key === key ? { ...row, ...update } : row));
+    function confirmCreate() {
+      if (!canSubmit || !destination?.target.createKind) return;
+      const { target, path } = destination;
+      const kind = destination.target.createKind;
+      return run(async (signal) => {
+        const result = await setup.create({ kind, path, project_id: target.projectId }, signal);
+        if (signal.aborted) return;
+        setDestination(null);
+        setCreated((paths) => [...paths, result.path]);
+        acceptPath(target, false, result.path);
+      });
     }
+
+    /** @param {PickerTarget} target @param {string} value */
+    function ownerButtons(target, value) {
+      return h("div", { className: "rly-setup-actions" },
+        h(Button, { type: "button", onClick: () => choose(target) }, "Select " + target.kind),
+        h(Button, { type: "button", disabled: !canSubmit, onClick: () => choose(target, true) },
+          "Create " + target.kind),
+        target.projectId && h(Button, { type: "button", disabled: !value || !mutationsEnabled,
+          onClick: () => { clearResult(); target.update(""); } }, "Use General"));
+    }
+
+    /** @param {string} label @param {string} value @param {(next: string) => void} update */
+    function pathInput(label, value, update) {
+      return h("label", { className: "rly-field" }, h("span", null, label), h(Input, {
+        type: "text", value, autoComplete: "off", maxLength: 4096,
+        onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => {
+          clearResult();
+          update(event.currentTarget.value);
+        },
+      }));
+    }
+
+    /** @param {SetupOwner | SetupCheck | undefined} result */
+    function check(result) {
+      return result && h("p", { className: "rly-setup-check", role: "status" }, checkText(result));
+    }
+
+    const general = /** @type {PickerTarget} */ ({
+      label: "General memory", kind: "REL", update: setMain, createKind: "general_rel",
+    });
+    const identity = /** @type {PickerTarget} */ ({
+      label: "Active identity", kind: "PHY", update: setPhy, createKind: "phy",
+    });
+    const configFile = /** @type {PickerTarget} */ ({
+      label: "Reliquary configuration", kind: "config", update: setConfig,
+    });
+
+    const projectCards = projects.map(({ id, name }) => {
+      const path = assignments.get(id) ?? "";
+      const target = /** @type {PickerTarget} */ ({
+        label: name, kind: "REL", createKind: "project_rel", projectId: id,
+        update(next) {
+          setAssignments((current) => {
+            const updated = new Map(current);
+            if (next) updated.set(id, next);
+            else updated.delete(id);
+            return updated;
+          });
+        },
+      });
+      return { id, name, path, target };
+    });
 
     return h("div", { className: "rly-main rly-setup-form" },
       h("dl", { className: "rly-owner-meta" },
@@ -1471,39 +1673,79 @@ function createReliquarySurface(options) {
         root.ReliquaryDashboardViews.meta("Reliquary config", status.config_path ?? "No config detected")),
       h("form", { noValidate: true, onSubmit: (/** @type {{preventDefault():void}} */ event) => {
         event.preventDefault();
-        void submit("apply");
+        void validate(true);
       } },
-      h("fieldset", { disabled: busy },
-        h("legend", null, "Local Reliquary files"),
-        pathField("Main REL path", main, setMain, "REL", report?.main_rel),
-        pathField("Active PHY path", phy, setPhy, "PHY", report?.active_phy),
-        pathField("Reliquary config path (optional)", config, setConfig, "config", report?.config),
-        h("h2", null, "Project RELs"),
-        projects.map(({ key, id, path }, index) => h("div", { className: "rly-setup-project", key: String(key) },
-          h("label", { className: "rly-field" }, h("span", null, `Project ${index + 1} ID`), h(Input, {
-            type: "text", value: id, autoComplete: "off", maxLength: 128,
-            onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) =>
-              changeProject(key, { id: event.currentTarget.value }),
-          })),
-          pathField(`Project ${index + 1} REL path`, path, (next) => changeProject(key, { path: next }),
-            "REL", report?.projects[id.trim()]),
-          h(Button, { type: "button", "aria-label": `Remove project ${index + 1}`, onClick: () => {
-            clearResult();
-            setProjects((current) => current.filter((row) => row.key !== key));
-          } }, "Remove"))),
-        h(Button, { type: "button", disabled: projects.length >= 128, onClick: () => {
-          clearResult();
-          const key = nextKey.current++;
-          setProjects((current) => [...current, { key, id: "", path: "" }]);
-        } }, "Add project REL"),
+      h("fieldset", { disabled: controlsLocked },
+        h("section", { "aria-label": "General memory", className: "rly-setup-card" },
+          h("h2", null, "General memory"),
+          h("p", { className: "rly-setup-value" }, main || "A General REL is required."),
+          ownerButtons(general, main), check(report?.main_rel)),
+        h("section", { "aria-label": "Active identity", className: "rly-setup-card" },
+          h("h2", null, "Active identity"),
+          h("p", { className: "rly-setup-value" }, phy || "An active PHY is required."),
+          ownerButtons(identity, phy), check(report?.active_phy)),
+        h("section", { "aria-label": "Project memories", className: "rly-setup-card" },
+          h("h2", null, "Project memories"),
+          h("div", { className: "rly-setup-actions" },
+            h(Button, { type: "button", "aria-expanded": showProjectHelp,
+              onClick: () => setShowProjectHelp((show) => !show) }, "Create Hermes project"),
+            h(Button, { type: "button", onClick: () => setInventoryAttempt((count) => count + 1) }, "Refresh projects")),
+          showProjectHelp && (pickOpenPath
+            ? h("p", { role: "note" }, "In Hermes Desktop Chat, choose New project in the Projects sidebar. Then return here and refresh the project list.")
+            : h("p", { role: "note" }, "Run ", h("code", null, "hermes project create <name>"),
+              " for this Hermes profile, then refresh the project list.")),
+          !currentInventory && h("p", { role: "status" }, "Loading Hermes projects…"),
+          currentInventory?.error && h("p", { role: "alert" }, currentInventory.error),
+          currentInventory?.value?.projects.length === 0 && h("p", null, "This profile has no active Hermes projects."),
+          currentInventory?.value && !routingAvailable && projects.length > 0 && h("p", { role: "note" },
+            "This Hermes host does not supply trusted project membership for sessions. New sessions use General memory."),
+          projectCards.map(({ id, name, path, target }) =>
+            h("section", { key: id, className: "rly-setup-card", "aria-label": name },
+              h("h3", null, name),
+              h("p", null, path && routingAvailable ? "Dedicated REL" : "Using General memory"),
+              path && !routingAvailable && h("p", null, "Dedicated REL selected"),
+              path && h("p", { className: "rly-setup-value" }, path),
+              ownerButtons(target, path), check(report?.projects[id])))),
+        h("details", null, h("summary", null, "Advanced"),
+          pathInput("Main REL path", main, setMain),
+          pathInput("Active PHY path", phy, setPhy),
+          ...projectCards.map(({ id, name, path, target }) => h("div", { key: id },
+            pathInput(name + " REL path", path, target.update))),
+          pathInput("Reliquary config path (optional)", config, setConfig),
+          h(Button, { type: "button", onClick: () => choose(configFile) }, "Select configuration"),
+          check(report?.config)),
         h("div", { className: "rly-setup-actions" },
-          h(Button, { type: "button", disabled: !canSubmit, onClick: () => submit("validate") }, "Validate"),
-          h(Button, { type: "submit", disabled: !canSubmit }, "Connect Reliquary")))),
+          h(Button, { type: "button", disabled: !canSubmit, onClick: () => validate(false) }, "Validate"),
+          h(Button, { type: "submit", disabled: !canSubmit || !currentInventory }, "Review and connect")))),
+      browser && h(HostFilePicker, { setup, ...browser, onCancel: () => setBrowser(null),
+        onPick: (/** @type {string} */ path) => acceptPath(browser.target, browser.creating, path) }),
+      destination && h("section", { className: "rly-setup-picker", "aria-label": "Confirm owner creation" },
+        h("h2", null, "Confirm owner creation"),
+        h("p", { className: "rly-setup-value" }, destination.path),
+        h("p", null, "Reliquary will create a new file at this path."),
+        h("div", { className: "rly-setup-actions" },
+          h(Button, { type: "button", disabled: busy || !canSubmit, onClick: confirmCreate }, "Create owner file"),
+          h(Button, { type: "button", disabled: busy, onClick: () => { setDestination(null); setError(""); } }, "Cancel"))),
+      review && h("section", { className: "rly-setup-picker", "aria-label": "Review connection" },
+        h("h2", null, "Review connection"),
+        currentInventory?.error && h("p", { role: "note" }, "Hermes project memory routes could not be checked."),
+        review.fallback > 0 && h("p", { role: "note" },
+          review.fallback + (review.fallback === 1 ? " project will" : " projects will") +
+          " use General memory for new sessions."),
+        status.configured && h("p", null, "Existing Hermes sessions keep their accepted memory routes."),
+        h("div", { className: "rly-setup-actions" },
+          h(Button, { type: "button", disabled: busy || !canSubmit, onClick: connect },
+            review.fallback > 0 ? "Continue" : "Connect Reliquary"),
+          h(Button, { type: "button", disabled: busy, onClick: () => { setReview(null); setError(""); } }, "Back to edit"))),
+      created.length > 0 && h("div", { role: "status" }, h("p", null, "Created owner files remain on disk if connection fails."),
+        h("ul", { className: "rly-setup-value" }, created.map((path) => h("li", { key: path }, path)))),
       busy && h("p", { role: "status" }, "Working…"),
       error && h("p", { role: "alert" }, error),
       report && h("p", { role: report.valid ? "status" : "alert" },
-        report.valid ? "Validation passed." : report.topology_error
-          ? "Owner topology conflict (" + report.topology_error.replaceAll("_", " ") + ")."
+        report.valid ? "Validation passed." : report.topology_error === "owner_topology_changed"
+          ? "Owner topology conflict. Keep the accepted General REL, PHY, and dedicated project owners when adding project RELs."
+          : report.topology_error
+            ? "Owner topology conflict (" + report.topology_error.replaceAll("_", " ") + ")."
           : "Validation failed. Check the rejected files."));
   }
 
@@ -1515,7 +1757,7 @@ function createReliquarySurface(options) {
   "use strict";
 
   /** @type {import("../types").CreateReliquarySurface} */
-  function createSurface({ authedFetch, pickOpenPath, mutationBlockReason, surfaceLabel }) {
+  function createSurface({ authedFetch, pickOpenPath, pickSavePath, mutationBlockReason, surfaceLabel }) {
     const { React, hooks, components } = root.ReliquaryDashboardHost;
     const h = React.createElement;
     const { Button, Input } = components;
@@ -1525,8 +1767,9 @@ function createReliquarySurface(options) {
     const { OwnerContent } = root.ReliquaryDashboardOwner;
     const { createLiveMutation } = root.ReliquaryDashboardLive;
 
-    /** @param {{client: import("../types").DashboardClient, configPath: string | null, blockReason?: string}} props */
-    function DashboardTab({ client, configPath, blockReason }) {
+    /** @param {{client: import("../types").DashboardClient, configPath: string | null,
+     *   blockReason?: string, onManageSetup(): void}} props */
+    function DashboardTab({ client, configPath, blockReason, onManageSetup }) {
       const [write] = useState(() => blockReason ? undefined : createLiveMutation(authedFetch));
       const [sessionId, setSessionId] = useState(/** @type {string | null} */ (null));
       const [sessionInput, setSessionInput] = useState("");
@@ -1570,7 +1813,8 @@ function createReliquarySurface(options) {
         h("header", { className: "rly-header" }, h("div", null,
           h("p", { className: "rly-eyebrow" }, surfaceLabel),
           h("h1", null, "Reliquary Memory"),
-          h("p", { className: "rly-subtitle" }, "Configured owners in this Hermes profile"))),
+          h("p", { className: "rly-subtitle" }, "Configured owners in this Hermes profile")),
+          h(Button, { type: "button", onClick: onManageSetup }, "Manage memory setup")),
         blockReason && h("p", { className: "rly-live-notice", role: "note" }, blockReason),
         refreshing && h("p", { className: "rly-refreshing", role: "status" },
           write ? "Refreshing owner binding. Writes are paused until it completes." : "Refreshing owner binding."),
@@ -1633,6 +1877,7 @@ function createReliquarySurface(options) {
     return function ReliquarySurface() {
       const [client] = useState(() => root.ReliquaryDashboardLive.createLiveClient(authedFetch));
       const [attempt, setAttempt] = useState(0);
+      const [managing, setManaging] = useState(false);
       const [snapshot, setSnapshot] = useState(/** @type {{
         attempt:number, status?:import("../types").SetupStatus, error?:string
       } | null} */ (null));
@@ -1653,15 +1898,19 @@ function createReliquarySurface(options) {
 
       const current = snapshot?.attempt === attempt ? snapshot : null;
       const blockReason = current?.status && mutationBlockReason?.(current.status);
-      if (current?.status?.configured) return h(DashboardTab, { client, configPath: current.status.config_path, blockReason });
+      if (current?.status?.configured && !managing) return h(DashboardTab, {
+        client, configPath: current.status.config_path, blockReason, onManageSetup: () => setManaging(true),
+      });
       return h("section", { className: "rly-dashboard", "aria-label": current?.status ? "Reliquary setup" : "Reliquary" },
         h("header", { className: "rly-header" }, h("div", null,
           h("p", { className: "rly-eyebrow" }, surfaceLabel),
-          h("h1", null, current?.status ? "Set up Reliquary" : "Reliquary Memory"),
-          current?.status && h("p", { className: "rly-subtitle" }, "Connect existing Reliquary owners to this Hermes profile."))),
+          h("h1", null, current?.status?.configured ? "Manage memory setup"
+            : current?.status ? "Set up Reliquary" : "Reliquary Memory"),
+          current?.status && h("p", { className: "rly-subtitle" }, "Select or create Reliquary owners for this Hermes profile.")),
+          current?.status?.configured && h(Button, { type: "button", onClick: () => setManaging(false) }, "Back to dashboard")),
         blockReason && h("p", { className: "rly-live-notice", role: "note" }, blockReason),
-        current?.status ? h(Onboarding, { status: current.status, setup, pickOpenPath,
-          mutationsEnabled: !blockReason, onConnected: refresh }) :
+        current?.status ? h(Onboarding, { status: current.status, setup, pickOpenPath, pickSavePath,
+          mutationsEnabled: !blockReason, onConnected: () => { setManaging(false); refresh(); } }) :
           current?.error ? h("div", { role: "alert" },
             h("p", null, current.error), h(Button, { type: "button", onClick: refresh }, "Retry setup status")) :
             h("p", { role: "status" }, "Checking Reliquary setup…"));
@@ -1687,6 +1936,8 @@ const nativeWriteNotice = "This Hermes build does not yet support secure Desktop
   "Use the Reliquary web dashboard for setup and write management.";
 const methods = new Map([
   ["/setup-v1/status", "GET"],
+  ["/setup-v1/projects", "GET"],
+  ["/setup-v1/create", "POST"],
   ["/setup-v1/validate", "POST"],
   ["/setup-v1/apply", "POST"],
   ["/dashboard-v1", "POST"],
@@ -1700,6 +1951,19 @@ const pickers = {
 function httpStatus(error) {
   const status = error?.statusCode ?? Number(/(?:^|: )([45][0-9]{2}):/.exec(error?.message ?? "")?.[1]);
   return Number.isInteger(status) && status >= 400 && status <= 599 ? status : 503;
+}
+
+function setupFailure(error) {
+  // Electron's REST bridge preserves the HTTP response text in the Error message.
+  // Keep only a short typed detail for the shared client's message allowlist.
+  const text = /(?:^|: )[45][0-9]{2}: (\{[^\n]{0,256}\})$/.exec(error?.message ?? "")?.[1];
+  if (!text) return null;
+  try {
+    const { detail } = JSON.parse(text);
+    return typeof detail === "string" && /^[a-z_]{1,64}$/.test(detail) ? { detail } : null;
+  } catch {
+    return null;
+  }
 }
 
 function restResponse(status, value = null) {
@@ -1724,7 +1988,7 @@ function dashboardTransport(ctx, current) {
       // The SDK resolves the active backend and profile before dispatch.
       response = restResponse(200, await ctx.rest(suffix, options));
     } catch (error) {
-      response = restResponse(httpStatus(error));
+      response = restResponse(httpStatus(error), suffix.startsWith("/setup-v1/") ? setupFailure(error) : null);
     }
     checkScope();
     return response;
@@ -1759,6 +2023,12 @@ function ReliquaryPane({ ctx }) {
       async pickOpenPath(kind) {
         if (!current()) return null;
         const path = await ctx.os.pickOpenPath(pickers[kind]);
+        return current() ? path : null;
+      },
+      async pickSavePath(kind) {
+        if (!current()) return null;
+        const options = { ...pickers[kind], title: "Create a Reliquary " + kind };
+        const path = await ctx.os.pickSavePath(options);
         return current() ? path : null;
       },
       mutationBlockReason: (status) => status.desktop_native_mutations === true ? undefined : nativeWriteNotice,

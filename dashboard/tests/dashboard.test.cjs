@@ -299,6 +299,26 @@ test("setup client uses the admitted Hermes transport and redacts unknown failur
   assert.equal(calls[0][1].signal, signal);
 });
 
+test("project inventory, host browsing and confirmed creation use bounded setup operations", async () => {
+  const inventory = { projects: [{ id: "project-real", name: "Real Hermes project" }], routing_available: false };
+  const path = "C:/Hermes home/test.rel";
+  const request = { kind: "project_rel", path, project_id: inventory.projects[0].id };
+  const listing = { path: "C:/Hermes home", parent: null, truncated: false,
+    entries: [{ kind: "file", name: "test.rel", path }] };
+  const created = { accepted: true, opened: true, owner_id: "REL1", scope: "project", kind: "rel", path };
+  const replies = [inventory, listing, created, { ...inventory, projects: [...inventory.projects, ...inventory.projects] }];
+  const calls = [];
+  const setup = createSetupClient(async (url, init) => { calls.push([url, init]); return Response.json(replies.shift()); });
+  assert.deepEqual(await setup.projects(signal), inventory);
+  assert.deepEqual(await setup.browse("rel", listing.path, signal), listing);
+  assert.deepEqual(await setup.create(request, signal), created);
+  await assert.rejects(setup.projects(signal), /invalid_setup_response/);
+  assert.deepEqual(calls.slice(0, 3).map(([url, init]) => [url.split("setup-v1/")[1], init.method]), [
+    ["projects", "GET"], ["browse?kind=rel&path=C%3A%2FHermes+home", "GET"], ["create", "POST"],
+  ]);
+  assert.deepEqual(JSON.parse(calls[2][1].body), request);
+});
+
 test("a missing or non-boolean Desktop capability preserves setup status and fails closed", async () => {
   const status = { configured: true, runtime_detected: true, config_path: null, defaults: { projects: {} } };
   for (const value of [undefined, false, "true", 1]) {
@@ -355,6 +375,7 @@ function renderHostSurface(status, mutationBlockReason, owner = general) {
 }
 
 function findElement(tree, match) {
+  if (Array.isArray(tree)) return tree.map((child) => findElement(child, match)).find(Boolean);
   if (typeof tree !== "object" || tree === null) return undefined;
   if (match(tree)) return tree;
   return (tree.children ?? []).map((child) => findElement(child, match)).find(Boolean);
@@ -365,7 +386,7 @@ const setupStatus = { configured: false, runtime_detected: true, desktop_native_
   defaults: { projects: {}, main_rel: "C:/work/main.rel", active_phy: "C:/work/active.phy", config_path: null } };
 const notice = (element) => element.props?.className === "rly-live-notice";
 
-test("Desktop setup keeps browsing available but disables unsupported validation and apply", async () => {
+test("Desktop setup keeps browsing available but disables unsupported writes", async () => {
   for (const [status, policy] of [[setupStatus, hostPolicy],
     [{ ...setupStatus, desktop_native_mutations: true }, hostPolicy], [setupStatus, undefined]]) {
     const { surface, calls } = renderHostSurface(status, policy);
@@ -377,11 +398,13 @@ test("Desktop setup keeps browsing available but disables unsupported validation
     assert.ok(findElement(form, (element) => element.type === sdkControls.Input && element.props.value === "C:/work/main.rel"));
     assert.equal(findElement(form, (element) => element.type === "input" || element.type === "button"), undefined);
     assert.equal(button("Validate").props.disabled, blocked);
-    assert.equal(button("Connect Reliquary").props.disabled, blocked);
-    await findElement(form, (element) => element.props?.["aria-label"] === "Browse for Main REL path").props.onClick();
+    assert.equal(button("Create REL").props.disabled, blocked);
+    assert.equal(button("Review and connect").props.disabled, true);
+    assert.ok(button("Create Hermes project"));
+    assert.equal(button("Add project REL"), undefined);
+    await button("Select REL").props.onClick();
     await button("Validate").props.onClick();
-    findElement(form, (element) => element.type === "form").props.onSubmit({ preventDefault() {} });
-    assert.deepEqual(calls, blocked ? ["REL"] : ["REL", "validate", "apply"]);
+    assert.deepEqual(calls, blocked ? ["REL"] : ["REL", "validate"]);
   }
 });
 
