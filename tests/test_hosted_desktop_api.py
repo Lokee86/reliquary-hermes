@@ -64,7 +64,6 @@ def test_hosted_desktop_compatibility(tmp_path, hosted_checkout, binaries, monke
     homes = {"default": launch, "secondary": launch / "profiles/secondary"}
     owners = {}
     community_rel = os.environ.get("HU06_COMMUNITY_REL")
-    project = None
     for profile, home in homes.items():
         if plugin_artifact is None:
             _stage_plugin(home)
@@ -76,14 +75,15 @@ def test_hosted_desktop_compatibility(tmp_path, hosted_checkout, binaries, monke
                 assert file_digest(actual, "sha256").digest() == file_digest(expected, "sha256").digest()
             (home / "config.yaml").write_text("plugins:\n  enabled: [reliquary-hermes]\n", encoding="utf-8")
         main, phy = home / "main.rel", home / "active.phy"
-        owners[profile] = {"main": owner(cli, "rel", main, "unspecified"), "phy": owner(cli, "phy", phy)}
         if profile == "default" and community_rel:
-            project = home / "project.rel"
-            copyfile(community_rel, project)
-            result = subprocess.check_output([str(cli), "rel", "community", "list", str(project)], timeout=10)
+            copyfile(community_rel, main)
+            result = subprocess.check_output([str(cli), "rel", "community", "list", str(main)], timeout=10)
             page = json.loads(result)["page"]
             assert any(item["value"]["current"] for item in page["items"]), "Community fixture has no current partition"
-            owners[profile]["project"] = bytes(page["cut"]["owner_id"]).hex()
+            main_id = bytes(page["cut"]["owner_id"]).hex()
+        else:
+            main_id = owner(cli, "rel", main, "unspecified")
+        owners[profile] = {"main": main_id, "phy": owner(cli, "phy", phy)}
     (launch / "config.yaml").write_text("plugins:\n  enabled: [reliquary-hermes]\n  isolation: host\n", encoding="utf-8")
 
     script = """
@@ -143,8 +143,6 @@ with ExitStack() as stack:
         params = {} if profile == "default" else {"profile": profile}
         other = "secondary" if profile == "default" else "default"
         candidate = {"main_rel": str(selected / "main.rel"), "active_phy": str(selected / "active.phy")}
-        if profile == "default" and fixture["community_project"]:
-            candidate["projects"] = {"community": fixture["community_project"]}
         ticket = grant(profile)
         status = client.get(setup_api + "/status", headers=ticket, params=params)
         reported = reply(status)
@@ -167,7 +165,8 @@ with ExitStack() as stack:
         assert client.post(setup_api + "/apply", headers=grant(profile), params={"profile": other},
                            json=candidate).status_code == 403
         assert not (selected / "reliquary/owners.json").exists()
-        assert reply(client.post(setup_api + "/validate", headers=same_origin, params=params, json=candidate))["valid"]
+        web_validation = reply(client.post(setup_api + "/validate", headers=same_origin, params=params, json=candidate))
+        assert web_validation["valid"], web_validation
         if not native_mutations:
             for action in ("validate", "apply"):
                 blocked = client.post(setup_api + "/" + action, headers=grant(profile), params=params, json=candidate)
@@ -187,6 +186,19 @@ with ExitStack() as stack:
         assert {row["owner_id"] for row in owners} == set(fixture["owners"][profile].values())
         main = next(row for row in owners if row["owner_id"] == fixture["owners"][profile]["main"])
         assert main["capabilities"]["manage"]
+        if profile == "default" and fixture["community_seeded"]:
+            list_communities = {**fixture["request"], "operation": "ui.community_list",
+                                **{key: main[key] for key in ("owner_id", "generation", "cut")},
+                                "arguments": {"cursor": None, "limit": 128}}
+            listed = reply(client.post(dashboard, headers=grant(profile), params=params, json=list_communities))
+            assert listed["status"] == "ok", listed
+            community = listed["result"]["communities"]["items"][0]
+            rename = {**list_communities, "operation": "ui.community_rename", "idempotency_key": "rename",
+                      "expected_revision": community["generation"],
+                      "arguments": {"community_id": community["community_id"], "name": "HU06 hosted proof"}}
+            renamed = reply(client.post(dashboard, headers=writer(profile), params=params, json=rename))
+            assert renamed["status"] == "ok" and renamed["result"]["committed"]["name"] == "HU06 hosted proof", renamed
+            main = renamed["binding"]
         mutation = {**fixture["request"], "request_id": "hosted-write", "operation": "ui.memory_create",
                     **{key: main[key] for key in ("owner_id", "generation", "cut")}, "idempotency_key": "native-create",
                     "arguments": {"title": "Hosted Desktop proof", "body": "Synthetic profile-scoped note.",
@@ -252,20 +264,6 @@ with ExitStack() as stack:
         unlinked = reply(client.post(dashboard, headers=writer(profile), params=params, json=unlink))
         assert unlinked["status"] == "ok" and not unlinked["result"]["committed"]["active"], unlinked
 
-        if "project" in fixture["owners"][profile]:
-            project = next(row for row in owners if row["owner_id"] == fixture["owners"][profile]["project"])
-            list_communities = {**fixture["request"], "operation": "ui.community_list",
-                                **{key: project[key] for key in ("owner_id", "generation", "cut")},
-                                "arguments": {"cursor": None, "limit": 128}}
-            listed = reply(client.post(dashboard, headers=grant(profile), params=params, json=list_communities))
-            assert listed["status"] == "ok", listed
-            community = listed["result"]["communities"]["items"][0]
-            rename = {**list_communities, "operation": "ui.community_rename", "idempotency_key": "rename",
-                      "expected_revision": community["generation"],
-                      "arguments": {"community_id": community["community_id"], "name": "HU06 hosted proof"}}
-            renamed = reply(client.post(dashboard, headers=writer(profile), params=params, json=rename))
-            assert renamed["status"] == "ok" and renamed["result"]["committed"]["name"] == "HU06 hosted proof", renamed
-
     workers = {manager.home_path: manager._plugin_host_instance for manager in plugins._known_plugin_managers()
                if getattr(manager, "_plugin_host_instance", None) is not None}
     assert set(homes.values()) <= workers.keys(), workers
@@ -286,7 +284,7 @@ with ExitStack() as stack:
                                     stdout=output, stderr=subprocess.STDOUT,
                                     input=json.dumps({"owners": owners, "request": _request(),
                                                       "native_mutations": native_mutations,
-                                                      "community_project": str(project) if project else None}), timeout=150)
+                                                      "community_seeded": bool(community_rel)}), timeout=150)
         assert result.returncode == 0, log.read_text(encoding="utf-8", errors="replace")
     finally:
         for home in homes.values():
