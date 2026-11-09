@@ -85,8 +85,11 @@
         return h("li", { key: index },
           h("strong", null, source.label),
           h("span", null, source.profile_namespace + " · Session " + source.session_id + " · Message " + source.message_uid),
-          h("span", null, "UTF-8 bytes " + source.range.start_byte + "–" + source.range.end_byte),
-          h("blockquote", null, source.range.text));
+          source.range
+            ? h("div", null,
+                h("span", null, "UTF-8 bytes " + source.range.start_byte + "–" + source.range.end_byte),
+                h("blockquote", null, source.range.text))
+            : h("span", { className: "rly-muted" }, "Exact grounding quote span unavailable."));
       }
       if (source.kind === "user_origin") {
         return h("li", { key: index }, h("strong", null, "User-origin record"),

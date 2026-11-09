@@ -76,7 +76,7 @@ export interface HermesSnapshotSource {
   branch_id: string | null;
   source_revision: string | null;
   content_digest: string;
-  range: { start_byte: string; end_byte: string; text: string };
+  range: { start_byte: string; end_byte: string; text: string } | null;
 }
 
 export interface UserOriginSource {

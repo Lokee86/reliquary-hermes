@@ -221,7 +221,7 @@ def test_unavailable_historical_body_is_never_replaced_by_current_content(availa
         check(req, resp)
 
 
-def test_detail_and_provenance_bind_exact_requested_revision_and_source_range():
+def test_detail_and_provenance_bind_exact_requested_revision_and_validate_source_range_when_present():
     req, resp = request("ui.memory_detail"), response("ui.memory_detail")
     resp["result"] = detail("2")
     with pytest.raises(ContractError, match="historical_revision_mismatch"):
@@ -230,6 +230,9 @@ def test_detail_and_provenance_bind_exact_requested_revision_and_source_range():
     resp["result"]["sources"][0]["range"]["end_byte"] = "6"
     with pytest.raises(ContractError, match="source_range_mismatch"):
         check(req, resp)
+    resp = response("ui.provenance")
+    resp["result"]["sources"][0]["range"] = None
+    assert check(req, resp).value["result"]["sources"][0]["range"] is None
 
 
 def test_source_denial_is_typed_and_does_not_disclose_source_identity():

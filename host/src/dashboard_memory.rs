@@ -2,8 +2,8 @@
 
 use super::{DashboardError, DashboardPage};
 use reliquary_memory::{
-    InspectionCursor, InspectionCut, InspectionItem, InspectionQuery, Instance, MemoryId,
-    MemoryListFilters, MemoryListLifecycle, OwnerId, OwnerKind,
+    HERMES_COPIED_SOURCE_FORMAT, InspectionCursor, InspectionCut, InspectionItem, InspectionQuery,
+    Instance, MemoryId, MemoryListFilters, MemoryListLifecycle, OwnerId, OwnerKind,
 };
 use serde_json::{Value, json};
 
@@ -240,29 +240,34 @@ fn history(
                 "unexpected_memory_history_projection",
             ));
         };
-        // Direct user-origin records carry the exact creation timestamp.
-        // For imported records the source time is a Hermes turn timestamp.
-        let metadata = provenance(
-            instance,
-            owner,
-            kind,
-            &json!({
-                "memory_id": memory.id, "revision": memory.revision.to_string(),
-            }),
-        )
-        .map_err(|error| {
-            if error.code == "source_range_unavailable" {
-                DashboardError::unavailable("history_creation_time_unavailable")
-            } else {
-                error
-            }
-        })?;
-        if metadata.cut != page.cut {
+        // Creation time belongs to the exact Memory revision and is exposed by
+        // Root provenance independently of source availability or quote ranges.
+        let provenance_page = instance
+            .inspect_owner(
+                owner,
+                kind,
+                &InspectionQuery::Provenance {
+                    id,
+                    revision: Some(memory.revision),
+                },
+                None,
+                1,
+            )
+            .map_err(DashboardError::product)?;
+        if provenance_page.cut != page.cut {
             return Err(DashboardError::stale("owner_cut_changed"));
         }
-        let created_at = metadata.result["sources"][0]["created_at_ms"]
-            .as_str()
-            .ok_or_else(|| DashboardError::unavailable("history_creation_time_unavailable"))?;
+        let Some(InspectionItem::Provenance(metadata)) = provenance_page.items.first() else {
+            return Err(DashboardError::unavailable(
+                "history_creation_time_unavailable",
+            ));
+        };
+        if metadata.created_at_ns < 0 {
+            return Err(DashboardError::unavailable(
+                "history_creation_time_unavailable",
+            ));
+        }
+        let created_at = (metadata.created_at_ns / 1_000_000).to_string();
         revisions.push(json!({
             "revision": memory.revision.to_string(), "body_id": memory.body_id,
             "availability": if memory.payload_available { "available" } else { "missing" },
@@ -390,10 +395,35 @@ fn provenance(
         reliquary_memory::SourceAvailability::Terminal => vec![unavailable_source("deleted")],
         reliquary_memory::SourceAvailability::Absent
         | reliquary_memory::SourceAvailability::Unavailable => vec![unavailable_source("missing")],
-        // Root retains a source turn, but currently exposes no authoritative byte range
-        // for its grounding quote. Never substitute the full turn or invent offsets.
+        // Root retains the accepted imported Hermes source identity and source
+        // snapshot digest, but not an authoritative byte range for the grounding
+        // quote. Return the real provenance and make only the range unavailable.
         reliquary_memory::SourceAvailability::Available => {
-            return Err(DashboardError::unavailable("source_range_unavailable"));
+            let Some(turn) = provenance.source_turn.as_ref() else {
+                return Err(DashboardError::unavailable("provenance_unavailable"));
+            };
+            match turn.imported.as_ref() {
+                Some(imported) if imported.format == HERMES_COPIED_SOURCE_FORMAT => {
+                    let profile = hermes_profile_namespace(&imported.namespace)
+                        .ok_or_else(|| DashboardError::unavailable("provenance_unavailable"))?;
+                    let source_revision = imported
+                        .message_revision
+                        .strip_prefix("hermes-snapshot-revision:")
+                        .map(str::to_owned);
+                    vec![json!({
+                        "kind": "hermes_snapshot",
+                        "label": "Hermes source / copied snapshot",
+                        "profile_namespace": profile,
+                        "session_id": imported.conversation_id,
+                        "message_uid": imported.message_id,
+                        "branch_id": imported.source_branch_id,
+                        "source_revision": source_revision,
+                        "content_digest": hex_id(&imported.source_digest),
+                        "range": Value::Null,
+                    })]
+                }
+                _ => vec![unavailable_source("missing")],
+            }
         }
     };
     Ok(DashboardPage {
@@ -405,6 +435,14 @@ fn provenance(
 
 fn unavailable_source(reason: &str) -> Value {
     json!({"kind": "source_unavailable", "reason": reason})
+}
+
+fn hermes_profile_namespace(namespace: &str) -> Option<&str> {
+    namespace
+        .strip_prefix("hermes/profile/")?
+        .rsplit_once("/principal-")
+        .map(|(profile, _)| profile)
+        .filter(|profile| !profile.is_empty() && !profile.contains('/'))
 }
 
 fn limit(args: &Value) -> Result<usize, DashboardError> {

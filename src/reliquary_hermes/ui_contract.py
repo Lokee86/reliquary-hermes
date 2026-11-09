@@ -31,7 +31,7 @@ def _unique(values, key):
 
 def _sources(values):
     for source in values:
-        if source["kind"] == "hermes_snapshot":
+        if source["kind"] == "hermes_snapshot" and source["range"] is not None:
             r = source["range"]
             require(int(r["end_byte"]) - int(r["start_byte"]) == len(r["text"].encode("utf-8")), "source_range_mismatch")
 

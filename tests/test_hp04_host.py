@@ -215,6 +215,49 @@ def test_hp04_processed_append_tombstones_both_exact_source_turns(tmp_path, bina
         assert client.deliver_source_job(extension) == extension_receipt
         assert outbox.acknowledge(extension, extension_receipt)
         assert client.deliver_source_job(initial) == initial_receipt
+
+        # HU04 regression: imported Memory history and Hermes provenance must
+        # remain inspectable even though the extraction quote byte span was not
+        # persisted by the Memory source reference.
+        topology = client.read_dashboard_topology(SESSION)
+        owner_row = next(row for row in topology["owners"] if row["owner_id"] == topology["session_owner_id"])
+        scope = {
+            "profile_id": PROFILE, "principal_id": topology["active_phy_id"], "session_id": SESSION,
+            "owner_id": owner_row["owner_id"], "generation": owner_row["generation"], "cut": owner_row["cut"],
+            "expected_revision": None, "idempotency_key": None,
+        }
+        listed = client.read_dashboard_request({
+            "protocol_version": 1, "request_id": "hu04-imported-list", "operation": "ui.memory_list",
+            **scope, "arguments": {"cursor": None, "limit": 10, "filters": {
+                "query": "", "category": None, "memory_type": None, "lifecycle": None, "community_id": None,
+            }},
+        }, None)["response"]
+        assert listed["status"] == "ok", listed
+        assert len(listed["result"]["items"]) == 2
+        for memory in listed["result"]["items"]:
+            history = client.read_dashboard_request({
+                "protocol_version": 1, "request_id": f"hu04-history-{memory['memory_id']}",
+                "operation": "ui.memory_history", **scope,
+                "arguments": {"memory_id": memory["memory_id"], "cursor": None, "limit": 10},
+            }, None)["response"]
+            assert history["status"] == "ok", history
+            revisions = history["result"]["revisions"]["items"]
+            assert revisions and all(revision["created_at_ms"].isdigit() for revision in revisions)
+
+            provenance = client.read_dashboard_request({
+                "protocol_version": 1, "request_id": f"hu04-provenance-{memory['memory_id']}",
+                "operation": "ui.provenance", **scope,
+                "arguments": {"memory_id": memory["memory_id"], "revision": memory["revision"]},
+            }, None)["response"]
+            assert provenance["status"] == "ok", provenance
+            [source] = provenance["result"]["sources"]
+            assert source["kind"] == "hermes_snapshot"
+            assert source["profile_namespace"] == PROFILE
+            assert source["session_id"] == SESSION
+            assert source["message_uid"] in {"accepted", "appended"}
+            assert len(source["content_digest"]) == 64
+            assert source["range"] is None
+
         outbox.terminal(SESSION, "delete")
         terminal = outbox.next_job(SESSION)
         terminal_receipt = _when_ready(client, terminal)

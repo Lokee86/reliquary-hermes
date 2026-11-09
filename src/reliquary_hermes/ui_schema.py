@@ -63,7 +63,7 @@ def build_schema():
     d["HermesProvenance"] = obj({"kind": {"const": "hermes_snapshot"}, "label": {"const": "Hermes source / copied snapshot"},
         "profile_namespace": ID, "session_id": ID, "message_uid": ID, "branch_id": nullable(ID),
         "source_revision": nullable(ID), "content_digest": DIGEST,
-        "range": obj({"start_byte": DECIMAL, "end_byte": DECIMAL, "text": TEXT})})
+        "range": nullable(obj({"start_byte": DECIMAL, "end_byte": DECIMAL, "text": TEXT}))})
     d["UnavailableProvenance"] = obj({"kind": {"const": "source_unavailable"},
         "reason": enum("unauthorized", "deleted", "stale", "missing", "pruned", "corrupt")})
     d["Provenance"] = {"oneOf": [ref("UserProvenance"), ref("HermesProvenance"), ref("UnavailableProvenance")]}
