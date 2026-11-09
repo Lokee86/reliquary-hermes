@@ -15,6 +15,7 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 pub(crate) const ATTACH: &str = "/v1/attach";
 pub(crate) const REQUEST: &str = "/v1/request";
 pub(crate) const SOURCE: &str = "/v1/source";
+pub(crate) const DASHBOARD_TOPOLOGY: &str = "/v1/dashboard/topology";
 
 pub(crate) struct TransportKey(hmac::Key);
 
@@ -196,6 +197,7 @@ fn parse_headers(bytes: &[u8], expected_host: &str) -> Result<RequestHeaders, Ht
         Some(ATTACH) => ATTACH,
         Some(REQUEST) => REQUEST,
         Some(SOURCE) => SOURCE,
+        Some(DASHBOARD_TOPOLOGY) => DASHBOARD_TOPOLOGY,
         _ => return Err(INVALID),
     };
     let fields = parsed.headers;

@@ -107,6 +107,60 @@ fn routes_persist_across_restart_and_keep_the_active_phy_independent() {
 }
 
 #[test]
+fn dashboard_topology_is_read_only_and_rejects_unbound_unknown_sessions() {
+    let fixture = Fixture::new();
+    let registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
+    let instance = registry.authenticate(TOKEN).unwrap();
+    let configured = registry
+        .dashboard_topology(&instance, Some("project-session"))
+        .unwrap();
+    assert_eq!(configured["owners"].as_array().unwrap().len(), 3);
+    assert_eq!(configured["active_phy_id"], fixture.phy_id.to_string());
+    assert_eq!(
+        configured["session_owner_id"],
+        fixture.project_id.to_string()
+    );
+    let main = &configured["owners"][0];
+    assert_eq!(main["owner_id"], fixture.main_id.to_string());
+    assert_eq!(main["owner_kind"], "REL");
+    assert_eq!(main["capabilities"]["view"], true);
+    assert_eq!(main["capabilities"]["manage"], false);
+    let root_cut = instance
+        .inspect_owner(
+            fixture.main_id,
+            OwnerKind::Rel,
+            &InspectionQuery::MemorySummaries(MemoryListFilters::default()),
+            None,
+            1,
+        )
+        .unwrap()
+        .cut;
+    let expected_generation =
+        u128::from_le_bytes(root_cut.generation[..16].try_into().unwrap()).to_string();
+    let expected_digest = Sha256::digest(serde_json::to_vec(&root_cut).unwrap());
+    assert_eq!(main["generation"], expected_generation);
+    assert_eq!(main["cut"], crate::service_http::hex(&expected_digest));
+    let before = std::fs::read_dir(fixture.state.join("sessions-v1"))
+        .unwrap()
+        .count();
+    assert_eq!(
+        registry
+            .dashboard_topology(&instance, Some("unbound-session"))
+            .unwrap_err()
+            .code(),
+        "unknown_session"
+    );
+    let after = std::fs::read_dir(fixture.state.join("sessions-v1"))
+        .unwrap()
+        .count();
+    assert_eq!(before, after);
+    assert_eq!(
+        registry.dashboard_topology(&instance, None).unwrap()["session_id"],
+        serde_json::Value::Null
+    );
+}
+
+#[test]
 fn separate_profiles_can_share_the_phy_but_cannot_share_the_rel_writer() {
     let fixture = Fixture::new();
     let mut first = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();

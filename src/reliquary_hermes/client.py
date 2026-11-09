@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from .authority import Discovery
 from .protocol import Request, Response
 from .validation import (ContractError, MAX_WIRE_BYTES, canonical, decode, digest,
-                         identifier, obj, require)
+                         identifier, obj, require, text)
 
 
 _DISCOVERY_FIELDS = set(Discovery.__dataclass_fields__)
@@ -221,6 +221,47 @@ class HostClient:
             if current is not None and current != previous:
                 return self._attach(current, session_id, deadline)
             time.sleep(min(0.03, remaining))
+
+    def read_dashboard_topology(self, session_id: str | None) -> dict:
+        """Read signed server-owned topology without attaching or starting the host."""
+        if session_id is not None:
+            identifier(session_id)
+        discovery = self._read_discovery()
+        if discovery is None:
+            raise HostUnavailable("host_unavailable")
+        body = canonical({"profile_id": self._profile_id, "principal_id": self._principal_id,
+                          "session_id": session_id})
+        reply = self._exchange(discovery, "/v1/dashboard/topology", body,
+                               time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS)
+        try:
+            result = obj(decode(reply), {"owners", "active_phy_id", "session_id", "session_owner_id"})
+            owners = result["owners"]
+            require(type(owners) is list and len(owners) <= 130, "invalid_topology")
+            for owner in owners:
+                obj(owner, {"owner_id", "owner_kind", "display_label", "generation", "cut", "capabilities"})
+                identifier(owner["owner_id"])
+                require(owner["owner_kind"] in {"REL", "PHY"}, "invalid_topology")
+                text(owner["display_label"], 128)
+                text(owner["generation"], 39)
+                identifier(owner["cut"])
+                obj(owner["capabilities"], {"view", "manage", "history", "provenance", "graph", "community",
+                    "status", "memory_create", "memory_edit", "memory_retire", "relation_edit", "community_rename"})
+                require(all(type(value) is bool for value in owner["capabilities"].values()), "invalid_topology")
+            ids = [owner["owner_id"] for owner in owners]
+            require(len(ids) == len(set(ids)), "invalid_topology")
+            phy = result["active_phy_id"]
+            session = result["session_id"]
+            session_owner = result["session_owner_id"]
+            require(phy is None or identifier(phy), "invalid_topology")
+            require(session is None or identifier(session), "invalid_topology")
+            require(session_owner is None or identifier(session_owner), "invalid_topology")
+            require(session == session_id, "topology_scope_mismatch")
+            if session_owner is not None:
+                owner = next((owner for owner in owners if owner["owner_id"] == session_owner), None)
+                require(owner is not None and owner["owner_kind"] == "REL", "invalid_topology")
+        except ContractError:
+            raise HostUnavailable("invalid_topology_response") from None
+        return result
 
     def deliver_source_job(self, job) -> str:
         """Deliver only scoped durable outbox work and verify the exact receipt."""

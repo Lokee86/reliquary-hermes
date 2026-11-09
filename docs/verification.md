@@ -168,7 +168,8 @@ $env:PYTHONPATH = $env:HP01_HERMES_CHECKOUT
 $env:PYTHONDONTWRITEBYTECODE = '1'
 $plugin = Join-Path $env:HERMES_HOME 'plugins\reliquary-hermes\dashboard'
 New-Item -ItemType Directory -Force -Path $plugin | Out-Null
-Copy-Item -LiteralPath 'dashboard/manifest.json', 'dashboard/dist' -Destination $plugin -Recurse
+node dashboard/scripts/build.cjs --fixture
+Copy-Item -LiteralPath 'host/.test-tmp/dashboard-fixture/manifest.json', 'host/.test-tmp/dashboard-fixture/dist' -Destination $plugin -Recurse
 @('plugins:', '  enabled: [reliquary-hermes]') | Set-Content -LiteralPath (Join-Path $env:HERMES_HOME 'config.yaml')
 python -B -c 'from hermes_cli.web_server import start_server; start_server(host="127.0.0.1", port=0, open_browser=False, isolated=True)'
 ```
@@ -188,6 +189,20 @@ The tab supports paged and filtered Memory lists, keyboard graph and list naviga
 The dashboard build and TypeScript check passed. Eight Node tests exercised the client, cursor scope and expiry, bounded graph pages, fixture selection, cancellation, and plugin registration. The full Python suite passed 383 tests with the pinned host probes and process binaries enabled, including 46 fixture response checks against the exported schema and canonical DTO correlation rules.
 
 The [Hermes browser smoke commands](#hu01-r1-dashboard-host-acceptance) also exercise HU02 on the exact v0.23.0 dashboard. The enabled Chrome run covers independent REL, session and PHY controls, empty and invalid-filter states, keyboard selection, list paging, pruned history, graph expansion, edge inspection, community navigation and the copied-source tombstone. The disabled run verifies that Hermes withholds the tab and assets. Live transport and owner authorization remain HU03 scope.
+
+## HU03 live owner and session discovery
+
+The first HU03 slice uses the live Hermes plugin route and signed Rust service for `ui.owner_sessions`. The server derives the owner set from the admitted profile's mounted topology. The route supports configured project sessions and durably attached general sessions. It preserves the dashboard-v1 response shape and resolves one session mapping per request.
+
+The pinned profile test mounts the live plugin in isolated launch and secondary profiles and runs both Rust services. It checks authentication, body identity spoofing, foreign-session denial, unknown and disabled profiles, and typed unsupported operations. The secondary request runs through the actual hosted plugin worker. Chrome on the exact Hermes v0.23.0 frontend passed live owner enumeration and both session lookups, plus denial of an unknown session. The separate fixture bundle passed the HU02 enabled and disabled browser checks.
+
+The dashboard build and TypeScript check passed, with 9 Node tests. The locked offline Rust host suite passed 19 tests. The full Python suite passed 387 tests with the pinned checkout and rebuilt host binary. The initial run hit `invalid_discovery` in the existing HP04 restart test on Windows. The test passed in isolation and in the full rerun.
+
+To repeat the two-profile proof, use the binaries and environment in [HP03 local process verification](#hp03-local-process-verification) with the current host build, then run:
+
+```powershell
+python -B -m pytest -q --basetemp .pytest_tmp tests/test_hu03_dashboard.py tests/test_dashboard_api.py
+```
 
 ## Remaining gates
 - HP04 catch-up requires an authorized source export and lifecycle replay interface for events that never reached the outbox.

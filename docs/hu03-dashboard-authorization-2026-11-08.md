@@ -3,7 +3,13 @@
 **Date:** 2026-11-08  
 **Status:** approved v1 authorization model; implementation may proceed.
 
-## Decision
+## Purpose
+
+Define the trust boundary for the live Reliquary dashboard in Hermes.
+
+## Overview
+
+### Decision
 
 HU03 does **not** require a new Reliquary user-account system, a separate dashboard credential, or separately provisioned owner grants.
 
@@ -71,3 +77,13 @@ HU03 authorization is no longer a design blocker. Implementation may proceed whe
 - it constructs `VerifiedUIContext` from configured topology and active PHY;
 - it keeps the service credential server-side;
 - `ui.owner_sessions` proves browser owner/profile spoofing cannot widen the returned set.
+
+## Related docs
+
+- [Dashboard DTO contract](ui-contract.md)
+- [Service protocol](protocol.md)
+- [Stable Hermes audit](host-audit.md)
+
+## Notes
+
+The dashboard-v1 response returns the mapping for the requested or host-selected session. The first live slice accepts exact configured project sessions and durably attached general sessions. With no session selection it returns the configured owners and active PHY with null session fields.

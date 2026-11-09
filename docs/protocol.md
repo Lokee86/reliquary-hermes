@@ -24,6 +24,14 @@ The provider channel denies user edits. Dashboard edits require a separately aut
 
 An ambiguous discovery probe reports unavailable. A missing discovery file or literal connection refusal can start a candidate. The candidate must acquire the service lease before opening any writable Root owner. The host uses existing Root writer conflicts across separate service profiles.
 
+## Dashboard owner discovery
+
+The Hermes plugin admits the request through the pinned dashboard authentication guard and uses the host-bound profile home to read that integration's settings. In-process routes use the stamped secret scope. Hosted routes use the profile worker's launch home after private IPC admission. The browser sends the existing `ui.owner_sessions` envelope. The plugin uses the configured profile and the active PHY stable ID for `VerifiedUIContext`. Its private service request uses the configured service principal and credential.
+
+`POST /v1/dashboard/topology` uses the existing signed loopback framing and accepts exactly `profile_id`, `principal_id`, and nullable `session_id`. It returns only configured owner bindings, the active PHY ID, and the selected session's exact REL mapping. A configured project session may be looked up before attachment. A general session requires a durable attach record. A read never creates a binding or starts the service.
+
+Owner metadata comes from bounded public Root inspection. The decimal generation is the little-endian 128-bit prefix of Root's generation. The cut binds the full Root inspection cut and generation by SHA-256. Browser pages are at most 128 owners, and continuations bind the authenticated scope, arguments, and owner cuts. The dashboard advertises the enumeration view capability in this slice.
+
 ## Request envelope
 
 Every request has exactly these fields:

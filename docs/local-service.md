@@ -56,6 +56,10 @@ To enable native processing, create a private `<hermes_home>/reliquary/processin
 
 Recovery replays work that reached the outbox. The audited Hermes export redacts differently from the provider egress and can include rows without a completed text-only callback. Missing callbacks and terminal notifications therefore remain unavailable for catch-up. The pinned Gateway and dashboard deliberate delete paths reach the post-commit observer. Dispatch can fail open, so a delivered notification is the boundary of automatic recovery. Same-session rewind and edited or ambiguous overlaps remain fenced pending authoritative reconciliation.
 
+## Dashboard owner discovery
+
+Install the integration Python package in the pinned Hermes environment and stage the live dashboard manifest, router and bundle under the selected profile's user plugin directory. Enable the Reliquary plugin in that profile. Open an attached Hermes provider session to start the configured service. The dashboard discovers that service for the request's admitted profile and lists configured owners. Enter a configured project session ID or a durably attached general session ID to resolve its REL.
+
 ## Limits
 
 Recall, prefetch and model tools begin in HP05. Dashboard mutations require the later authenticated user channel. Setup uses existing Root owners and registry routing. Hermes workspace names, display names and caller-provided owner IDs convey no routing authority.

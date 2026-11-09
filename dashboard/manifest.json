@@ -1,7 +1,8 @@
 {
   "name": "reliquary-hermes",
   "label": "Reliquary",
-  "description": "Owner-scoped Reliquary dashboard contract shell",
+  "api": "plugin_api.py",
+  "description": "Reliquary owners and session scope",
   "icon": "Database",
   "version": "0.1.0",
   "tab": {

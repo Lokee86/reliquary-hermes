@@ -292,7 +292,8 @@ class VerifiedUIContext:
 
     def bindings(self):
         values = json.loads(self.owner_bindings_json)
-        require(type(values) is list and len(values) <= 128, "invalid_ui_grants")
+        # The configured topology allows 128 project RELs, a main REL, and the active PHY.
+        require(type(values) is list and len(values) <= 130, "invalid_ui_grants")
         for owner in values:
             _validate("OwnerBinding", owner)
             if owner["owner_kind"] == "PHY":

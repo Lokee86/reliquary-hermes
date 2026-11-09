@@ -2,23 +2,32 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
-const outputDir = path.resolve(root, "dist");
-if (!outputDir.startsWith(root + path.sep)) throw new Error("Refusing output outside dashboard package.");
+const args = process.argv.slice(2);
+const fixtureMode = args.length === 1 && args[0] === "--fixture";
+if (args.length && !fixtureMode) throw new Error("Usage: node dashboard/scripts/build.cjs [--fixture]");
 
-const fixturePath = path.resolve(root, "fixtures", "mock-responses.json");
-const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
-const sources = ["src/client.js", "src/fixtures.js", "src/state.js", "src/views.js", "src/graph.js", "src/index.js"];
-const sourceText = sources.map((name) => {
-  const file = path.resolve(root, name);
-  if (!file.startsWith(root + path.sep)) throw new Error(`Refusing source outside dashboard package: ${name}`);
-  return fs.readFileSync(file, "utf8");
-});
+const packageDir = fixtureMode ? path.resolve(root, "../host/.test-tmp/dashboard-fixture") : root;
+const outputDir = path.join(packageDir, "dist");
+const sources = fixtureMode
+  ? ["client.js", "fixtures.js", "state.js", "views.js", "graph.js", "index.js"]
+  : ["client.js", "live_transport.js", "state.js", "views.js", "live.js"];
+const sourceText = sources.map((name) => fs.readFileSync(path.join(root, "src", name), "utf8"));
 const forbidden = /@tauri-apps|@hermes\/plugin-sdk|\binvoke\s*\(|__HERMES_SESSION_TOKEN__/;
 if (forbidden.test(sourceText.join("\n"))) throw new Error("Dashboard source includes a forbidden native, direct invoke, or credential surface.");
 
-const fixtureScript = `(function (root) { root.ReliquaryDashboardFixture = ${JSON.stringify(fixture)}; })(globalThis);`;
-const bundle = ["/* Generated from src/ with synthetic fixture data. Rebuild with node scripts/build.cjs. */", fixtureScript, ...sourceText].join("\n\n");
+const bundle = ["/* Generated from dashboard/src. Rebuild with node dashboard/scripts/build.cjs. */"];
+if (fixtureMode) {
+  const fixture = JSON.parse(fs.readFileSync(path.join(root, "fixtures", "mock-responses.json"), "utf8"));
+  bundle.push(`(function (root) { root.ReliquaryDashboardFixture = ${JSON.stringify(fixture)}; })(globalThis);`);
+}
+bundle.push(...sourceText);
+
 fs.mkdirSync(outputDir, { recursive: true });
-fs.writeFileSync(path.join(outputDir, "index.js"), bundle, "utf8");
-fs.copyFileSync(path.resolve(root, "styles.css"), path.join(outputDir, "style.css"));
-console.log(`Built ${path.relative(root, path.join(outputDir, "index.js"))} and style.css from mock-only sources.`);
+fs.writeFileSync(path.join(outputDir, "index.js"), bundle.join("\n\n"), "utf8");
+fs.copyFileSync(path.join(root, "styles.css"), path.join(outputDir, "style.css"));
+if (fixtureMode) {
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
+  delete manifest.api;
+  fs.writeFileSync(path.join(packageDir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
+}
+console.log(`Built ${fixtureMode ? "fixture" : "live"} dashboard in ${outputDir}.`);

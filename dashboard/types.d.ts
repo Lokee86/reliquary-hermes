@@ -326,6 +326,7 @@ export interface HostReact {
 export interface HermesDashboardSDK {
   sdkVersion: string;
   React: HostReact;
+  authedFetch(url: string, init?: RequestInit): Promise<Response>;
   hooks: {
     useState<T>(initial: T | (() => T)): [T, (next: T | ((current: T) => T)) => void];
     useEffect(effect: () => void | (() => void), dependencies: readonly unknown[]): void;
@@ -364,6 +365,9 @@ declare global {
     MemoryList(props: { items: MemorySummary[]; selected: string | null; onSelect: (memoryId: string) => void }): unknown;
     Inspector(props: { client: DashboardClient; scope: ReadScope; memoryId: string }): unknown;
     Status(props: { client: DashboardClient; scope: ReadScope }): unknown;
+  };
+  var ReliquaryDashboardLive: {
+    createLiveClient(authedFetch: HermesDashboardSDK["authedFetch"]): DashboardClient;
   };
   var ReliquaryDashboardFixture: DashboardFixture;
 }

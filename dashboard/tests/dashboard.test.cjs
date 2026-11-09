@@ -5,6 +5,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 const { createClient } = require("../src/client.js");
 const { createFixtureClient } = require("../src/fixtures.js");
+const { createLiveClient } = require("../src/live_transport.js");
 const fixture = require("../fixtures/mock-responses.json");
 
 const general = fixture.owner_sessions["fixture-session"][0].result.owners.items.find((owner) => owner.owner_id === "fixture-rel");
@@ -147,20 +148,50 @@ test("late results from transports that ignore cancellation are discarded", asyn
   assert.equal((await pendingScope).status, "conflict");
 });
 
-test("manifest bundle registers a tab with the host SDK and ships no service transport", () => {
+test("live and fixture builds register separately with the host SDK", () => {
   const dashboard = path.resolve(__dirname, "..");
   const manifest = require("../manifest.json");
   assert.equal(manifest.tab.path, "/reliquary");
-  assert.equal(manifest.api, undefined);
+  assert.equal(manifest.api, "plugin_api.py");
   assert.ok(fs.existsSync(path.join(dashboard, manifest.css)));
   const bundle = fs.readFileSync(path.join(dashboard, manifest.entry), "utf8");
   assert.doesNotMatch(bundle, /@tauri-apps|@hermes\/plugin-sdk|__HERMES_SESSION_TOKEN__|\bfetch\s*\(/);
+  assert.doesNotMatch(bundle, /fixture-rel-memory|Synthetic fixture only/);
   let registration;
   const window = {
-    __HERMES_PLUGIN_SDK__: { sdkVersion: "1.1.0", React: { createElement() {} }, hooks: {} },
+    __HERMES_PLUGIN_SDK__: { sdkVersion: "1.1.0", React: { createElement() {} }, hooks: {}, authedFetch() {} },
     __HERMES_PLUGINS__: { register: (name, component) => { registration = { name, component }; } },
   };
   vm.runInNewContext(bundle, { window }, { filename: manifest.entry });
   assert.equal(registration.name, manifest.name);
   assert.equal(typeof registration.component, "function");
+
+  const fixtureDir = path.resolve(dashboard, "../host/.test-tmp/dashboard-fixture");
+  const fixtureManifest = require(path.join(fixtureDir, "manifest.json"));
+  assert.equal(fixtureManifest.api, undefined);
+  vm.runInNewContext(fs.readFileSync(path.join(fixtureDir, fixtureManifest.entry), "utf8"), { window });
+  assert.equal(registration.name, manifest.name);
+});
+
+test("live owner discovery uses only the scoped Hermes SDK route", async () => {
+  let calls = 0;
+  const client = createLiveClient(async (url, init) => {
+    calls += 1;
+    assert.equal(url, "/api/plugins/reliquary-hermes/dashboard-v1");
+    assert.equal(init.method, "POST");
+    assert.equal(init.signal, signal);
+    const request = JSON.parse(init.body);
+    assert.equal(request.operation, "ui.owner_sessions");
+    assert.equal(request.profile_id, "dashboard");
+    assert.equal(request.principal_id, "dashboard");
+    assert.equal(request.owner_id, null);
+    const base = fixture.owner_sessions["fixture-session"][0];
+    return Response.json({ ...base, request_id: request.request_id });
+  });
+  const result = await client.read("ui.owner_sessions", { owner: null, sessionId: "fixture-session" }, { cursor: null, limit: 128 }, signal);
+  assert.equal(result.status, "ok");
+  assert.equal((await client.read("ui.memory_list", scope, list, signal)).status, "unsupported");
+  assert.equal(calls, 1);
+  const denied = createLiveClient(async () => new Response(null, { status: 401 }));
+  assert.equal((await denied.read("ui.owner_sessions", { owner: null, sessionId: null }, { cursor: null, limit: 128 }, signal)).status, "denied");
 });

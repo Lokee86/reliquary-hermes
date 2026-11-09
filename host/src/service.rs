@@ -2,8 +2,8 @@
 use crate::{
     registry::{OwnerConfig, Registry, RegistryError},
     service_http::{
-        ATTACH, FORBIDDEN, HttpError, HttpRequest, HttpResponse, INVALID, MAX_WIRE_BYTES, SOURCE,
-        TransportKey, UNAVAILABLE, hex, read_request, write_response,
+        ATTACH, DASHBOARD_TOPOLOGY, FORBIDDEN, HttpError, HttpRequest, HttpResponse, INVALID,
+        MAX_WIRE_BYTES, SOURCE, TransportKey, UNAVAILABLE, hex, read_request, write_response,
     },
     service_protocol::{
         AttachRequest, Discovery, HERMES_REVISION, Operation, PROTOCOL_VERSION, ProviderRequest,
@@ -67,8 +67,37 @@ impl Service {
         match request.path {
             ATTACH => self.attach(&request.body),
             SOURCE => self.source(&request.body),
+            DASHBOARD_TOPOLOGY => self.dashboard_topology(&request.body),
             _ => self.request(&request.body),
         }
+    }
+
+    fn dashboard_topology(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Request {
+            profile_id: String,
+            principal_id: String,
+            #[serde(deserialize_with = "required_nullable")]
+            session_id: Option<String>,
+        }
+        fn required_nullable<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            Option::<String>::deserialize(deserializer)
+        }
+        let request: Request = decode(bytes).map_err(|_| INVALID)?;
+        if request.profile_id != self.discovery.profile_id
+            || request.principal_id != self.principal_id
+        {
+            return Err(FORBIDDEN);
+        }
+        let registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
+        let body = registry
+            .dashboard_topology(&self.instance, request.session_id.as_deref())
+            .map_err(attach_error)?;
+        Ok(HttpResponse::ok(body))
     }
 
     fn attach(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {

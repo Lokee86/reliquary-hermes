@@ -17,6 +17,8 @@
     "src/fixtures.js",
     "src/views.js",
     "src/graph.js",
-    "src/index.js"
+    "src/index.js",
+    "src/live_transport.js",
+    "src/live.js"
   ]
 }

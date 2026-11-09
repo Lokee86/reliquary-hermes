@@ -45,7 +45,7 @@ try {
     for (const asset of ["dist/index.js", "dist/style.css"]) {
       const response = await page.request.get(`${assetRoot}${asset}`);
       assert.equal(response.status(), 200);
-      assert.deepEqual(await response.body(), readFileSync(new URL(`../${asset}`, import.meta.url)));
+      assert.deepEqual(await response.body(), readFileSync(new URL(`../../host/.test-tmp/dashboard-fixture/${asset}`, import.meta.url)));
     }
     const sdk = await page.evaluate(async () => {
       const sdk = window.__HERMES_PLUGIN_SDK__;

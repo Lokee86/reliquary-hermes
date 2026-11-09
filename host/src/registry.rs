@@ -1,9 +1,11 @@
 //! Service-owned owner topology and durable Hermes session binding.
 use reliquary_memory::{
-    Gateway, HostAdmissionAdapter, HostCredentialBinding, Instance, OwnerGrant, OwnerId,
-    OwnerScope, Phylactery, ProductError, ProductErrorKind, Rel, TrustedHostAdmission,
+    Gateway, HostAdmissionAdapter, HostCredentialBinding, InspectionQuery, Instance,
+    MemoryListFilters, OwnerGrant, OwnerId, OwnerKind, OwnerScope, Phylactery, ProductError,
+    ProductErrorKind, Rel, TrustedHostAdmission,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -303,6 +305,53 @@ impl Registry {
         })
     }
 
+    /// Build a read-only, private dashboard topology response from configured owners.
+    pub(crate) fn dashboard_topology(
+        &self,
+        instance: &Instance,
+        session_id: Option<&str>,
+    ) -> Result<Value, RegistryError> {
+        let mut owners = Vec::with_capacity(self.topology.projects.len() + 2);
+        owners.push(owner_binding(
+            instance,
+            self.topology.main_rel,
+            OwnerKind::Rel,
+            "Main REL",
+        )?);
+        for (index, project) in self.topology.projects.values().enumerate() {
+            owners.push(owner_binding(
+                instance,
+                project.rel_id,
+                OwnerKind::Rel,
+                &format!("Project {}", index + 1),
+            )?);
+        }
+        owners.push(owner_binding(
+            instance,
+            self.topology.active_phy,
+            OwnerKind::Phylactery,
+            "Active user",
+        )?);
+        let (bound_session, session_owner_id) = match session_id {
+            None => (None, None),
+            Some(session) => {
+                let route = self.route_for(session)?;
+                let is_configured = self.session_projects.contains_key(session);
+                let accepted = self
+                    .accepted_route(&route, &self.session_path(session))?
+                    .is_some();
+                if !is_configured && !accepted {
+                    return Err(RegistryError::Denied("unknown_session"));
+                }
+                (Some(session.to_owned()), Some(route.rel_id.to_string()))
+            }
+        };
+        Ok(
+            json!({"owners": owners, "active_phy_id": self.topology.active_phy.to_string(),
+            "session_id": bound_session, "session_owner_id": session_owner_id}),
+        )
+    }
+
     fn route_for(&self, session_id: &str) -> Result<SessionRoute, RegistryError> {
         if !valid_id(session_id) {
             return Err(RegistryError::Invalid("invalid_session"));
@@ -337,6 +386,80 @@ impl Registry {
         }
         Ok(accepted)
     }
+}
+
+#[derive(Serialize)]
+struct DashboardOwnerBinding {
+    owner_id: String,
+    owner_kind: &'static str,
+    display_label: String,
+    generation: String,
+    cut: String,
+    capabilities: DashboardCapabilities,
+}
+
+#[derive(Serialize)]
+struct DashboardCapabilities {
+    view: bool,
+    manage: bool,
+    history: bool,
+    provenance: bool,
+    graph: bool,
+    community: bool,
+    status: bool,
+    memory_create: bool,
+    memory_edit: bool,
+    memory_retire: bool,
+    relation_edit: bool,
+    community_rename: bool,
+}
+
+fn owner_binding(
+    instance: &Instance,
+    owner: OwnerId,
+    kind: OwnerKind,
+    label: &str,
+) -> Result<DashboardOwnerBinding, RegistryError> {
+    // Memory summaries expose the real accepted Root cut without reading body payloads.
+    let page = instance
+        .inspect_owner(
+            owner,
+            kind,
+            &InspectionQuery::MemorySummaries(MemoryListFilters::default()),
+            None,
+            1,
+        )
+        .map_err(owner_error)?;
+    let cut = page.cut;
+    // The UI contract carries a decimal generation and opaque cut token. Preserve a
+    // stable 128-bit generation projection; hash the complete Root cut so every
+    // underlying generation/counter change changes the opaque cut token.
+    let generation =
+        u128::from_le_bytes(cut.generation[..16].try_into().expect("fixed generation"));
+    let cut_digest = Sha256::digest(
+        serde_json::to_vec(&cut).map_err(|_| RegistryError::Unavailable("owner_unavailable"))?,
+    );
+    Ok(DashboardOwnerBinding {
+        owner_id: owner.to_string(),
+        owner_kind: if kind == OwnerKind::Rel { "REL" } else { "PHY" },
+        display_label: label.to_owned(),
+        generation: generation.to_string(),
+        cut: crate::service_http::hex(&cut_digest),
+        capabilities: DashboardCapabilities {
+            view: true,
+            manage: false,
+            history: false,
+            provenance: false,
+            graph: false,
+            community: false,
+            status: false,
+            memory_create: false,
+            memory_edit: false,
+            memory_retire: false,
+            relation_edit: false,
+            community_rename: false,
+        },
+    })
 }
 
 impl OwnerConfig {
