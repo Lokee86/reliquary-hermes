@@ -16,11 +16,11 @@ import pytest
 
 from reliquary_hermes.client import HostClient, HostUnavailable
 from reliquary_hermes.outbox import SourceOutbox
-from reliquary_hermes.settings import TOKEN_VAR
+from reliquary_hermes.settings import TOKEN_VAR, read_settings
 from reliquary_hermes.source_capture import capture_snapshot
 from reliquary_hermes.validation import canonical
 from test_host_client import TOKEN
-from test_hp03_host import binaries, config, owner, stop
+from test_hp03_host import binaries, config, install_setup_host, owner, stop
 from test_hp03_provider import pinned_provider
 from test_hp04_host import TEXT, _cli, _loopback_model, _processing_config, _turn, _when_ready
 
@@ -373,12 +373,15 @@ sleep(120)
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
         provider = pinned_provider.ReliquaryMemoryProvider()
-        prompts = iter((PROFILE, PRINCIPAL, str(state.parent / "main.rel"),
-                        str(state.parent / "active.phy"), str(binary)))
+        installed = install_setup_host(state.parent, binary)
+        prompts = iter(("", "", "", ""))
         monkeypatch.setattr("builtins.input", lambda _: next(prompts))
         scope = set_hermes_home_override(state.parent)
         try:
             assert _post_setup_hook(provider, {})
+            settings = read_settings(state.parent)
+            assert (settings.profile_id, settings.principal_id) == (PROFILE, PRINCIPAL)
+            assert settings.binary == installed
             provider.initialize(SESSION, hermes_home=str(state.parent))
             deadline = monotonic() + 10
             while provider.lifecycle_status == "connecting" and monotonic() < deadline:

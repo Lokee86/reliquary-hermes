@@ -12,10 +12,11 @@ import pytest
 
 from reliquary_hermes.client import HostClient, HostUnavailable
 from reliquary_hermes.outbox import SourceOutbox, SourceOutboxError
+from reliquary_hermes.settings import read_settings
 from reliquary_hermes.source_capture import capture_snapshot
 from reliquary_hermes.validation import canonical, decode
 from test_host_client import TOKEN
-from test_hp03_host import binaries, config, owner, stop
+from test_hp03_host import binaries, config, install_setup_host, owner, setup_hosts, stop
 from test_hp03_provider import pinned_provider
 
 
@@ -298,7 +299,7 @@ def test_hp04_processed_append_tombstones_both_exact_source_turns(tmp_path, bina
 
 
 def test_hp04_pinned_provider_delivers_and_fences_late_same_session_callback(
-        tmp_path, binaries, pinned_provider, monkeypatch):
+        tmp_path, binaries, pinned_provider, monkeypatch, setup_hosts):
     from hermes_cli.memory_setup import _post_setup_hook
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
@@ -309,7 +310,8 @@ def test_hp04_pinned_provider_delivers_and_fences_late_same_session_callback(
     owner(cli, "rel", rel, "unspecified")
     owner(cli, "phy", phy)
     provider = pinned_provider.ReliquaryMemoryProvider()
-    prompts = iter((PROFILE, PRINCIPAL, str(rel), str(phy), str(binary)))
+    install_setup_host(home, binary)
+    prompts = iter((str(rel), str(phy), "", ""))
     monkeypatch.setattr("builtins.input", lambda _: next(prompts))
 
     def wait_for(predicate):
@@ -327,10 +329,14 @@ def test_hp04_pinned_provider_delivers_and_fences_late_same_session_callback(
     scope = set_hermes_home_override(home)
     try:
         assert _post_setup_hook(provider, {})
+        [setup_host] = setup_hosts
+        assert setup_host._process is not None and setup_host._process.poll() is None
+        settings = read_settings(home)
         provider.initialize(SESSION, hermes_home=str(home))
-        outbox = SourceOutbox(home / "reliquary", PROFILE, PRINCIPAL)
+        outbox = SourceOutbox(settings.state_dir, settings.profile_id, settings.principal_id)
         try:
             wait_for(lambda: provider.lifecycle_status == "attached" and provider.sync_status == "source_ready")
+            assert provider._client._process is None
             callback("accepted")
             wait_for(lambda: provider.sync_status == "source_accepted_durable")
             assert outbox.cursor(SESSION).last_message_uid == "accepted"
