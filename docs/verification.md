@@ -207,7 +207,7 @@ python -B -m pytest -q --basetemp .pytest_tmp tests/test_hu03_dashboard.py tests
 npm.cmd --prefix dashboard run check
 ```
 
-Imported history and exact Hermes source byte ranges can return typed unavailable when the required evidence is absent. The live recall view reports confirmed returns and marks the wider candidate set unavailable. HU04 owns the installation-to-restart acceptance scenario.
+The HU03 run treated imported revision timestamps and exact Hermes quote spans as unavailable. HU04 adds persisted revision times and accepted source identity with a null span when the quote was never retained. The live recall view reports confirmed returns and marks the wider candidate set unavailable.
 
 ## HP04 stable host and runtime verification
 
@@ -235,10 +235,28 @@ HP05 passed local acceptance on November 8, 2026. The pinned suite passed 346 Py
 
 The local model endpoint verifies routing, grounding and receipt behavior with fixed synthetic decisions. HP07 owns the authorized real-model run.
 
+## HU04 installed dashboard acceptance
+
+HU04 uses Hermes v0.23.0 at `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19` and public Root at `9cb0dfa3`. The acceptance branch starts from the dashboard provenance and imported history fix at `fb10d21`. The installed test copies the verified HP06 directory plugin into a fresh Hermes profile and runs `hermes memory setup reliquary` with the current HU04 host binary. It stages the built dashboard bundle under that same profile.
+
+The pinned Hermes session persistence and MemoryManager paths ingest a conversation with Hermes-assigned message IDs. The public Root CLI processes the accepted copied import. A separate later session recalls the exact Memory and source digest. Chrome verifies general and project REL routing, the independently bound read-only PHY, graph and list inspection, revision history, copied-source identity, and the returned Memory ID. The provider, Rust host and Hermes web process restart against the same profile and native owners. The later recall matches before and after restart. A committed Hermes archive reaches the installed observer, tombstones the copied source, fences stale replay and prevents recall from returning that source. Chrome verifies the tombstone, and the signed HTTP checks deny the foreign profile.
+
+The contract suite also checks exact imported revision timestamps, retained historical payloads after correction, cursor scope, verified provenance, mutation conflicts, durable retirement and community rename replay. The HP05 process regression checks that both detail and provenance hide copied source identifiers during a reconciliation fence, while the native source turn still exists.
+
+Use the HP03 process environment with a rebuilt HU04 host, the exact Root CLI and pinned Hermes checkout. Set `HERMES_WEB_DIST` to the compiled dashboard for that pinned Hermes checkout and `HU04_PLAYWRIGHT` to an installed Playwright `index.mjs` with Chrome available. Set `HP06_PLUGIN_DIR` to the verified extracted directory package. Provide `HU04_COMMUNITY_REL` as a synthetic project REL with a current accepted community and a same-stem JSON file containing `community_id`, `generation`, `name`, `name_origin`, and at least two distinct Memory IDs in `members`.
+
+```powershell
+$env:HU04_LIVE_ACCEPTANCE = '1'
+python -B -m pytest -q --basetemp .pytest_tmp tests/test_hu04_installed.py tests/test_hu04_acceptance.py tests/test_hp05_retrieval.py
+```
+
+The processing and retrieval routes use deterministic loopback model decisions. The proof uses the installed provider, signed Rust host, native REL and PHY owners, and pinned Hermes web dashboard.
+
+HU04 passed local acceptance. The full pinned run passed 354 Python tests, 20 locked offline Rust host tests and 10 Node tests. TypeScript, Chrome live and enabled/disabled fixture checks, Rust formatting, Git whitespace and the service documentation policy passed.
+
 ## Remaining gates
 
-- HP06 packages and validates the standalone plugin against an isolated Hermes profile.
-- HP07 and HU04 require real-service evidence. HP07 additionally requires an authorized real model run.
+- HP07 requires the separately authorized real-model run.
 
 ## Related docs
 

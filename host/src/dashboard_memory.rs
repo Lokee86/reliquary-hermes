@@ -3,11 +3,13 @@
 use super::{DashboardError, DashboardPage};
 use reliquary_memory::{
     HERMES_COPIED_SOURCE_FORMAT, InspectionCursor, InspectionCut, InspectionItem, InspectionQuery,
-    Instance, MemoryId, MemoryListFilters, MemoryListLifecycle, OwnerId, OwnerKind,
+    Instance, MemoryCanonicalStatus, MemoryId, MemoryListFilters, MemoryListLifecycle, OwnerId,
+    OwnerKind, SourceTurn,
 };
 use serde_json::{Value, json};
 
 const PAGE_LIMIT: usize = 128;
+type AuthorizeSource<'a> = dyn FnMut(Option<&str>, &SourceTurn) -> Result<(), &'static str> + 'a;
 
 pub(crate) fn read(
     instance: &Instance,
@@ -16,15 +18,13 @@ pub(crate) fn read(
     operation: &str,
     args: &Value,
     cursor: Option<&InspectionCursor>,
+    authorize_source: &mut AuthorizeSource<'_>,
 ) -> Result<DashboardPage, DashboardError> {
     match operation {
         "ui.memory_list" => memory_list(instance, owner, kind, args, cursor),
-        "ui.memory_detail" => memory_detail(instance, owner, kind, args),
+        "ui.memory_detail" => memory_detail(instance, owner, kind, args, authorize_source),
         "ui.memory_history" => history(instance, owner, kind, args, cursor),
-        // ExactMemoryProvenance can establish user-origin metadata, but the
-        // Hermes snapshot store's source authorization and exact UTF-8 range
-        // are outside public Root. No source IDs/ranges are emitted here.
-        "ui.provenance" => provenance(instance, owner, kind, args),
+        "ui.provenance" => provenance(instance, owner, kind, args, authorize_source),
         _ => Err(DashboardError::unsupported("memory_projection_operation")),
     }
 }
@@ -109,6 +109,7 @@ fn memory_detail(
     owner: OwnerId,
     kind: OwnerKind,
     args: &Value,
+    authorize_source: &mut AuthorizeSource<'_>,
 ) -> Result<DashboardPage, DashboardError> {
     let id = required_id(args, "memory_id")?;
     let revision = optional_decimal(args, "revision")?;
@@ -123,19 +124,31 @@ fn memory_detail(
     let metadata = find_current_list_entry(instance, owner, kind, id, page.cut)?;
     let result = match item {
         InspectionItem::Memory(memory) => {
-            if metadata.revision != memory.revision {
+            let current = metadata.revision == memory.revision;
+            // Older non-archived revisions carry their own exact payload and
+            // lifecycle evidence. A terminal head never releases older bodies.
+            if !current
+                && (memory.archived || metadata.lifecycle == MemoryListLifecycle::Tombstoned)
+            {
                 return Err(DashboardError::unavailable(
                     "historical_detail_metadata_unavailable",
                 ));
             }
-            let superseded_by = if metadata.lifecycle == MemoryListLifecycle::Superseded {
+            let lifecycle = if current {
+                metadata.lifecycle
+            } else if memory.payload_available {
+                MemoryListLifecycle::Active
+            } else {
+                MemoryListLifecycle::Unavailable
+            };
+            let superseded_by = if lifecycle == MemoryListLifecycle::Superseded {
                 Some(hex_id(
                     &super::retirement::successor(instance, owner, kind, id, page.cut)?.0,
                 ))
             } else {
                 None
             };
-            if !memory.payload_available && metadata.lifecycle == MemoryListLifecycle::Active {
+            if !memory.payload_available && lifecycle == MemoryListLifecycle::Active {
                 return Err(DashboardError::unavailable("body_availability_mismatch"));
             }
             if memory.title.chars().count() > 128
@@ -148,20 +161,27 @@ fn memory_detail(
                 ));
             }
             let retained = exact_retained_revisions(instance, owner, kind, id, page.cut)?;
-            let sources = match provenance(
+            let sources = provenance(
                 instance,
                 owner,
                 kind,
                 &json!({
                     "memory_id": memory.id, "revision": memory.revision.to_string(),
                 }),
-            ) {
-                Ok(sources) if sources.cut == page.cut => sources.result["sources"].clone(),
-                Ok(_) => return Err(DashboardError::stale("owner_cut_changed")),
-                Err(error) if error.code == "source_range_unavailable" => {
-                    vec![unavailable_source("missing")].into()
-                }
-                Err(error) => return Err(error),
+                authorize_source,
+            )?;
+            if sources.cut != page.cut {
+                return Err(DashboardError::stale("owner_cut_changed"));
+            }
+            let excerpt = if current {
+                metadata.excerpt
+            } else {
+                memory.content.chars().take(512).collect()
+            };
+            let canonical = if current {
+                metadata.canonical_status
+            } else {
+                MemoryCanonicalStatus::Unknown
             };
             json!({
                 "memory": {
@@ -169,13 +189,13 @@ fn memory_detail(
                     "revision": memory.revision.to_string(),
                     "body_id": memory.body_id,
                     "title": nonempty(&memory.title),
-                    "excerpt": metadata.excerpt,
+                    "excerpt": excerpt,
                     "category": memory.category,
                     "memory_type": memory.memory_type,
-                    "lifecycle": metadata.lifecycle,
-                    "canonical_status": metadata.canonical_status,
+                    "lifecycle": lifecycle,
+                    "canonical_status": canonical,
                     "freshness": Value::Null,
-                    "community_id": metadata.community_id,
+                    "community_id": current.then_some(metadata.community_id).flatten(),
                 },
                 "body": {
                     "revision": memory.revision.to_string(),
@@ -186,7 +206,7 @@ fn memory_detail(
                 "retained_revisions": retained,
                 "superseded_by": superseded_by,
                 "tombstone": false,
-                "provenance": sources,
+                "provenance": sources.result["sources"],
             })
         }
         InspectionItem::MemoryTerminal { revision, .. }
@@ -363,6 +383,7 @@ fn provenance(
     owner: OwnerId,
     kind: OwnerKind,
     args: &Value,
+    authorize_source: &mut AuthorizeSource<'_>,
 ) -> Result<DashboardPage, DashboardError> {
     let id = required_id(args, "memory_id")?;
     let revision = required_decimal(args, "revision")?;
@@ -410,7 +431,9 @@ fn provenance(
                         .message_revision
                         .strip_prefix("hermes-snapshot-revision:")
                         .map(str::to_owned);
-                    vec![json!({
+                    match authorize_source(provenance.source_owner_id.as_deref(), turn) {
+                        Err(reason) => vec![unavailable_source(reason)],
+                        Ok(()) => vec![json!({
                         "kind": "hermes_snapshot",
                         "label": "Hermes source / copied snapshot",
                         "profile_namespace": profile,
@@ -420,7 +443,8 @@ fn provenance(
                         "source_revision": source_revision,
                         "content_digest": hex_id(&imported.source_digest),
                         "range": Value::Null,
-                    })]
+                        })],
+                    }
                 }
                 _ => vec![unavailable_source("missing")],
             }

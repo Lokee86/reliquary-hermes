@@ -455,6 +455,15 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
         assert fenced["status"] == "conflict", fenced
         assert fenced["result"]["code"] == "source_reconciliation_required"
 
+        topology, owner_binding = _dashboard_binding(provider._client, SESSION)
+        original = next(row for row in summaries if row["memory_id"] == memory_id)
+        for operation, field in (("ui.provenance", "sources"), ("ui.memory_detail", "provenance")):
+            response, _ = _dashboard_exchange(provider._client, topology, owner_binding, operation, {
+                "memory_id": memory_id, "revision": original["revision"],
+            })
+            assert response["status"] == "ok", response
+            assert response["result"][field] == [{"kind": "source_unavailable", "reason": "stale"}]
+
         # The public Root inspection path is read-only. Inspect after releasing
         # the host lease, then prove it did not append another Freshness receipt.
         manager.shutdown_all()

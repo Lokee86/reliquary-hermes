@@ -223,6 +223,14 @@ fn dispatch(
                 &request.operation,
                 &request.arguments,
                 cursor,
+                &mut |source_owner, turn| {
+                    // Use the same lock order as selected return. Busy or
+                    // unverifiable copied evidence must not disclose IDs.
+                    let registry = registry.try_lock().map_err(|_| "missing")?;
+                    let sources = sources.try_lock().map_err(|_| "missing")?;
+                    let mut runtimes = runtimes.try_lock().map_err(|_| "missing")?;
+                    sources.dashboard_provenance(&registry, &mut runtimes, source_owner, turn)
+                },
             )
         }
         "ui.graph_page" | "ui.community_list" | "ui.community_members" => graph::read(

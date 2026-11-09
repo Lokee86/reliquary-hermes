@@ -9,7 +9,7 @@ use crate::{
 use reliquary_memory::{
     ConfiguredRuntime, HermesCopiedSnapshot, HermesCopyScope, InspectionItem, InspectionQuery,
     Instance, MemoryId, NativeImportPlan, NativeImportState, OwnerId, OwnerProcessingJob,
-    ProcessOptions, RetrievalMemory, RetrievalPreview, SourceAvailability,
+    ProcessOptions, RetrievalMemory, RetrievalPreview, SourceAvailability, SourceTurn,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -342,6 +342,68 @@ impl SourceService {
         Ok(())
     }
 
+    fn accepted_source_head(
+        &self,
+        session: &str,
+        runtimes: &mut RuntimeRegistry,
+    ) -> Result<SourceHead, HttpError> {
+        let state = self.store.read(&self.store.path(session))?;
+        if state.terminal {
+            return Err(TERMINAL);
+        }
+        if state.stale
+            || runtimes
+                .has_fence("hermes", session)
+                .map_err(|_| UNAVAILABLE)?
+        {
+            return Err(RECOVERY_REQUIRED);
+        }
+        state
+            .accepted
+            .filter(|_| state.available)
+            .ok_or(PROVENANCE_UNAVAILABLE)
+    }
+
+    pub(crate) fn dashboard_provenance(
+        &self,
+        registry: &Registry,
+        runtimes: &mut RuntimeRegistry,
+        source_owner: Option<&str>,
+        turn: &SourceTurn,
+    ) -> Result<(), &'static str> {
+        let imported = turn.imported.as_ref().ok_or("missing")?;
+        let session = &imported.conversation_id;
+        let scope = HermesCopyScope::new(registry.profile_id().to_owned(), session.clone())
+            .map_err(|_| "unauthorized")?;
+        let owner = source_owner.and_then(|id| id.parse::<OwnerId>().ok());
+        if scope.conversation_id() != turn.conversation_id
+            || Some(
+                registry
+                    .source_owner(session, true)
+                    .map_err(|_| "unauthorized")?,
+            ) != owner
+        {
+            return Err("unauthorized");
+        }
+        let head = self
+            .accepted_source_head(session, runtimes)
+            .map_err(|error| match error.code() {
+                "source_terminal" => "deleted",
+                "source_reconciliation_required" => "stale",
+                _ => "missing",
+            })?;
+        // Root's accepted import proves the original digest. An append can
+        // advance the head digest while retaining the original message.
+        if !head
+            .evidence
+            .iter()
+            .any(|row| row.uid == imported.message_id)
+        {
+            return Err("missing");
+        }
+        Ok(())
+    }
+
     pub(crate) fn retrieval_provenance(
         &self,
         instance: &Instance,
@@ -414,21 +476,7 @@ impl SourceService {
                         {
                             return Err(PROVENANCE_UNAVAILABLE);
                         }
-                        let state = self.store.read(&self.store.path(session))?;
-                        if state.terminal {
-                            return Err(TERMINAL);
-                        }
-                        if state.stale
-                            || runtimes
-                                .has_fence("hermes", session)
-                                .map_err(|_| UNAVAILABLE)?
-                        {
-                            return Err(RECOVERY_REQUIRED);
-                        }
-                        let head = state
-                            .accepted
-                            .filter(|_| state.available)
-                            .ok_or(PROVENANCE_UNAVAILABLE)?;
+                        let head = self.accepted_source_head(session, runtimes)?;
                         heads.insert(session.clone(), head);
                     }
                     let head = heads.get(session).ok_or(PROVENANCE_UNAVAILABLE)?;
