@@ -272,10 +272,14 @@ class CursorBinding:
 
 @dataclass(frozen=True)
 class VerifiedUIContext:
-    """Pure authority fixture constructed ONLY by a future trusted dashboard adapter.
+    """Authority context constructed only by the trusted dashboard backend.
 
-    This is not login verification. These booleans must never come from UI request JSON.
-    It is deliberately distinct from provider ProfileGrant and has no service credential.
+    HU03 v1 builds this from Hermes-authenticated profile scope plus that profile's
+    existing configured Reliquary topology. ``principal_id`` is the active PHY's
+    stable owner ID (the Reliquary user identity), not the Hermes bot/profile name
+    and not the private service principal. These booleans and bindings must never
+    come from browser request JSON. The backend service credential is separate and
+    is never represented in this DTO.
     """
     profile_id: str
     principal_id: str
