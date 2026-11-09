@@ -41,7 +41,7 @@ class FakeClient:
         assert (profile_id, principal_id, token) == ("configured-profile", "service-principal", "secret")
         self.session_id = None
 
-    def read_dashboard_topology(self, session_id):
+    def connect_dashboard(self, session_id):
         self.session_id = session_id
         if session_id == "not-configured":
             raise api.HostUnavailable("host_denied")
