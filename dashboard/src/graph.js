@@ -5,7 +5,7 @@
   /** @typedef {import("../types").CommunityViewProps} CommunityViewProps */
 
   function getReact() {
-    const sdk = globalThis.window && globalThis.window.__HERMES_PLUGIN_SDK__;
+    const sdk = root.ReliquaryDashboardHost;
     if (!sdk || !sdk.React) throw new Error("Hermes host React is unavailable");
     return sdk.React;
   }

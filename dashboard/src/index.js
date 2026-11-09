@@ -8,12 +8,12 @@
   }
   const h = sdk.React.createElement;
   const { useState } = sdk.hooks;
-  const { useRead } = ReliquaryDashboardState;
-  const { meta, readContent, select, Status } = ReliquaryDashboardViews;
-  const { OwnerContent } = ReliquaryDashboardOwner;
+  const { useRead } = globalThis.ReliquaryDashboardState;
+  const { meta, readContent, select, Status } = globalThis.ReliquaryDashboardViews;
+  const { OwnerContent } = globalThis.ReliquaryDashboardOwner;
 
   function DashboardTab() {
-    const [client, setClient] = useState(() => ReliquaryDashboardFixtures.createFixtureClient());
+    const [client, setClient] = useState(() => globalThis.ReliquaryDashboardFixtures.createFixtureClient());
     const sessions = client.sessions();
     const [sessionId, setSession] = useState(/** @type {string|null} */ (sessions[0]?.sessionId ?? null));
     const [kind, setKind] = useState(/** @type {import("../types").OwnerKind} */ ("REL"));
@@ -54,7 +54,7 @@
             (id) => {
               if (!id) setKind("REL");
               client.invalidate();
-              setClient(ReliquaryDashboardFixtures.createFixtureClient(undefined, id || null));
+              setClient(globalThis.ReliquaryDashboardFixtures.createFixtureClient(undefined, id || null));
             }),
             select("Browse owner", kind, [{ value: "REL", label: "Selected REL" },
               ...(phy ? [{ value: "PHY", label: "Active PHY" }] : [])],

@@ -6,7 +6,9 @@ The Reliquary tab uses the current `dashboard-v1` contract. The manifest registe
 
 ## Overview
 
-The default build queries the admitted Hermes profile through its authenticated SDK. The live tab lists configured RELs and the active PHY, and resolves exact known session IDs to their REL. The separate fixture build serves a general REL, a project child REL and independently selected PHY scenarios. In fixture mode the tab provides paged search and filters, a bounded graph with keyboard selection and expansion, Memory detail and revision history, provenance, community membership, and operational status. Recall status distinguishes candidate, selected and returned Memory sets.
+The default build queries the admitted Hermes profile through its authenticated SDK. A fresh profile opens setup and accepts absolute local paths for its main REL, active PHY, optional project RELs and optional Reliquary config. The Reliquary host validates each choice. Connect Reliquary applies setup and reloads owner discovery for the same profile. The configured view lists RELs and the active PHY, shows the processing config path, and resolves exact known session IDs to their REL.
+
+The live bundle shares its setup and operational UI with the Desktop contribution. Each adapter supplies its own Hermes-authenticated request transport and host React. The web tab accepts typed paths and Desktop can supply its native picker. The separate fixture build serves a general REL, a project child REL and independently selected PHY scenarios. It provides paged search and filters, a bounded graph with keyboard selection and expansion, Memory detail and revision history, provenance, community membership, and operational status. Recall status distinguishes candidate, selected and returned Memory sets.
 
 Build and check from the repository root:
 

@@ -1,5 +1,10 @@
 /* Generated from dashboard/src. Rebuild with node dashboard/scripts/build.cjs. */
 
+(function () {
+function createReliquarySurface(options) {
+  const { React, hooks = React } = options;
+  const runtime = { crypto: globalThis.crypto, ReliquaryDashboardHost: { React, hooks } };
+  (function (globalThis, module) {
 (function (root) {
   "use strict";
 
@@ -291,7 +296,7 @@
    * @returns {import("../types").ReadHandle<import("../types").ReadResults[K]>}
    */
   function useRead(client, operation, scope, args) {
-    const { useState, useEffect } = /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__).hooks;
+    const { useState, useEffect } = root.ReliquaryDashboardHost.hooks;
     const [attempt, setAttempt] = useState(0);
     const [snapshot, setSnapshot] = useState(/** @type {{ client: import("../types").DashboardClient, key: string, state: import("../types").ReadOutcome<import("../types").ReadResults[K]> } | null} */ (null));
     const key = JSON.stringify([operation, scope, args, attempt]);
@@ -317,7 +322,7 @@
 
   /** @returns {import("../types").CursorState} */
   function useCursor() {
-    const { useState } = /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__).hooks;
+    const { useState } = root.ReliquaryDashboardHost.hooks;
     const [trail, setTrail] = useState(/** @type {(string | null)[]} */ ([null]));
     return {
       current: trail[trail.length - 1],
@@ -336,7 +341,7 @@
 
   /** @param {string} type @param {Record<string,unknown>|null} props @param {...unknown} children */
   function h(type, props, ...children) {
-    const sdk = /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__);
+    const sdk = root.ReliquaryDashboardHost;
     return sdk.React.createElement(type, props, ...children);
   }
 
@@ -434,8 +439,8 @@
 
   /** @param {{client:import("../types").DashboardClient,scope:import("../types").ReadScope,memoryId:string}} props */
   function Inspector({ client, scope, memoryId }) {
-    const { useRead, useCursor } = ReliquaryDashboardState;
-    const sdk = /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__);
+    const { useRead, useCursor } = root.ReliquaryDashboardState;
+    const sdk = root.ReliquaryDashboardHost;
     const [revision, setRevision] = sdk.hooks.useState(/** @type {string | null} */ (null));
     const cursor = useCursor();
     const detail = useRead(client, "ui.memory_detail", scope, { memory_id: memoryId, revision });
@@ -472,7 +477,7 @@
 
   /** @param {{client:import("../types").DashboardClient,scope:import("../types").ReadScope,live?:boolean}} props */
   function Status({ client, scope, live = false }) {
-    const read = ReliquaryDashboardState.useRead(client, "ui.operational_status", scope, scope.owner?.capabilities.status ? {} : null);
+    const read = root.ReliquaryDashboardState.useRead(client, "ui.operational_status", scope, scope.owner?.capabilities.status ? {} : null);
     return h("div", { className: "rly-status-card" },
       h("strong", null, "Operational activity"),
       readContent("operational status", read, (status) => h("dl", null,
@@ -498,7 +503,7 @@
   /** @typedef {import("../types").CommunityViewProps} CommunityViewProps */
 
   function getReact() {
-    const sdk = globalThis.window && globalThis.window.__HERMES_PLUGIN_SDK__;
+    const sdk = root.ReliquaryDashboardHost;
     if (!sdk || !sdk.React) throw new Error("Hermes host React is unavailable");
     return sdk.React;
   }
@@ -630,7 +635,7 @@
 (function (root) {
   "use strict";
 
-  const sdk = /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__);
+  const sdk = root.ReliquaryDashboardHost;
   const h = sdk.React.createElement;
   const { useState, useEffect, useRef } = sdk.hooks;
   const { useRead } = root.ReliquaryDashboardState;
@@ -859,7 +864,7 @@
   /** @typedef {import("../types-owner-content").DashboardMutationWriter} DashboardMutationWriter */
   /** @typedef {import("../types-owner-content").DashboardMutationOutcome} DashboardMutationOutcome */
 
-  const sdk = /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__);
+  const sdk = root.ReliquaryDashboardHost;
   const h = sdk.React.createElement;
   const { useState, useEffect, useRef } = sdk.hooks;
 
@@ -1095,8 +1100,8 @@
   "use strict";
 
   /** @param {any} type @param {any} props @param {...any} children */
-  const h = (type, props, ...children) => /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__).React.createElement(type, props, ...children);
-  const { useState, useEffect } = /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__).hooks;
+  const h = (type, props, ...children) => root.ReliquaryDashboardHost.React.createElement(type, props, ...children);
+  const { useState, useEffect } = root.ReliquaryDashboardHost.hooks;
   const { useRead, useCursor } = root.ReliquaryDashboardState;
   const { meta, readContent, select, pager, MemoryList, Inspector } = root.ReliquaryDashboardViews;
   const { GraphView, CommunityView } = root.ReliquaryDashboardGraph;
@@ -1243,119 +1248,450 @@
 })(globalThis);
 
 
+(function (root) {
+  "use strict";
+
+  const endpoint = "/api/plugins/reliquary-hermes/setup-v1";
+  const messages = new Map([
+    ["runtime_unavailable", "The Reliquary host is unavailable. Check the plugin installation."],
+    ["preflight_unavailable", "The Reliquary host could not validate these files."],
+    ["managed_setup", "This Hermes profile is managed and does not allow local setup changes."],
+    ["service_restart_required", "Stop the running Reliquary service before changing these settings."],
+    ["setup_request_too_large", "The selected paths exceed the setup request limit."],
+    ["invalid_setup_request", "Check the paths and project IDs, then try again."],
+    ["setup_denied", "Hermes did not authorize setup in this profile."],
+    ["setup_unavailable", "Could not reach Reliquary setup. Try again."],
+    ["invalid_setup_response", "Reliquary returned an invalid setup response."],
+    ["picker_failed", "Hermes Desktop could not open the file picker."],
+    ["main_path", "Enter an absolute local path for the main REL."],
+    ["phy_path", "Enter an absolute local path for the active PHY."],
+    ["config_path", "Enter an absolute local path for the Reliquary config."],
+    ["project_path", "Enter an absolute local path for each project REL."],
+    ["project_id", "Use a distinct ID for each project, starting with a letter or number."],
+  ]);
+
+  /** @param {unknown} error */
+  function message(error) {
+    return messages.get(error instanceof Error ? error.message : "") ?? "Could not complete Reliquary setup.";
+  }
+
+  /** @param {string} path */
+  function localPath(path) {
+    return /^(?:[a-z]:[\\/]|\/(?!\/))/i.test(path) && !path.includes("\0") &&
+      new TextEncoder().encode(path).length <= 4096;
+  }
+
+  /**
+   * @param {string} main
+   * @param {string} phy
+   * @param {string} config
+   * @param {{id:string,path:string}[]} projects
+   * @returns {import("../types").SetupCandidate}
+   */
+  function candidate(main, phy, config, projects) {
+    const main_rel = main.trim();
+    const active_phy = phy.trim();
+    const config_path = config.trim() || null;
+    if (!localPath(main_rel)) throw new Error("main_path");
+    if (!localPath(active_phy)) throw new Error("phy_path");
+    if (config_path && !localPath(config_path)) throw new Error("config_path");
+    const entries = new Map();
+    for (const { id, path } of projects) {
+      const key = id.trim();
+      const value = path.trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(key) || entries.has(key)) throw new Error("project_id");
+      if (!localPath(value)) throw new Error("project_path");
+      entries.set(key, value);
+    }
+    return { main_rel, active_phy, projects: Object.fromEntries(entries), config_path };
+  }
+
+  /**
+   * @param {import("../types").HermesDashboardSDK["authedFetch"]} authedFetch
+   * @returns {import("../types").SetupClient}
+   */
+  function createSetupClient(authedFetch) {
+    /**
+     * @param {"status"|"validate"|"apply"} operation
+     * @param {AbortSignal} signal
+     * @param {import("../types").SetupCandidate} [value]
+     */
+    async function request(operation, signal, value) {
+      signal.throwIfAborted();
+      let response;
+      try {
+        response = await authedFetch(endpoint + "/" + operation, value ? {
+          method: "POST", signal, cache: "no-store", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(value),
+        } : { method: "GET", signal, cache: "no-store" });
+      } catch {
+        signal.throwIfAborted();
+        throw new Error("setup_unavailable");
+      }
+      const data = await response.json().catch(() => null);
+      signal.throwIfAborted();
+      if (!response.ok) {
+        const known = messages.has(data?.detail) ? data.detail : null;
+        throw new Error(known ?? (response.status === 401 || response.status === 403 ? "setup_denied" : "setup_unavailable"));
+      }
+      if (operation === "status") {
+        if (typeof data?.configured !== "boolean" || typeof data.runtime_detected !== "boolean" ||
+            !data.defaults || !data.defaults.projects) throw new Error("invalid_setup_response");
+      } else if (!(operation === "apply" && data?.valid === true && data.configured === true)) {
+        if (typeof data?.valid !== "boolean" || !data.main_rel || !data.active_phy || !data.projects || !data.config ||
+            (operation === "apply" && data.configured !== false)) throw new Error("invalid_setup_response");
+      }
+      return data;
+    }
+
+    return {
+      status: (signal) => request("status", signal),
+      validate: (value, signal) => request("validate", signal, value),
+      apply: (value, signal) => request("apply", signal, value),
+    };
+  }
+
+  const api = { createSetupClient, candidate, message };
+  root.ReliquarySetupClient = api;
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+})(globalThis);
+
+
+(function (root) {
+  "use strict";
+
+  const { React, hooks } = root.ReliquaryDashboardHost;
+  const h = React.createElement;
+  const { useEffect, useRef, useState } = hooks;
+  const { candidate, message } = root.ReliquarySetupClient;
+
+  /** @typedef {import("../types").SetupOwner} SetupOwner */
+  /** @typedef {import("../types").SetupCheck} SetupCheck */
+  /** @typedef {import("../types").SetupPicker} SetupPicker */
+  /** @typedef {Parameters<SetupPicker>[0]} PathKind */
+  /** @typedef {{ key: number, id: string, path: string }} Project */
+
+  /** @param {SetupCheck | SetupOwner} result */
+  function checkText(result) {
+    const details = "kind" in result
+      ? [result.kind?.toUpperCase(), result.owner_id, result.scope].filter(Boolean).join(" · ")
+      : "";
+    const state = !result.accepted ? "Rejected" : result.opened ? "Accepted" : "No file selected";
+    const error = result.error ? result.error.replaceAll("_", " ") : "";
+    return [state, details, error].filter(Boolean).join(" · ");
+  }
+
+  /** @type {typeof root.ReliquaryOnboarding.Onboarding} */
+  function Onboarding({ status, setup, pickOpenPath, onConnected }) {
+    const [main, setMain] = useState(status.defaults.main_rel ?? "");
+    const [phy, setPhy] = useState(status.defaults.active_phy ?? "");
+    const [config, setConfig] = useState(status.defaults.config_path ?? "");
+    const [projects, setProjects] = useState(/** @type {Project[]} */ (
+      Object.entries(status.defaults.projects).map(([id, path], key) => ({ id, path, key }))
+    ));
+    const nextKey = useRef(projects.length);
+    const pending = useRef(/** @type {AbortController | null} */ (null));
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+    const [report, setReport] = useState(/** @type {import("../types").SetupReport | null} */ (null));
+
+    useEffect(() => () => pending.current?.abort(), []);
+
+    function clearResult() {
+      setReport(null);
+      setError("");
+    }
+
+    /** @param {"validate"|"apply"} action */
+    async function submit(action) {
+      if (pending.current) return;
+      clearResult();
+      let selected;
+      try {
+        selected = candidate(main, phy, config, projects);
+      } catch (reason) {
+        setError(message(reason));
+        return;
+      }
+      const controller = new AbortController();
+      pending.current = controller;
+      setBusy(true);
+      try {
+        const result = await setup[action](selected, controller.signal);
+        if (controller.signal.aborted) return;
+        if ("configured" in result && result.configured === true) {
+          onConnected();
+          return;
+        }
+        setReport(result);
+      } catch (reason) {
+        if (!controller.signal.aborted) setError(message(reason));
+      } finally {
+        pending.current = null;
+        if (!controller.signal.aborted) setBusy(false);
+      }
+    }
+
+    /** @param {PathKind} kind @param {(path: string) => void} update */
+    async function browse(kind, update) {
+      if (!pickOpenPath || pending.current) return;
+      const controller = new AbortController();
+      pending.current = controller;
+      setBusy(true);
+      try {
+        const path = await pickOpenPath(kind);
+        if (path && !controller.signal.aborted) {
+          clearResult();
+          update(path);
+        }
+      } catch {
+        if (!controller.signal.aborted) setError(message(new Error("picker_failed")));
+      } finally {
+        pending.current = null;
+        if (!controller.signal.aborted) setBusy(false);
+      }
+    }
+
+    /**
+     * @param {string} label
+     * @param {string} value
+     * @param {(next: string) => void} update
+     * @param {PathKind} kind
+     * @param {SetupCheck | SetupOwner} [result]
+     */
+    function pathField(label, value, update, kind, result) {
+      return h("div", { className: "rly-setup-path" },
+        h("label", { className: "rly-field" }, h("span", null, label), h("input", {
+          type: "text", value, autoComplete: "off", maxLength: 4096,
+          onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => {
+            clearResult();
+            update(event.currentTarget.value);
+          },
+        })),
+        pickOpenPath && h("button", { type: "button", onClick: () => browse(kind, update), "aria-label": "Browse for " + label }, "Browse…"),
+        result && h("p", { className: "rly-setup-check", role: "status" }, checkText(result)));
+    }
+
+    /** @param {number} key @param {Partial<Project>} update */
+    function changeProject(key, update) {
+      clearResult();
+      setProjects((current) => current.map((row) => row.key === key ? { ...row, ...update } : row));
+    }
+
+    return h("div", { className: "rly-main rly-setup-form" },
+      h("dl", { className: "rly-owner-meta" },
+        root.ReliquaryDashboardViews.meta("Reliquary runtime", status.runtime_detected ? "Detected" : "Unavailable"),
+        root.ReliquaryDashboardViews.meta("Reliquary config", status.config_path ?? "No config detected")),
+      h("form", { noValidate: true, onSubmit: (/** @type {{preventDefault():void}} */ event) => {
+        event.preventDefault();
+        if (status.runtime_detected) void submit("apply");
+      } },
+      h("fieldset", { disabled: busy },
+        h("legend", null, "Local Reliquary files"),
+        pathField("Main REL path", main, setMain, "REL", report?.main_rel),
+        pathField("Active PHY path", phy, setPhy, "PHY", report?.active_phy),
+        pathField("Reliquary config path (optional)", config, setConfig, "config", report?.config),
+        h("h2", null, "Project RELs"),
+        projects.map(({ key, id, path }, index) => h("div", { className: "rly-setup-project", key: String(key) },
+          h("label", { className: "rly-field" }, h("span", null, `Project ${index + 1} ID`), h("input", {
+            type: "text", value: id, autoComplete: "off", maxLength: 128,
+            onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) =>
+              changeProject(key, { id: event.currentTarget.value }),
+          })),
+          pathField(`Project ${index + 1} REL path`, path, (next) => changeProject(key, { path: next }),
+            "REL", report?.projects[id.trim()]),
+          h("button", { type: "button", "aria-label": `Remove project ${index + 1}`, onClick: () => {
+            clearResult();
+            setProjects((current) => current.filter((row) => row.key !== key));
+          } }, "Remove"))),
+        h("button", { type: "button", disabled: projects.length >= 128, onClick: () => {
+          clearResult();
+          const key = nextKey.current++;
+          setProjects((current) => [...current, { key, id: "", path: "" }]);
+        } }, "Add project REL"),
+        h("div", { className: "rly-setup-actions" },
+          h("button", { type: "button", disabled: !status.runtime_detected, onClick: () => submit("validate") }, "Validate"),
+          h("button", { type: "submit", disabled: !status.runtime_detected }, "Connect Reliquary")))),
+      busy && h("p", { role: "status" }, "Working…"),
+      error && h("p", { role: "alert" }, error),
+      report && h("p", { role: report.valid ? "status" : "alert" },
+        report.valid ? "Validation passed." : report.topology_error
+          ? "Owner topology conflict (" + report.topology_error.replaceAll("_", " ") + ")."
+          : "Validation failed. Check the rejected files."));
+  }
+
+  root.ReliquaryOnboarding = { Onboarding };
+})(globalThis);
+
+
+(function (root) {
+  "use strict";
+
+  /** @type {import("../types").CreateReliquarySurface} */
+  function createSurface({ authedFetch, pickOpenPath, surfaceLabel }) {
+    const { React, hooks } = root.ReliquaryDashboardHost;
+    const h = React.createElement;
+    const { useState, useEffect } = hooks;
+    const { useRead, useCursor } = root.ReliquaryDashboardState;
+    const { meta, readContent, select, pager, Status } = root.ReliquaryDashboardViews;
+    const { OwnerContent } = root.ReliquaryDashboardOwner;
+    const { createLiveMutation } = root.ReliquaryDashboardLive;
+
+    /** @param {{client: import("../types").DashboardClient, configPath: string | null}} props */
+    function DashboardTab({ client, configPath }) {
+      const [write] = useState(() => createLiveMutation(authedFetch));
+      const [sessionId, setSessionId] = useState(/** @type {string | null} */ (null));
+      const [sessionInput, setSessionInput] = useState("");
+      const [selectedOwnerId, setSelectedOwnerId] = useState(/** @type {string | null} */ (null));
+      const [lastGood, setLastGood] = useState(/** @type {{sessionId:string|null,cursor:string|null,value:import("../types").ReadResults["ui.owner_sessions"]}|null} */ (null));
+      const ownerCursor = useCursor();
+      const discovery = useRead(client, "ui.owner_sessions", { owner: null, sessionId },
+        { cursor: ownerCursor.current, limit: 128 });
+
+      useEffect(() => {
+        if (discovery.state.status === "ok") {
+          setLastGood({ sessionId, cursor: ownerCursor.current, value: discovery.state.value });
+        }
+      }, [client, sessionId, ownerCursor.current, discovery.state]);
+      useEffect(() => { setLastGood(null); }, [sessionId, ownerCursor.current]);
+      const sameBindingPage = lastGood?.sessionId === sessionId && lastGood.cursor === ownerCursor.current;
+      const refreshing = sameBindingPage && discovery.state.status === "loading";
+      /** @type {import("../types").ReadHandle<import("../types").ReadResults["ui.owner_sessions"]>} */
+      const visibleDiscovery = refreshing && lastGood
+        ? { ...discovery, state: { status: "ok", value: lastGood.value } }
+        : discovery;
+
+      function refreshOwnerData() {
+        client.invalidate();
+        discovery.retry();
+      }
+
+      /** @param {{preventDefault():void}} event */
+      function findSession(event) {
+        event.preventDefault();
+        const requested = sessionInput.trim() || null;
+        if (requested === sessionId) { discovery.retry(); return; }
+        client.invalidate();
+        ownerCursor.reset();
+        setSelectedOwnerId(null);
+        setLastGood(null);
+        setSessionId(requested);
+      }
+
+      return h("section", { className: "rly-dashboard", "aria-label": "Reliquary live dashboard" },
+        h("header", { className: "rly-header" }, h("div", null,
+          h("p", { className: "rly-eyebrow" }, surfaceLabel),
+          h("h1", null, "Reliquary Memory"),
+          h("p", { className: "rly-subtitle" }, "Configured owners in this Hermes profile"))),
+        refreshing && h("p", { className: "rly-refreshing", role: "status" }, "Refreshing owner binding. Writes are paused until it completes."),
+        readContent("owner and session bindings", visibleDiscovery, (data) => {
+          const owners = data.owners.items.filter((owner) => owner.capabilities.view &&
+            (owner.owner_kind === "REL" || owner.owner_id === data.active_phy_id));
+          const mappedRel = owners.find((owner) => owner.owner_kind === "REL" && owner.owner_id === data.session_owner_id) ?? null;
+          const phy = owners.find((owner) => owner.owner_kind === "PHY" && owner.owner_id === data.active_phy_id) ?? null;
+          const selected = owners.find((owner) => owner.owner_id === selectedOwnerId) ?? null;
+          const defaultOwner = mappedRel ?? owners.find((owner) => owner.owner_kind === "REL") ?? phy;
+          const owner = selected ?? defaultOwner;
+          const sessionMatchesOwner = !!owner && owner.owner_kind === "REL" &&
+            data.active_session_id !== null && data.session_owner_id === owner.owner_id &&
+            (sessionId === null || data.active_session_id === sessionId);
+          // Session scope is sent only when the server returned the exact mapping for this REL.
+          const scope = { owner, sessionId: sessionMatchesOwner ? data.active_session_id : null };
+          const scopeKey = JSON.stringify([owner?.owner_id ?? null, owner?.generation ?? null, scope.sessionId]);
+          const ownerOptions = owners.map((item) => ({
+            value: item.owner_id,
+            label: item.owner_kind + " · " + item.display_label,
+          }));
+
+          return h("div", { className: "rly-layout" },
+            h("aside", { className: "rly-sidebar", "aria-label": "Owner and scope" },
+              h("h2", null, "Owner / scope"),
+              h("button", { type: "button", onClick: refreshOwnerData }, "Refresh owner data"),
+              h("form", { onSubmit: findSession, className: "rly-session-lookup" },
+                h("label", { className: "rly-field" }, h("span", null, "Hermes session ID"), h("input", {
+                  value: sessionInput, maxLength: 128, autoComplete: "off",
+                  onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => setSessionInput(event.currentTarget.value),
+                })), h("button", { type: "submit" }, "Look up session")),
+              ownerOptions.length ? select("Browse authorized owner", owner?.owner_id ?? "", ownerOptions, (id) => {
+                if (id !== selectedOwnerId) {
+                  client.invalidate();
+                  setSelectedOwnerId(id || null);
+                }
+              }) : h("p", { className: "rly-empty" }, "No viewable owner is available on this page."),
+              h("dl", { className: "rly-owner-meta" },
+                meta("Selected session", data.active_session_id ?? "None"),
+                meta("Session REL", mappedRel?.display_label ?? (data.session_owner_id ? "Not on this page" : "None")),
+                meta("Active PHY", phy?.owner_id ?? "None"),
+                meta("Reliquary config", configPath ?? "No config detected"),
+                owner && meta("Owner kind", owner.owner_kind),
+                owner && meta("Generation", owner.generation),
+                owner && meta("Cut", owner.cut),
+                owner && owner.owner_kind === "REL" && data.active_session_id && !sessionMatchesOwner &&
+                  meta("Session scope", "Owner-level view; selected session maps to another REL")),
+              owner && h(Status, { key: scopeKey, client, scope, live: true }),
+              pager("owner", ownerCursor, data.owners.next_cursor)),
+            owner ? h(OwnerContent, { key: scopeKey, client, write, onRefresh: refreshOwnerData, refreshing,
+              scope: /** @type {import("../types").ReadScope & {owner:import("../types").OwnerBinding}} */ (scope) })
+              : h("p", { className: "rly-empty" }, "No authorized owner is available for this scope."));
+        }, ownerCursor.reset));
+    }
+
+
+    const setup = root.ReliquarySetupClient.createSetupClient(authedFetch);
+    const { Onboarding } = root.ReliquaryOnboarding;
+
+    return function ReliquarySurface() {
+      const [client] = useState(() => root.ReliquaryDashboardLive.createLiveClient(authedFetch));
+      const [attempt, setAttempt] = useState(0);
+      const [snapshot, setSnapshot] = useState(/** @type {{
+        attempt:number, status?:import("../types").SetupStatus, error?:string
+      } | null} */ (null));
+      useEffect(() => {
+        const controller = new AbortController();
+        setup.status(controller.signal).then((status) => {
+          if (!controller.signal.aborted) setSnapshot({ attempt, status });
+        }, (error) => {
+          if (!controller.signal.aborted) setSnapshot({ attempt, error: root.ReliquarySetupClient.message(error) });
+        });
+        return () => controller.abort();
+      }, [attempt]);
+
+      function refresh() {
+        client.invalidate();
+        setAttempt((current) => current + 1);
+      }
+
+      const current = snapshot?.attempt === attempt ? snapshot : null;
+      if (current?.status?.configured) return h(DashboardTab, { client, configPath: current.status.config_path });
+      return h("section", { className: "rly-dashboard", "aria-label": current?.status ? "Reliquary setup" : "Reliquary" },
+        h("header", { className: "rly-header" }, h("div", null,
+          h("p", { className: "rly-eyebrow" }, surfaceLabel),
+          h("h1", null, current?.status ? "Set up Reliquary" : "Reliquary Memory"),
+          current?.status && h("p", { className: "rly-subtitle" }, "Connect existing Reliquary owners to this Hermes profile."))),
+        current?.status ? h(Onboarding, { status: current.status, setup, pickOpenPath, onConnected: refresh }) :
+          current?.error ? h("div", { role: "alert" },
+            h("p", null, current.error), h("button", { type: "button", onClick: refresh }, "Retry setup status")) :
+            h("p", { role: "status" }, "Checking Reliquary setup…"));
+    };
+  }
+
+  root.ReliquaryDashboardSurface = createSurface;
+})(globalThis);
+
+})(runtime);
+  return runtime.ReliquaryDashboardSurface(options);
+}
 (function (browser) {
   "use strict";
 
-  const sdk = /** @type {import("../types").HermesDashboardSDK} */ (browser.__HERMES_PLUGIN_SDK__);
+  const sdk = browser.__HERMES_PLUGIN_SDK__;
   const registry = browser.__HERMES_PLUGINS__;
   if (!sdk || !registry || sdk.sdkVersion !== "1.1.0" || typeof sdk.authedFetch !== "function") {
     throw new Error("Reliquary requires the Hermes web dashboard plugin SDK 1.1.0.");
   }
-
-  const h = sdk.React.createElement;
-  const { useState, useEffect } = sdk.hooks;
-  const { useRead, useCursor } = ReliquaryDashboardState;
-  const { meta, readContent, select, pager, Status } = ReliquaryDashboardViews;
-  const { OwnerContent } = ReliquaryDashboardOwner;
-  const { createLiveMutation } = ReliquaryDashboardLive;
-
-  function DashboardTab() {
-    const [client] = useState(() => ReliquaryDashboardLive.createLiveClient(sdk.authedFetch));
-    const [write] = useState(() => createLiveMutation(sdk.authedFetch));
-    const [sessionId, setSessionId] = useState(/** @type {string | null} */ (null));
-    const [sessionInput, setSessionInput] = useState("");
-    const [selectedOwnerId, setSelectedOwnerId] = useState(/** @type {string | null} */ (null));
-    const [lastGood, setLastGood] = useState(/** @type {{sessionId:string|null,cursor:string|null,value:import("../types").ReadResults["ui.owner_sessions"]}|null} */ (null));
-    const ownerCursor = useCursor();
-    const discovery = useRead(client, "ui.owner_sessions", { owner: null, sessionId },
-      { cursor: ownerCursor.current, limit: 128 });
-
-    useEffect(() => {
-      if (discovery.state.status === "ok") {
-        setLastGood({ sessionId, cursor: ownerCursor.current, value: discovery.state.value });
-      }
-    }, [client, sessionId, ownerCursor.current, discovery.state]);
-    useEffect(() => { setLastGood(null); }, [sessionId, ownerCursor.current]);
-    const sameBindingPage = lastGood?.sessionId === sessionId && lastGood.cursor === ownerCursor.current;
-    const refreshing = sameBindingPage && discovery.state.status === "loading";
-    /** @type {import("../types").ReadHandle<import("../types").ReadResults["ui.owner_sessions"]>} */
-    const visibleDiscovery = refreshing && lastGood
-      ? { ...discovery, state: { status: "ok", value: lastGood.value } }
-      : discovery;
-
-    function refreshOwnerData() {
-      client.invalidate();
-      discovery.retry();
-    }
-
-    /** @param {{preventDefault():void}} event */
-    function findSession(event) {
-      event.preventDefault();
-      const requested = sessionInput.trim() || null;
-      if (requested === sessionId) { discovery.retry(); return; }
-      client.invalidate();
-      ownerCursor.reset();
-      setSelectedOwnerId(null);
-      setLastGood(null);
-      setSessionId(requested);
-    }
-
-    return h("section", { className: "rly-dashboard", "aria-label": "Reliquary live dashboard" },
-      h("header", { className: "rly-header" }, h("div", null,
-        h("p", { className: "rly-eyebrow" }, "HERMES WEB DASHBOARD PLUGIN"),
-        h("h1", null, "Reliquary Memory"),
-        h("p", { className: "rly-subtitle" }, "Configured owners in this Hermes profile"))),
-      refreshing && h("p", { className: "rly-refreshing", role: "status" }, "Refreshing owner binding. Writes are paused until it completes."),
-      readContent("owner and session bindings", visibleDiscovery, (data) => {
-        const owners = data.owners.items.filter((owner) => owner.capabilities.view &&
-          (owner.owner_kind === "REL" || owner.owner_id === data.active_phy_id));
-        const mappedRel = owners.find((owner) => owner.owner_kind === "REL" && owner.owner_id === data.session_owner_id) ?? null;
-        const phy = owners.find((owner) => owner.owner_kind === "PHY" && owner.owner_id === data.active_phy_id) ?? null;
-        const selected = owners.find((owner) => owner.owner_id === selectedOwnerId) ?? null;
-        const defaultOwner = mappedRel ?? owners.find((owner) => owner.owner_kind === "REL") ?? phy;
-        const owner = selected ?? defaultOwner;
-        const sessionMatchesOwner = !!owner && owner.owner_kind === "REL" &&
-          data.active_session_id !== null && data.session_owner_id === owner.owner_id &&
-          (sessionId === null || data.active_session_id === sessionId);
-        // Session scope is sent only when the server returned the exact mapping for this REL.
-        const scope = { owner, sessionId: sessionMatchesOwner ? data.active_session_id : null };
-        const scopeKey = JSON.stringify([owner?.owner_id ?? null, owner?.generation ?? null, scope.sessionId]);
-        const ownerOptions = owners.map((item) => ({
-          value: item.owner_id,
-          label: item.owner_kind + " · " + item.display_label,
-        }));
-
-        return h("div", { className: "rly-layout" },
-          h("aside", { className: "rly-sidebar", "aria-label": "Owner and scope" },
-            h("h2", null, "Owner / scope"),
-            h("button", { type: "button", onClick: refreshOwnerData }, "Refresh owner data"),
-            h("form", { onSubmit: findSession, className: "rly-session-lookup" },
-              h("label", { className: "rly-field" }, h("span", null, "Hermes session ID"), h("input", {
-                value: sessionInput, maxLength: 128, autoComplete: "off",
-                onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => setSessionInput(event.currentTarget.value),
-              })), h("button", { type: "submit" }, "Look up session")),
-            ownerOptions.length ? select("Browse authorized owner", owner?.owner_id ?? "", ownerOptions, (id) => {
-              if (id !== selectedOwnerId) {
-                client.invalidate();
-                setSelectedOwnerId(id || null);
-              }
-            }) : h("p", { className: "rly-empty" }, "No viewable owner is available on this page."),
-            h("dl", { className: "rly-owner-meta" },
-              meta("Selected session", data.active_session_id ?? "None"),
-              meta("Session REL", mappedRel?.display_label ?? (data.session_owner_id ? "Not on this page" : "None")),
-              meta("Active PHY", phy?.owner_id ?? "None"),
-              owner && meta("Owner kind", owner.owner_kind),
-              owner && meta("Generation", owner.generation),
-              owner && meta("Cut", owner.cut),
-              owner && owner.owner_kind === "REL" && data.active_session_id && !sessionMatchesOwner &&
-                meta("Session scope", "Owner-level view; selected session maps to another REL")),
-            owner && h(Status, { key: scopeKey, client, scope, live: true }),
-            pager("owner", ownerCursor, data.owners.next_cursor)),
-          owner ? h(OwnerContent, { key: scopeKey, client, write, onRefresh: refreshOwnerData, refreshing,
-            scope: /** @type {import("../types").ReadScope & {owner:import("../types").OwnerBinding}} */ (scope) })
-            : h("p", { className: "rly-empty" }, "No authorized owner is available for this scope."));
-      }, ownerCursor.reset));
-  }
-
-  registry.register("reliquary-hermes", DashboardTab);
+  registry.register("reliquary-hermes", createReliquarySurface({
+    React: sdk.React, hooks: sdk.hooks, authedFetch: sdk.authedFetch, surfaceLabel: "HERMES WEB DASHBOARD PLUGIN",
+  }));
 })(window);
+
+})();

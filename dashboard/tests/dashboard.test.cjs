@@ -6,6 +6,7 @@ const vm = require("node:vm");
 const { createClient } = require("../src/client.js");
 const { createFixtureClient } = require("../src/fixtures.js");
 const { createLiveClient, createLiveMutation } = require("../src/live_transport.js");
+const { createSetupClient, candidate, message } = require("../src/setup_client.js");
 const fixture = require("../fixtures/mock-responses.json");
 
 const general = fixture.owner_sessions["fixture-session"][0].result.owners.items.find((owner) => owner.owner_id === "fixture-rel");
@@ -226,4 +227,47 @@ test("live writes bind the submitted cut and correlate durable receipts", async 
   const phy = { ...owner, owner_kind: "PHY" };
   assert.equal((await write("ui.memory_edit", { ...scope, owner: phy }, args, "1", "draft-key", signal)).status, "denied");
   assert.equal(calls, 2);
+});
+
+test("setup candidate carries only validated owner and config paths", () => {
+  assert.throws(() => candidate("relative.rel", "C:/test/active.phy", "", []), /main_path/);
+  assert.throws(() => candidate("C:/test/main.rel", "//server/share/active.phy", "", []), /phy_path/);
+  const row = { id: "lantern", path: "C:/test/lantern.rel" };
+  assert.throws(() => candidate("C:/test/main.rel", "C:/test/active.phy", "", [row, row]), /project_id/);
+  assert.deepEqual(candidate(" C:/test/main.rel ", "C:/test/active.phy", "", [row]), {
+    main_rel: "C:/test/main.rel", active_phy: "C:/test/active.phy",
+    projects: { lantern: "C:/test/lantern.rel" }, config_path: null,
+  });
+});
+
+test("setup client uses the admitted Hermes transport and redacts unknown failures", async () => {
+  const initial = { configured: false, runtime_detected: true, config_path: null,
+    defaults: { main_rel: null, active_phy: null, projects: {}, config_path: null } };
+  const selection = candidate("C:/test/main.rel", "C:/test/active.phy", "", []);
+  const replies = [Response.json(initial), Response.json({ valid: true, configured: true }),
+    Response.json({ detail: "hidden diagnostic" }, { status: 503 })];
+  const calls = [];
+  const setup = createSetupClient(async (url, init) => { calls.push([url, init]); return replies.shift(); });
+  assert.deepEqual(await setup.status(signal), initial);
+  assert.deepEqual(await setup.apply(selection, signal), { valid: true, configured: true });
+  await assert.rejects(setup.validate(selection, signal), (error) =>
+    message(error) === "Could not reach Reliquary setup. Try again.");
+  assert.deepEqual(calls.map(([url, init]) => [url, init.method]), [
+    ["/api/plugins/reliquary-hermes/setup-v1/status", "GET"],
+    ["/api/plugins/reliquary-hermes/setup-v1/apply", "POST"],
+    ["/api/plugins/reliquary-hermes/setup-v1/validate", "POST"],
+  ]);
+  assert.deepEqual(JSON.parse(calls[1][1].body), selection);
+  assert.equal(calls[0][1].signal, signal);
+});
+
+test("the common live surface installs no globals when another shell injects React", () => {
+  const { buildLiveBundle } = require("../scripts/live-bundle.cjs");
+  const context = { input: { React: { createElement() {} }, hooks: {}, authedFetch() {}, surfaceLabel: "Desktop" } };
+  const create = vm.runInNewContext(`(function () {
+    ${buildLiveBundle()}
+    return createReliquarySurface(input);
+  })()`, context);
+  assert.equal(typeof create, "function");
+  assert.deepEqual(Object.keys(context), ["input"]);
 });

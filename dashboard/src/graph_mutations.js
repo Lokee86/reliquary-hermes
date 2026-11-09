@@ -7,7 +7,7 @@
   /** @typedef {import("../types-owner-content").DashboardMutationWriter} DashboardMutationWriter */
   /** @typedef {import("../types-owner-content").DashboardMutationOutcome} DashboardMutationOutcome */
 
-  const sdk = /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__);
+  const sdk = root.ReliquaryDashboardHost;
   const h = sdk.React.createElement;
   const { useState, useEffect, useRef } = sdk.hooks;
 

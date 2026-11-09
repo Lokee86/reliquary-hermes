@@ -3,7 +3,7 @@
 
   /** @param {string} type @param {Record<string,unknown>|null} props @param {...unknown} children */
   function h(type, props, ...children) {
-    const sdk = /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__);
+    const sdk = root.ReliquaryDashboardHost;
     return sdk.React.createElement(type, props, ...children);
   }
 
@@ -101,8 +101,8 @@
 
   /** @param {{client:import("../types").DashboardClient,scope:import("../types").ReadScope,memoryId:string}} props */
   function Inspector({ client, scope, memoryId }) {
-    const { useRead, useCursor } = ReliquaryDashboardState;
-    const sdk = /** @type {import("../types").HermesDashboardSDK} */ (window.__HERMES_PLUGIN_SDK__);
+    const { useRead, useCursor } = root.ReliquaryDashboardState;
+    const sdk = root.ReliquaryDashboardHost;
     const [revision, setRevision] = sdk.hooks.useState(/** @type {string | null} */ (null));
     const cursor = useCursor();
     const detail = useRead(client, "ui.memory_detail", scope, { memory_id: memoryId, revision });
@@ -139,7 +139,7 @@
 
   /** @param {{client:import("../types").DashboardClient,scope:import("../types").ReadScope,live?:boolean}} props */
   function Status({ client, scope, live = false }) {
-    const read = ReliquaryDashboardState.useRead(client, "ui.operational_status", scope, scope.owner?.capabilities.status ? {} : null);
+    const read = root.ReliquaryDashboardState.useRead(client, "ui.operational_status", scope, scope.owner?.capabilities.status ? {} : null);
     return h("div", { className: "rly-status-card" },
       h("strong", null, "Operational activity"),
       readContent("operational status", read, (status) => h("dl", null,

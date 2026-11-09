@@ -123,3 +123,22 @@
 .rly-memory-write-form { border-top: 1px solid var(--color-border, #dbe2e8); margin-top: 1rem; padding-top: .75rem; }
 .rly-memory-write-form textarea { resize: vertical; }
 .rly-write-success, .rly-write-error { overflow-wrap: anywhere; }
+
+.rly-setup-form { width: min(100%, 46rem); }
+.rly-setup-form fieldset { border: 0; margin: 0; min-width: 0; padding: 0; }
+.rly-setup-form legend { font-weight: 600; margin: .75rem 0; }
+.rly-setup-form h2 { font-size: 1rem; margin: 1rem 0 .6rem; }
+.rly-setup-path { align-items: end; display: flex; flex-wrap: wrap; gap: .35rem .65rem; margin-bottom: .75rem; }
+.rly-setup-path .rly-field { flex: 1 1 15rem; margin: 0; }
+.rly-setup-check { flex-basis: 100%; font-size: .8rem; margin: 0; overflow-wrap: anywhere; }
+.rly-setup-project { border-bottom: 1px solid var(--color-border, #dbe2e8); margin-bottom: .75rem; padding-bottom: .75rem; }
+.rly-setup-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
+.rly-setup-form button {
+  background: var(--color-background, #fff);
+  border: 1px solid var(--color-border, #dbe2e8);
+  border-radius: .35rem;
+  color: inherit;
+  cursor: pointer;
+  padding: .5rem .75rem;
+}
+.rly-setup-actions button[type="submit"] { border-color: var(--color-primary, #168b83); font-weight: 600; }
