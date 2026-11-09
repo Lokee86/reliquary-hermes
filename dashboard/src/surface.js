@@ -3,8 +3,9 @@
 
   /** @type {import("../types").CreateReliquarySurface} */
   function createSurface({ authedFetch, pickOpenPath, mutationBlockReason, surfaceLabel }) {
-    const { React, hooks } = root.ReliquaryDashboardHost;
+    const { React, hooks, components } = root.ReliquaryDashboardHost;
     const h = React.createElement;
+    const { Button, Input } = components;
     const { useState, useEffect } = hooks;
     const { useRead, useCursor } = root.ReliquaryDashboardState;
     const { meta, readContent, select, pager, Status } = root.ReliquaryDashboardViews;
@@ -82,12 +83,12 @@
           return h("div", { className: "rly-layout" },
             h("aside", { className: "rly-sidebar", "aria-label": "Owner and scope" },
               h("h2", null, "Owner / scope"),
-              h("button", { type: "button", onClick: refreshOwnerData }, "Refresh owner data"),
+              h(Button, { type: "button", onClick: refreshOwnerData }, "Refresh owner data"),
               h("form", { onSubmit: findSession, className: "rly-session-lookup" },
-                h("label", { className: "rly-field" }, h("span", null, "Hermes session ID"), h("input", {
+                h("label", { className: "rly-field" }, h("span", null, "Hermes session ID"), h(Input, {
                   value: sessionInput, maxLength: 128, autoComplete: "off",
                   onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => setSessionInput(event.currentTarget.value),
-                })), h("button", { type: "submit" }, "Look up session")),
+                })), h(Button, { type: "submit" }, "Look up session")),
               ownerOptions.length ? select("Browse authorized owner", owner?.owner_id ?? "", ownerOptions, (id) => {
                 if (id !== selectedOwnerId) {
                   client.invalidate();
@@ -149,7 +150,7 @@
         current?.status ? h(Onboarding, { status: current.status, setup, pickOpenPath,
           mutationsEnabled: !blockReason, onConnected: refresh }) :
           current?.error ? h("div", { role: "alert" },
-            h("p", null, current.error), h("button", { type: "button", onClick: refresh }, "Retry setup status")) :
+            h("p", null, current.error), h(Button, { type: "button", onClick: refresh }, "Retry setup status")) :
             h("p", { role: "status" }, "Checking Reliquary setup…"));
     };
   }

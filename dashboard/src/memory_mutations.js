@@ -3,6 +3,7 @@
 
   const sdk = root.ReliquaryDashboardHost;
   const h = sdk.React.createElement;
+  const { Button, Input, Textarea, Checkbox } = sdk.components;
   const { useState, useEffect, useRef } = sdk.hooks;
   const { useRead } = root.ReliquaryDashboardState;
 
@@ -26,7 +27,7 @@
     return h("div", { className: "rly-write-error", role: "status" },
       h("p", null, conflict ? "The owner changed after this draft was loaded." :
         `Could not save this draft (${outcome.code}). The draft and request key are preserved.`),
-      conflict && onRefresh && h("button", { type: "button", onClick: onRefresh }, "Refresh owner data"),
+      conflict && onRefresh && h(Button, { type: "button", onClick: onRefresh }, "Refresh owner data"),
       !conflict && outcome.retryable && h("p", { className: "rly-muted" }, "Submit again to retry this same draft."));
   }
 
@@ -85,15 +86,15 @@
         h("p", { className: "rly-write-conflict", role: "status" },
           `Draft started from revision ${draft.baseRevision}; latest revision is ${detail.body.revision}. Review before resubmitting.`),
       detail && detail.memory.revision !== detail.body.revision && h("p", { className: "rly-muted" }, "The exact body revision differs from the summary revision."),
-      h("label", { className: "rly-field" }, h("span", null, "Replacement title"), h("input", {
+      h("label", { className: "rly-field" }, h("span", null, "Replacement title"), h(Input, {
         value: draft.title, maxLength: 128,
         onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => edit("title", event.currentTarget.value),
       })),
-      h("label", { className: "rly-field" }, h("span", null, "Replacement body"), h("textarea", {
+      h("label", { className: "rly-field" }, h("span", null, "Replacement body"), h(Textarea, {
         value: draft.body, maxLength: 32768, rows: 5,
         onChange: (/** @type {{currentTarget:HTMLTextAreaElement}} */ event) => edit("body", event.currentTarget.value),
       })),
-      h("button", { type: "submit", disabled: pending || refreshing || outcome?.status === "ok" || !detail || detail.memory.lifecycle !== "active" ||
+      h(Button, { type: "submit", disabled: pending || refreshing || outcome?.status === "ok" || !detail || detail.memory.lifecycle !== "active" ||
         detail.body.availability !== "available" ||
         !draft.initialized || !draft.title.trim() || !draft.body.trim() }, pending ? "Saving…" : "Save correction"),
       resultMessage(outcome, onRefresh));
@@ -145,23 +146,23 @@
     return h("section", { className: "rly-memory-write-panel", "aria-label": "Memory management" },
       canCreate && h("form", { className: "rly-memory-write-form", onSubmit: submitCreate },
         h("h3", null, "Create user-origin Memory"),
-        h("label", { className: "rly-field" }, h("span", null, "Title"), h("input", {
+        h("label", { className: "rly-field" }, h("span", null, "Title"), h(Input, {
           value: draft.title, maxLength: 128,
           onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => edit("title", event.currentTarget.value),
         })),
-        h("label", { className: "rly-field" }, h("span", null, "Body"), h("textarea", {
+        h("label", { className: "rly-field" }, h("span", null, "Body"), h(Textarea, {
           value: draft.body, maxLength: 32768, rows: 5,
           onChange: (/** @type {{currentTarget:HTMLTextAreaElement}} */ event) => edit("body", event.currentTarget.value),
         })),
-        h("label", { className: "rly-field" }, h("span", null, "Category"), h("input", {
+        h("label", { className: "rly-field" }, h("span", null, "Category"), h(Input, {
           value: draft.category, maxLength: 128,
           onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => edit("category", event.currentTarget.value),
         })),
-        h("label", { className: "rly-field" }, h("span", null, "Memory type"), h("input", {
+        h("label", { className: "rly-field" }, h("span", null, "Memory type"), h(Input, {
           value: draft.memory_type, maxLength: 128,
           onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => edit("memory_type", event.currentTarget.value),
         })),
-        h("button", { type: "submit", disabled: pending || refreshing || outcome?.status === "ok" || !draft.title.trim() || !draft.body.trim() || !draft.category.trim() || !draft.memory_type.trim() },
+        h(Button, { type: "submit", disabled: pending || refreshing || outcome?.status === "ok" || !draft.title.trim() || !draft.body.trim() || !draft.category.trim() || !draft.memory_type.trim() },
           pending ? "Saving…" : "Create Memory"), resultMessage(outcome, onRefresh)),
       canEdit && memoryId && h(CorrectionForm, { key: memoryId, client, scope, memoryId,
         detail: detail.state.status === "ok" ? detail.state.value : null,
@@ -209,10 +210,10 @@
     return h("form", { className: "rly-memory-write-form", onSubmit: submit },
       h("h3", null, "Retire superseded Memory"),
       h("label", { className: "rly-confirmation" },
-        h("input", { type: "checkbox", checked: confirmed, disabled: pending,
-          onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => setConfirmed(event.currentTarget.checked),
+        h(Checkbox, { checked: confirmed, disabled: pending,
+          onCheckedChange: (/** @type {boolean | "indeterminate"} */ checked) => setConfirmed(checked === true),
         }), " Confirm terminal retirement of this revision"),
-      h("button", { type: "submit", disabled: !confirmed || pending || refreshing || outcome?.status === "ok" },
+      h(Button, { type: "submit", disabled: !confirmed || pending || refreshing || outcome?.status === "ok" },
         pending ? "Saving…" : "Retire Memory"),
       resultMessage(outcome, onRefresh));
   }

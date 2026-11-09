@@ -9,7 +9,9 @@
 
   const sdk = root.ReliquaryDashboardHost;
   const h = sdk.React.createElement;
+  const { Button, Input } = sdk.components;
   const { useState, useEffect, useRef } = sdk.hooks;
+  const { select } = root.ReliquaryDashboardViews;
 
   function requestKey() {
     const bytes = new Uint8Array(16);
@@ -33,13 +35,13 @@
       return h("div", { className: "rly-write-success", role: "status" },
         h("p", null, "Saved. Receipt ", outcome.value.result.receipt_id,
           ". Refresh owner data to inspect the committed change."),
-        onRefresh && h("button", { type: "button", onClick: onRefresh }, "Refresh owner data"));
+        onRefresh && h(Button, { type: "button", onClick: onRefresh }, "Refresh owner data"));
     }
     const conflict = outcome.status === "conflict" || outcome.status === "stale_cursor";
     return h("div", { className: "rly-write-error", role: "status" },
       h("p", null, conflict ? "The owner changed after this draft was loaded."
         : "Could not save this draft (", safeCode(outcome.code), "). The draft and request key are preserved."),
-      conflict && onRefresh && h("button", { type: "button", onClick: onRefresh }, "Refresh owner data"),
+      conflict && onRefresh && h(Button, { type: "button", onClick: onRefresh }, "Refresh owner data"),
       !conflict && outcome.retryable && h("p", { className: "rly-muted" }, "Submit again to retry this same draft."));
   }
 
@@ -135,44 +137,27 @@
     }
 
     if (!canEdit) return null;
+    const memoryOptions = [{ value: "", label: "Choose a Memory" },
+      ...nodes.map((node) => ({ value: node.node_id, label: node.label }))];
     return h("section", { className: "rly-graph-write-panel", "aria-label": "User association" },
       h("h3", null, "User association"),
       h("p", { className: "rly-muted" }, "Changes are checked against the current owner cut and Memory revisions."),
       h("form", { className: "rly-memory-write-form", onSubmit: submit },
-        h("label", { className: "rly-field" },
-          h("span", null, "Action"),
-          h("select", {
-            value: mode, disabled: pending,
-            onChange: (/** @type {{currentTarget:HTMLSelectElement}} */ event) => changed(() => {
-              setMode(/** @type {"link"|"unlink"} */ (event.currentTarget.value));
-              setOutcome(null);
-            }),
-          }, h("option", { value: "link" }, "Link two Memories"),
-          h("option", { value: "unlink" }, "Unlink an existing user association"))),
+        select("Action", mode, [
+          { value: "link", label: "Link two Memories" },
+          { value: "unlink", label: "Unlink an existing user association" },
+        ], (value) => changed(() => setMode(/** @type {"link"|"unlink"} */ (value))), pending),
         mode === "link"
           ? h("div", null,
-            h("label", { className: "rly-field" }, h("span", null, "From Memory"), h("select", {
-              value: sourceId, disabled: pending,
-              onChange: (/** @type {{currentTarget:HTMLSelectElement}} */ event) =>
-                changed(() => setSourceId(event.currentTarget.value)),
-            }, h("option", { value: "" }, "Choose a Memory"),
-            ...nodes.map((node) => h("option", { key: node.memory_id, value: node.memory_id }, node.label)))),
-            h("label", { className: "rly-field" }, h("span", null, "To Memory"), h("select", {
-              value: targetId, disabled: pending,
-              onChange: (/** @type {{currentTarget:HTMLSelectElement}} */ event) =>
-                changed(() => setTargetId(event.currentTarget.value)),
-            }, h("option", { value: "" }, "Choose a Memory"),
-            ...nodes.map((node) => h("option", { key: node.memory_id, value: node.memory_id }, node.label)))),
+            select("From Memory", sourceId, memoryOptions, (value) => changed(() => setSourceId(value)), pending),
+            select("To Memory", targetId, memoryOptions, (value) => changed(() => setTargetId(value)), pending),
             duplicate && h("p", { className: "rly-muted" }, "These Memories already have an active user association."),
           )
-          : h("label", { className: "rly-field" }, h("span", null, "Active user association"), h("select", {
-            value: edgeId, disabled: pending,
-            onChange: (/** @type {{currentTarget:HTMLSelectElement}} */ event) =>
-              changed(() => setEdgeId(event.currentTarget.value)),
-          }, h("option", { value: "" }, "Choose an association"),
-          ...edges.map((edge) => h("option", { key: edge.edge_id, value: edge.edge_id },
-            `${byId.get(edge.source_id)?.label} → ${byId.get(edge.target_id)?.label}`)))),
-        h("button", { type: "submit", disabled: !canSubmit },
+          : select("Active user association", edgeId, [{ value: "", label: "Choose an association" },
+            ...edges.map((edge) => ({ value: edge.edge_id,
+              label: `${byId.get(edge.source_id)?.label} → ${byId.get(edge.target_id)?.label}` }))],
+          (value) => changed(() => setEdgeId(value)), pending),
+        h(Button, { type: "submit", disabled: !canSubmit },
           pending ? "Saving…" : mode === "link" ? "Link Memories" : "Unlink association"),
         h(OutcomeMessage, { outcome, onRefresh })));
   }
@@ -219,14 +204,14 @@
       h("form", { className: "rly-memory-write-form", onSubmit: submit },
         h("h3", null, "Rename selected community"),
         !community && h("p", { className: "rly-muted" }, "Current community metadata is unavailable."),
-        h("label", { className: "rly-field" }, h("span", null, "Community name"), h("input", {
+        h("label", { className: "rly-field" }, h("span", null, "Community name"), h(Input, {
           value: name, maxLength: 128, disabled: pending,
           onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => {
             const value = event.currentTarget.value;
             setName(value); setDraftKey(requestKey()); setOutcome(null);
           },
         })),
-        h("button", { type: "submit", disabled: pending || refreshing || !community || !name.trim() },
+        h(Button, { type: "submit", disabled: pending || refreshing || !community || !name.trim() },
           pending ? "Saving…" : "Save community name"),
         h(OutcomeMessage, { outcome, onRefresh })));
   }

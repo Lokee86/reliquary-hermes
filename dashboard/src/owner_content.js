@@ -4,6 +4,7 @@
   /** @param {any} type @param {any} props @param {...any} children */
   const h = (type, props, ...children) => root.ReliquaryDashboardHost.React.createElement(type, props, ...children);
   const { useState, useEffect } = root.ReliquaryDashboardHost.hooks;
+  const { Button, Input } = root.ReliquaryDashboardHost.components;
   const { useRead, useCursor } = root.ReliquaryDashboardState;
   const { meta, readContent, select, pager, MemoryList, Inspector } = root.ReliquaryDashboardViews;
   const { GraphView, CommunityView } = root.ReliquaryDashboardGraph;
@@ -15,7 +16,7 @@
   function Filters({ filters, communities, onChange }) {
     /** @param {"query"|"category"|"memory_type"} key @param {string} label */
     function input(key, label) {
-      return h("label", { className: "rly-field" }, h("span", null, label), h("input", {
+      return h("label", { className: "rly-field" }, h("span", null, label), h(Input, {
         type: key === "query" ? "search" : "text", value: filters[key] ?? "",
         maxLength: key === "query" ? 1024 : 128,
         onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => {
@@ -34,7 +35,7 @@
         select("Community", filters.community_id ?? "", [{ value: "", label: "Any" },
           ...communities.map((item) => ({ value: item.community_id, label: item.name ?? item.community_id }))],
         (value) => onChange({ ...filters, community_id: value || null })),
-        h("button", { type: "button", onClick: () => onChange(initialFilters) }, "Clear filters"))));
+        h(Button, { type: "button", onClick: () => onChange(initialFilters) }, "Clear filters"))));
   }
 
   /** Shared HU02 owner content. Scope is always bound to an admitted owner.
@@ -103,10 +104,10 @@
     return h("div", { className: "rly-owner-content" },
       h("main", { className: "rly-main", "aria-label": "Memory graph or list" },
         h("div", { className: "rly-view-switch", role: "group", "aria-label": "Memory view" },
-          h("button", { type: "button", "aria-pressed": mode === "graph", onClick: () => setMode("graph") }, "Graph page"),
-          h("button", { type: "button", "aria-pressed": mode === "list", onClick: () => setMode("list") }, "List page")),
+          h(Button, { type: "button", "aria-pressed": mode === "graph", onClick: () => setMode("graph") }, "Graph page"),
+          h(Button, { type: "button", "aria-pressed": mode === "list", onClick: () => setMode("list") }, "List page")),
         mode === "graph" ? h("section", { "aria-label": "Memory graph" },
-          (seedId || graphCommunity) && h("button", { type: "button", onClick: () => {
+          (seedId || graphCommunity) && h(Button, { type: "button", onClick: () => {
             graphCursor.reset(); setSelection(null); setSeedId(null); setGraphCommunity(null);
           } }, "Reset graph"),
           readContent("graph", graph, graphContent, graphCursor.reset),
@@ -125,12 +126,12 @@
               onNextCommunities: (/** @type {string} */ cursor) => { changeCommunity(null); communitiesCursor.next(cursor); },
               onNextMembers: membersCursor.next,
             }),
-            communitiesCursor.current && h("button", { type: "button", onClick: () => {
+            communitiesCursor.current && h(Button, { type: "button", onClick: () => {
               changeCommunity(null); communitiesCursor.previous();
             } }, "Previous community page"),
-            membersCursor.current && h("button", { type: "button", onClick: membersCursor.previous }, "Previous member page"),
+            membersCursor.current && h(Button, { type: "button", onClick: membersCursor.previous }, "Previous member page"),
             community && members.state.status !== "ok" && readContent("community members", members, () => null, membersCursor.reset),
-            community && grants.graph && h("button", { type: "button", onClick: () => {
+            community && grants.graph && h(Button, { type: "button", onClick: () => {
               graphCursor.reset(); setSeedId(null); setSelection(null); setGraphCommunity(community.community_id); setMode("graph");
             } }, "Show community in graph")), communitiesCursor.reset),
           write && community && h(CommunityRenamePanel, { key: community.community_id, scope, write,

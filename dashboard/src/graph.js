@@ -1,6 +1,8 @@
 (function (root) {
   "use strict";
 
+  const { Button } = root.ReliquaryDashboardHost.components;
+
   /** @typedef {import("../types").GraphViewProps} GraphViewProps */
   /** @typedef {import("../types").CommunityViewProps} CommunityViewProps */
 
@@ -89,7 +91,7 @@
             h("dt", null, "Type"), h("dd", null, selectedNode.kind),
             h("dt", null, "Origin"), h("dd", null, selectedNode.origin),
             h("dt", null, "Revision / cut"), h("dd", null, `${selectedNode.revision} · ${selectedNode.cut}`)),
-          h("button", { type: "button", onClick: () => props.onExpand(selectedNode.node_id) }, "Expand neighborhood")),
+          h(Button, { type: "button", onClick: () => props.onExpand(selectedNode.node_id) }, "Expand neighborhood")),
         selectedEdge && h("div", { className: "rly-graph-selection-details" },
           h("h3", null, `${selectedEdge.kind} connection`),
           h("dl", null,
@@ -105,13 +107,13 @@
     const h = React.createElement;
     const { communities, members, selected, onCommunity, onMemory, onNextCommunities, onNextMembers } = props;
     const communityRows = communities.items.map((community) => h("li", { key: community.community_id },
-      h("button", {
+      h(Button, {
         type: "button", className: `rly-community-button${selected?.community_id === community.community_id ? " is-selected" : ""}`,
         "aria-pressed": selected?.community_id === community.community_id, onClick: () => onCommunity(community),
       }, h("strong", null, community.name ?? `Community ${community.community_id}`),
       h("span", null, `${community.member_count} members · ${community.name_origin}`))));
     const memberRows = members?.items.map((memoryId) => h("li", { key: memoryId },
-      h("button", { type: "button", onClick: () => onMemory(memoryId) }, memoryId))) ?? [];
+      h(Button, { type: "button", onClick: () => onMemory(memoryId) }, memoryId))) ?? [];
     const nextCommunity = communities.next_cursor;
     const nextMember = members?.next_cursor;
 
@@ -120,14 +122,14 @@
         h("div", { className: "rly-community-list-pane" },
           communityRows.length ? h("ul", { className: "rly-community-list" }, ...communityRows)
             : h("p", { className: "rly-muted" }, "No communities on this page."),
-          nextCommunity && h("button", { type: "button", onClick: () => onNextCommunities(nextCommunity) }, "Next community page")),
+          nextCommunity && h(Button, { type: "button", onClick: () => onNextCommunities(nextCommunity) }, "Next community page")),
         h("div", { className: "rly-community-members-pane" },
           h("h3", null, "Members"),
           selected && h("p", { className: "rly-muted" }, `Community generation ${selected.generation}`),
           memberRows.length ? h("ul", { className: "rly-community-members" }, ...memberRows) : null,
           members && !memberRows.length && h("p", { className: "rly-muted" }, "No members on this page."),
           !selected && h("p", { className: "rly-muted" }, "Choose a community to inspect its members."),
-          nextMember && h("button", { type: "button", onClick: () => onNextMembers(nextMember) }, "Next member page"))));
+          nextMember && h(Button, { type: "button", onClick: () => onNextMembers(nextMember) }, "Next member page"))));
   }
 
   root.ReliquaryDashboardGraph = { GraphView, CommunityView };

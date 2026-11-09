@@ -1,11 +1,9 @@
 (function (root) {
   "use strict";
 
-  /** @param {string} type @param {Record<string,unknown>|null} props @param {...unknown} children */
-  function h(type, props, ...children) {
-    const sdk = root.ReliquaryDashboardHost;
-    return sdk.React.createElement(type, props, ...children);
-  }
+  const { React, components } = root.ReliquaryDashboardHost;
+  const h = React.createElement;
+  const { Button, Select } = components;
 
   /** @param {string} label @param {string} value */
   function meta(label, value) {
@@ -26,31 +24,28 @@
     if (state.status === "stale_cursor" && resync) {
       return h("div", { role: "alert" },
         h("p", null, "This " + label + " page expired."),
-        h("button", { type: "button", onClick: () => { resync(); retry(); } }, "Return to first " + label + " page"));
+        h(Button, { type: "button", onClick: () => { resync(); retry(); } }, "Return to first " + label + " page"));
     }
     const reason = state.status === "unavailable" || state.status === "unsupported"
       ? label + " unavailable."
       : "Could not load " + label + " (" + state.code + ").";
     return h("div", { role: "status", className: "rly-read-message" },
       h("p", null, reason),
-      state.retryable && h("button", { type: "button", onClick: retry }, "Retry " + label));
+      state.retryable && h(Button, { type: "button", onClick: retry }, "Retry " + label));
   }
 
   /** @param {string} label @param {import("../types").CursorState} cursor @param {string | null} next */
   function pager(label, cursor, next) {
     if (!cursor.current && !next) return null;
     return h("div", { className: "rly-pager" },
-      h("button", { type: "button", disabled: cursor.current === null, onClick: cursor.previous }, "Previous " + label + " page"),
-      h("button", { type: "button", disabled: next === null, onClick: () => { if (next) cursor.next(next); } }, "Next " + label + " page"));
+      h(Button, { type: "button", disabled: cursor.current === null, onClick: cursor.previous }, "Previous " + label + " page"),
+      h(Button, { type: "button", disabled: next === null, onClick: () => { if (next) cursor.next(next); } }, "Next " + label + " page"));
   }
 
-  /** @param {string} label @param {string} value @param {{value:string,label:string}[]} options @param {(value:string)=>void} onChange */
-  function select(label, value, options, onChange) {
+  /** @param {string} label @param {string} value @param {{value:string,label:string}[]} options @param {(value:string)=>void} onValueChange @param {boolean} [disabled] */
+  function select(label, value, options, onValueChange, disabled) {
     return h("label", { className: "rly-field" }, h("span", null, label),
-      h("select", {
-        value,
-        onChange: (/** @type {{currentTarget: HTMLSelectElement}} */ event) => onChange(event.currentTarget.value),
-      }, ...options.map((option) => h("option", { key: option.value, value: option.value }, option.label))));
+      h(Select, { label, value, options, onValueChange, disabled }));
   }
 
   /** @param {{key:string,currentTarget:HTMLButtonElement,preventDefault():void}} event */
@@ -68,7 +63,7 @@
     if (!items.length) return h("p", { className: "rly-empty" }, "No Memories match this page.");
     return h("ul", { className: "rly-memory-list", "aria-label": "Memories in this page" },
       ...items.map((memory) => h("li", { key: memory.memory_id },
-        h("button", {
+        h(Button, {
           type: "button", className: "rly-memory-button", "aria-current": selected === memory.memory_id ? "true" : undefined,
           onClick: () => onSelect(memory.memory_id), onKeyDown: navigateList,
         },
@@ -125,11 +120,11 @@
         h("h3", null, "Body"),
         h("p", { className: "rly-body" }, body.content ?? "Body availability is " + body.availability + "."))),
       h("h3", null, "Revision history"),
-      revision && h("button", { type: "button", onClick: () => setRevision(null) }, "Show current revision"),
+      revision && h(Button, { type: "button", onClick: () => setRevision(null) }, "Show current revision"),
       readContent("history", history, ({ revisions }) => h("div", null,
         revisions.items.length
           ? h("ul", { className: "rly-history" }, ...revisions.items.map((row) => h("li", { key: row.revision },
-            h("button", { type: "button", "aria-pressed": row.revision === exactRevision,
+            h(Button, { type: "button", "aria-pressed": row.revision === exactRevision,
               onClick: () => setRevision(row.revision) }, "Revision " + row.revision + " · " + row.availability))))
           : h("p", { className: "rly-muted" }, "No retained revisions on this page."),
         pager("history", cursor, revisions.next_cursor)), cursor.reset),
