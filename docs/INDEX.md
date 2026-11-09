@@ -10,6 +10,7 @@
 - [HU03 dashboard authorization](hu03-dashboard-authorization-2026-11-08.md): approved live authorization mapping from Hermes-authenticated profile scope to the configured Reliquary topology; unblocks `ui.owner_sessions`.
 - [HU05 cross-surface onboarding specification](hu05-cross-surface-onboarding-desktop-spec-2026-11-08.md) records the approved setup and Desktop gates.
 - [HU06 stock Hermes compatibility specification](hu06-stock-hermes-desktop-mutation-compat-spec-2026-11-09.md) defines the Desktop capability gate and the stock and fixed host acceptance matrix.
+- [HU07 Hermes-native presentation specification](hu07-hermes-native-presentation-spec-2026-11-09.md) moves visual presentation ownership to Hermes-native web and Desktop controls and limits Reliquary CSS to structural/layout concerns.
 - [Verification and later gates](verification.md): exact commands, evidence, ownership impact and unimplemented capabilities.
 - [Roadmap](roadmap.md): deferred service-lifecycle work that remains intentionally outside the current acceptance scope.
 - [Documentation policy and procedure](documentation-policy.md): service profile, canonical owners and required checks.
