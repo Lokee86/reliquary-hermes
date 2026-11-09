@@ -146,6 +146,13 @@ try {
 }
 
 async function browseOwners(root, page, connect, compatibilityNotice) {
+  const inspector = root.locator(".rly-inspector");
+  async function expectBody(content) {
+    const body = inspector.locator(".rly-body").filter({ hasText: content });
+    await body.waitFor();
+    assert.equal(await body.textContent(), content);
+  }
+
   const owners = root.getByRole("combobox", { name: "Browse authorized owner" });
   await owners.waitFor({ timeout: 45_000 });
   const ids = await owners.locator("option").evaluateAll((options) => options.map((option) => option.value));
@@ -161,7 +168,7 @@ async function browseOwners(root, page, connect, compatibilityNotice) {
     await list.waitFor();
     if (fixture.expectedMemory) {
       await list.getByRole("button", { name: new RegExp(fixture.expectedMemory.title) }).click();
-      await root.locator(".rly-inspector").getByText(fixture.expectedMemory.body, { exact: true }).waitFor();
+      await expectBody(fixture.expectedMemory.body);
     }
     assert.equal(await root.locator(".rly-memory-write-form, .rly-graph-write-panel, .rly-community-rename").count(), 0);
     await compatibilityNotice.waitFor();
@@ -175,7 +182,6 @@ async function browseOwners(root, page, connect, compatibilityNotice) {
     const body = "Synthetic worker-verified Memory body.";
     const replacementTitle = "Corrected Desktop proof";
     const replacementBody = "Corrected worker-verified Memory body.";
-    const inspector = root.locator(".rly-inspector");
     const refresh = root.getByRole("button", { name: "Refresh owner data", exact: true });
     const list = root.getByRole("list", { name: "Memories in this page" });
     const formFor = (name) => inspector.locator(".rly-memory-write-form")
@@ -194,7 +200,7 @@ async function browseOwners(root, page, connect, compatibilityNotice) {
     await refresh.click();
     await root.getByRole("button", { name: "List page", exact: true }).click();
     await list.getByRole("button", { name: new RegExp(title) }).click();
-    await inspector.getByText(body, { exact: true }).waitFor();
+    await expectBody(body);
 
     const edit = formFor("Correct selected Memory");
     await edit.getByRole("button", { name: "Save correction", exact: true, disabled: false }).waitFor();
@@ -207,10 +213,10 @@ async function browseOwners(root, page, connect, compatibilityNotice) {
     await save(edit, "Save correction");
     await refresh.click();
     await list.getByRole("button", { name: new RegExp(replacementTitle) }).click();
-    await inspector.getByText(replacementBody, { exact: true }).waitFor();
+    await expectBody(replacementBody);
 
     await list.getByRole("button", { name: new RegExp(title) }).click();
-    await inspector.getByText(body, { exact: true }).waitFor();
+    await expectBody(body);
     const retire = formFor("Retire superseded Memory");
     await retire.getByRole("checkbox", { name: "Confirm terminal retirement of this revision" }).check();
     await retire.getByRole("button", { name: "Retire Memory", exact: true }).click();
