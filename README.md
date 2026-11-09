@@ -14,7 +14,7 @@ Use the local service guide to configure existing owners and activate the provid
 - [Web-dashboard DTOs](docs/ui-contract.md): standard typed schema for all required HU views and user actions.
 - [Verification and remaining gates](docs/verification.md) records the test commands, observed results and remaining integration gates.
 
-The HP01 provider contract is pinned to Hermes `v0.23.0` at `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19`. HU05 Desktop writes with isolated workers require the verified Hermes hosted native HTTP admission fix. [Hosted Desktop verification](docs/verification.md#hu05-isolated-desktop-mutation-checks)
+The HP01 provider contract is pinned to Hermes `v0.23.0` at `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19`. On stock Hermes builds that lack native admission forwarding, Desktop supports browsing and the web dashboard supports setup and writes. Desktop enables setup and writes automatically when Hermes supplies verified native admission. [Stock and fixed Hermes verification](docs/verification.md#hu06-stock-and-fixed-hermes-acceptance)
 
 The canonical planning files are in the Reliquary Git repository at `bd1acf2c10ab3ffb2887928b8497608fcd5c21f7:docs/architecture/`, including `hermes-reliquary-plugin-implementation-spec-2026-11-06.md` and the post-G4 execution DAG. The accepted G4 product evidence is anchored at `a3c3a964`.
 

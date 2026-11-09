@@ -4,6 +4,14 @@
 **Baseline:** `5b338b5671672fb0461f62a46ef920ffa7131d99` — HU05 verified against the installed Hermes native-admission fix  
 **Repository:** `C:\!bin\workspace\reliquary-hermes-onboarding`
 
+## Purpose
+
+Define the supported Reliquary Desktop and web behavior across stock and fixed Hermes hosts.
+
+## Overview
+
+The same plugin uses verified native admission to decide when to offer Desktop setup and writes.
+
 ## Problem Statement
 
 HU05 proved the full Reliquary Desktop management surface, including sensitive Memory and graph mutations. That acceptance exposed a Hermes host limitation: stock Hermes `b766b76988449e15e3914037d3e03fb96af72774` redeems the native Desktop ticket at the gateway but does not preserve the resulting native-admission fact when forwarding a request into an isolated plugin worker.
@@ -240,6 +248,11 @@ HU06 is complete when:
 - targeted stock-Hermes and fixed-Hermes acceptance suites pass;
 - HU05 runtime, ingestion, retrieval and restart regressions remain green.
 
-## Further Notes
+## Related docs
+
+- [Local service and provider](local-service.md)
+- [HU06 stock and fixed Hermes acceptance](verification.md#hu06-stock-and-fixed-hermes-acceptance)
+
+## Notes
 
 The local Hermes commit `104a7c4158e98719750e32347cd4101a7b35bc8d` remains useful as the positive acceptance host until an official Hermes release includes equivalent native-admission forwarding. It is test infrastructure/reference behavior, not a runtime dependency of the public plugin.

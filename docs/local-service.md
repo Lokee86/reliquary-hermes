@@ -19,9 +19,9 @@ Each configured profile has a separate local service and credential. Multiple se
 
 For a unified directory installation, build the browser and Desktop assets with `node dashboard/scripts/build.cjs` and `node desktop/scripts/build.cjs`. Install the provider Python files from `src/reliquary_hermes/` at the root of the existing `plugins/reliquary` package with its native manifest and host pin. Place the rebuilt host in `host/`, the dashboard manifest, Python router and `dist/` in `dashboard/`, and the generated Desktop entry at `desktop/plugin.js`. The dashboard uses the `reliquary-hermes` plugin namespace. Enable that dashboard contribution in the profile and enable Reliquary in Desktop's Capabilities → Plugins.
 
-Desktop writes with `plugins.isolation: host` require a Hermes installation that carries verified, profile-bound native HTTP admission to isolated plugin workers. Install a Hermes build containing that fix. [Hosted Desktop verification](verification.md#hu05-isolated-desktop-mutation-checks)
+With `plugins.isolation: host`, Desktop enables setup and writes when Hermes carries verified native HTTP admission to the active profile's worker. On stock builds without that capability, the Desktop pane shows setup status and supports browsing configured owners. Open the Reliquary web dashboard to connect owners or manage writes. The same plugin enables Desktop setup and writes automatically on a compatible Hermes build. [Stock and fixed Hermes verification](verification.md#hu06-stock-and-fixed-hermes-acceptance)
 
-Open the Reliquary tab in the browser or the Reliquary pane in Desktop. Both use the active Hermes profile. The browser accepts typed paths and Desktop also offers its native file picker. Validation shows the detected owner kinds and stable IDs. Connect starts the service and opens the owner dashboard.
+Open the Reliquary tab in the browser or the Reliquary pane in Desktop. Both use the active Hermes profile. The browser accepts typed paths and Desktop also offers its native file picker. In the browser or on a Desktop host with write support, validation shows the detected owner kinds and stable IDs. Connect starts the service and opens the owner dashboard. If you connect from the web dashboard, reopen the Desktop pane to browse the configured owners.
 
 Paths are absolute. Configuration is scoped to the `hermes_home` that the pinned host supplies. The example `<hermes_home>/reliquary/owners.json` below binds a session to the Lantern project.
 
@@ -80,7 +80,7 @@ The REL inspector shows Memory summaries, current payloads, available history an
 
 ## Limits
 
-Graph retrieval follows Root's one-hop workflow. A selection that exceeds the requested result or wire bounds fails before a retrieval receipt is recorded. Dashboard writes require an authenticated same-origin Hermes request and the expected owner cut. Setup uses existing Root owners and registry routing. Hermes workspace names, display names and caller-provided owner IDs convey no routing authority.
+Graph retrieval follows Root's one-hop workflow. A selection that exceeds the requested result or wire bounds fails before a retrieval receipt is recorded. Dashboard writes require verified same-origin browser or native Desktop admission and the expected owner cut. Setup uses existing Root owners and registry routing. Hermes workspace names, display names and caller-provided owner IDs convey no routing authority.
 
 ## Related docs
 
