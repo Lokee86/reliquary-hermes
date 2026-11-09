@@ -4,6 +4,8 @@
 **Baseline:** `5371fda` — HP07 real-model recall and restart acceptance  
 **Branch:** `hu05/onboarding-desktop`
 
+## Purpose
+
 ## Problem Statement
 
 Reliquary is operationally integrated with Hermes, and the web dashboard can manage configured owners, but first-run setup is still CLI-first. An unconfigured web dashboard shows an unavailable binding state instead of guiding setup, and the Hermes Desktop app has no native Reliquary management surface at all.
@@ -15,6 +17,8 @@ This creates three user-facing inconsistencies:
 3. setup logic is owned by the provider CLI path rather than exposed as one reusable backend capability for all Hermes surfaces.
 
 The correction is to make setup and management one shared Reliquary capability with web and Desktop UI adapters.
+
+## Overview
 
 ## Target Architecture
 
@@ -313,3 +317,12 @@ HU05 is complete only when:
 - web-first and Desktop-first live setup both pass;
 - existing HP07 ingestion/recall/restart acceptance remains green;
 - no duplicate setup path or temporary compatibility adapter remains.
+
+## Related docs
+
+- [Local service and provider](local-service.md)
+- [Integration verification](verification.md)
+
+## Notes
+
+The completion gates in this specification define HU05 acceptance.

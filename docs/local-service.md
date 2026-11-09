@@ -12,10 +12,10 @@ Each configured profile has a separate local service and credential. Multiple se
 
 ## Configuration and setup
 
-1. Build the Rust executable with `cargo build --manifest-path host/Cargo.toml --locked --offline`. Use the sibling product revision in the verification guide.
-2. Identify an existing main REL with a non-project scope, an existing active PHY, and a project-scoped REL for each project. Create new owners with the product CLI if needed. The provider setup opens explicitly configured files.
-3. In a profile where the pinned Hermes revision has discovered the standalone provider, run `hermes memory setup` and select Reliquary. Enter the profile ID, authenticated principal ID, main REL path, active PHY path and absolute host binary path. The setup hook provisions a random profile credential through the Hermes secret writer and activates the provider after saving the configuration.
-4. Configure project entries in the private `owners.json` before starting the service. Map the exact Hermes session IDs that belong to those projects. Start a new Hermes session and wait for provider attachment.
+1. Install the standalone Reliquary plugin and its built host in the active Hermes profile. The default executable is `plugins/reliquary/host/reliquary-hermes-host.exe` under that profile. The verification guide records the Root revision used to build it.
+2. Identify an existing main REL with a non-project scope, an active PHY, and a project-scoped REL for each optional project. Create owners with the Reliquary CLI if needed.
+3. Choose these paths in Reliquary setup or run `hermes memory setup reliquary` for headless setup. Setup derives profile and service identity, validates the paths through the Rust host, provisions a random credential in Hermes secret storage, and checks the signed host topology before selecting the provider.
+4. Start a new Hermes session to attach the provider. Set any explicit session-to-project mapping in the private `owners.json` before the session first attaches.
 
 Paths are absolute. Configuration is scoped to the `hermes_home` that the pinned host supplies. The example `<hermes_home>/reliquary/owners.json` below binds a session to the Lantern project.
 
@@ -52,7 +52,7 @@ The provider hands bounded, text-only Hermes egress to a context-bound worker. T
 
 Setup enables the ordinary `reliquary-source-observer` companion unless the profile explicitly disables it. The observer records committed deliberate archive and delete notifications even when the service is down. The next running provider worker prioritizes that terminal intent over older copies. An existing native import epoch must settle before Root can write its tombstone. The host still denies replay during that wait. A terminal fence does not schedule new extraction for a stopped import.
 
-To enable native processing, create a private `<hermes_home>/reliquary/processing.json` containing `config_path` set to the absolute path of an existing Reliquary binary configuration. Configure the required processing routes through Reliquary. The host uses those routes for REL-only work. A profile without processing configuration can stage a copy, and its import may remain open.
+Setup preserves the path in an existing `<hermes_home>/reliquary/processing.json`. For a fresh profile it detects an existing local `RELIQUARY_CONFIG_PATH` or `<hermes_home>/reliquary/reliquary.cfg`. Supply a different absolute config path during setup to override the detected path. Configure the required processing routes through Reliquary. The host uses those routes for REL-only work. A profile without processing configuration can stage a copy, and its import may remain open.
 
 Recovery replays work that reached the outbox. If Hermes disappears without a clean detach, the host records an unclean runtime and keeps running rather than claiming the copied source is current. On reconnect, the affected source remains reconciliation-required until a supported provider-authoritative transcript snapshot proves continuity; the next normal `sync_turn(..., messages=...)` can provide that snapshot and is deduplicated by stable source IDs/timestamps. This is intentionally best-effort recovery: a Hermes event committed and then lost before callback delivery may not be exactly reconstructable. Same-session rewind and edited or ambiguous overlaps remain fenced pending authoritative reconciliation.
 

@@ -24,6 +24,12 @@ The provider channel denies user edits. Dashboard edits require a separately aut
 
 An ambiguous discovery probe reports unavailable. A missing discovery file or literal connection refusal can start a candidate. The candidate must acquire the service lease before opening any writable Root owner. The host uses existing Root writer conflicts across separate service profiles.
 
+## Profile setup
+
+The separate authenticated setup surface uses `GET /setup-v1/status`, `POST /setup-v1/validate`, and `POST /setup-v1/apply` under the Reliquary dashboard plugin namespace. The Hermes request scope selects the profile, including when the profile has no `owners.json`. Status reports `configured`, `runtime_detected`, the selected `config_path` and current candidate defaults. The POST body contains `main_rel`, `active_phy`, optional `projects` keyed by project ID, and optional `config_path`. Mutations require same-origin browser admission or the Hermes-verified local Desktop grant. The JSON body limit is 64 KiB.
+
+The setup service calls `reliquary-hermes-host setup-validate --state-dir <profile-state>` with bounded JSON over stdin. The request carries the resolved owner configuration and an optional config path. The report exposes owner kind, stable ID, REL scope, open result, config open result and fixed validation codes. The host preflight uses public Root read-only verification and leaves no service lease. Apply revalidates, saves through the canonical settings and secret writers, and checks signed host topology before provider activation. The service token remains private.
+
 ## Dashboard owner discovery
 
 The Hermes plugin admits the request through the pinned dashboard authentication guard and uses the host-bound profile home to read that integration's settings. In-process routes use the stamped secret scope. Hosted routes use the profile worker's launch home after private IPC admission. The browser sends the existing `ui.owner_sessions` envelope. The plugin uses the configured profile and the active PHY stable ID for `VerifiedUIContext`. Its private service request uses the configured service principal and credential.

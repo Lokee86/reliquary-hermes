@@ -22,6 +22,7 @@ from reliquary_hermes.ui_schema import MUTATIONS, OP_CAPABILITY
 from reliquary_hermes.validation import ContractError, MAX_WIRE_BYTES, canonical, decode, require
 
 router = APIRouter()
+_SETUP_BODY_BYTES = 65536
 _SETUP_REQUIRED_FIELDS = frozenset({"main_rel", "active_phy"})
 _SETUP_FIELDS = _SETUP_REQUIRED_FIELDS | {"projects", "config_path"}
 _SETUP_ERRORS = {
@@ -293,10 +294,11 @@ def _service_dashboard_request(home: Path, browser_request: UIRequest, same_orig
         return _error(browser_request, "unavailable", "unavailable", retryable=True)
 
 
-async def _read_bounded_body(request: Request, *, error: str = "dashboard_request_too_large") -> bytes:
+async def _read_bounded_body(request: Request, *, limit: int = MAX_WIRE_BYTES,
+                             error: str = "dashboard_request_too_large") -> bytes:
     body = bytearray()
     async for part in request.stream():
-        if len(body) + len(part) > MAX_WIRE_BYTES:
+        if len(body) + len(part) > limit:
             raise HTTPException(status_code=413, detail=error)
         body.extend(part)
     return bytes(body)
@@ -354,7 +356,7 @@ async def _setup_request(request: Request, operation: str):
         if content_type != "application/json":
             raise HTTPException(status_code=415, detail="setup_json_required")
         try:
-            candidate = decode(await _read_bounded_body(request, error="setup_request_too_large"))
+            candidate = decode(await _read_bounded_body(request, limit=_SETUP_BODY_BYTES, error="setup_request_too_large"))
             require(_SETUP_REQUIRED_FIELDS <= set(candidate) <= _SETUP_FIELDS, "invalid_setup_candidate")
         except ContractError:
             raise HTTPException(status_code=400, detail="invalid_setup_request") from None

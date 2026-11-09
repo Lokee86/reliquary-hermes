@@ -266,6 +266,12 @@ Reliquary combined the two Lantern handoff facts into one Memory. The dashboard 
 
 The focused Python suite passed 19 tests. Its signed-host regression starts an eight-second prepare, then verifies that explicit recall waits and returns the expected Memory. It also verifies that a later prepare preserves the last confirmed dashboard return. All 20 locked offline Rust host tests passed against the same Root snapshot.
 
+## HU05 setup backend verification
+
+Use Hermes `v0.23.0` at `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19` and the accepted HP07 Root revision `6496b888721588f52b4371f1df92d7b2622872fc`. That Root revision opens the binary config and credential bindings read-only during preflight. Run the locked offline host tests and use the rebuilt executable for the Python process fixtures above.
+
+Run `tests/test_setup.py` and `tests/test_setup_api.py` with the pinned Python environment. The service proof covers default resolution, activation, failure rollback, stable credentials and project-session mappings. The API proof checks the actual Hermes token gate, origin admission, one-use native tickets, foreign profile denial and the request bound before any owners exist.
+
 ## Related docs
 
 - [Documentation policy and ownership](documentation-policy.md)
