@@ -1,7 +1,7 @@
 # HU05 — Cross-surface Reliquary onboarding and Desktop interface
 
-**Date:** 2026-11-08  
-**Baseline:** `5371fda` — HP07 real-model recall and restart acceptance  
+**Date:** 2026-11-08
+**Baseline:** `5371fda` — HP07 real-model recall and restart acceptance
 **Branch:** `hu05/onboarding-desktop`
 
 ## Purpose
