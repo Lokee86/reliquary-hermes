@@ -1,0 +1,147 @@
+const assert = require("node:assert/strict");
+const { test } = require("node:test");
+const { createContext, SourceTextModule, SyntheticModule } = require("node:vm");
+const { buildDesktopBundle } = require("../scripts/build.cjs");
+
+const sharedStub = [
+  "function createReliquarySurface(options) {",
+  "  record(options);",
+  "  return function SharedSurface() {};",
+  "}",
+].join("\n");
+
+async function load({ rest, pickOpenPath } = {}) {
+  const contributions = [];
+  const options = [];
+  const routing = { epoch: 1, profile: "default" };
+  const context = createContext({ DOMException, record: (value) => options.push(value) });
+  const react = {
+    createElement(type, props, ...children) { return { type, props, children }; },
+    useMemo: (create) => create(),
+  };
+  const sdk = {
+    ROUTES_AREA: "routes",
+    SIDEBAR_NAV_AREA: "sidebar.nav",
+    gatewayActivationEpoch: () => routing.epoch,
+    useGatewayActivationEpoch: () => routing.epoch,
+    host: { state: { profile: { get: () => routing.profile } } },
+    useValue: (atom) => atom.get(),
+  };
+  function mock(exports) {
+    return new SyntheticModule(Object.keys(exports), function () {
+      for (const [name, value] of Object.entries(exports)) this.setExport(name, value);
+    }, { context });
+  }
+  const imports = new Map([["react", mock(react)], ["@hermes/plugin-sdk", mock(sdk)]]);
+  const plugin = new SourceTextModule(buildDesktopBundle(sharedStub, ".rly-dashboard {}"), { context });
+  await plugin.link((name) => imports.get(name));
+  await plugin.evaluate();
+  const contribution = plugin.namespace.default;
+  contribution.register({
+    registerMany(items) { contributions.push(...items); },
+    rest,
+    os: { pickOpenPath },
+  });
+
+  function render() {
+    const page = contributions.find((item) => item.area === sdk.ROUTES_AREA);
+    const element = page.render();
+    const pane = element.type(element.props);
+    return { pane, surface: options.at(-1) };
+  }
+
+  return { contribution, contributions, render, routing };
+}
+
+const url = (path) => "/api/plugins/reliquary-hermes" + path;
+
+test("registers the Reliquary route and sidebar, and renders the shared surface", async () => {
+  const { contribution, contributions, render } = await load();
+  assert.equal(contribution.id, "reliquary-hermes");
+  assert.equal(contributions.length, 2);
+  const [page, nav] = contributions;
+  assert.equal(page.area, "routes");
+  assert.equal(nav.area, "sidebar.nav");
+  assert.equal(nav.data.label, "Reliquary");
+  assert.equal(nav.data.path, page.data.path);
+  const { pane, surface } = render();
+  assert.equal(pane.props.className, "rly-desktop");
+  assert.equal(pane.children[0].children[0], ".rly-dashboard {}");
+  assert.equal(pane.children[1].type.name, "SharedSurface");
+  assert.equal(surface.surfaceLabel, "HERMES DESKTOP PLUGIN");
+});
+
+test("uses the SDK profile scope for status, validate, apply and management", async () => {
+  const calls = [];
+  const { render, routing } = await load({
+    rest: async (path, options) => {
+      calls.push({ path, profile: routing.profile, method: options.method, body: options.body });
+      return path.endsWith("/apply") ? { valid: true, configured: true } : { status: "ok" };
+    },
+  });
+  const { surface } = render();
+  assert((await surface.authedFetch(url("/setup-v1/status"))).ok);
+  routing.profile = "work";
+  routing.epoch += 1;
+  await assert.rejects(surface.authedFetch(url("/setup-v1/status")), { name: "AbortError" });
+  const current = render().surface;
+  const body = JSON.stringify({ main_rel: "C:/work/main.rel", active_phy: "C:/work/user.phy" });
+  assert((await current.authedFetch(url("/setup-v1/validate"), { method: "POST", body })).ok);
+  const applied = await current.authedFetch(url("/setup-v1/apply"), { method: "POST", body });
+  assert.deepEqual(await applied.json(), { valid: true, configured: true });
+  const dashboard = JSON.stringify({ operation: "ui.owner_sessions" });
+  await current.authedFetch(url("/dashboard-v1"), { method: "POST", body: dashboard });
+  assert.deepEqual(calls.map(({ path, profile, method }) => [path, profile, method]), [
+    ["/setup-v1/status", "default", "GET"],
+    ["/setup-v1/validate", "work", "POST"],
+    ["/setup-v1/apply", "work", "POST"],
+    ["/dashboard-v1", "work", "POST"],
+  ]);
+  assert.equal(JSON.stringify(calls[2].body), body);
+  await assert.rejects(current.authedFetch("/api/config"), /Unsupported Reliquary API request/);
+  assert.equal(calls.length, 4);
+});
+
+test("uses the native picker for REL, PHY and config and keeps cancel inert", async () => {
+  const calls = [];
+  const selections = ["C:/work/main.rel", null, "C:/work/local.cfg"];
+  const { render } = await load({
+    pickOpenPath: async (options) => {
+      calls.push(options);
+      return selections.shift();
+    },
+  });
+  const { surface } = render();
+  assert.equal(await surface.pickOpenPath("REL"), "C:/work/main.rel");
+  assert.equal(await surface.pickOpenPath("PHY"), null);
+  assert.equal(await surface.pickOpenPath("config"), "C:/work/local.cfg");
+  assert.equal(calls[0].filters[0].extensions[0], "rel");
+  assert.equal(calls[1].filters[0].extensions[0], "phy");
+  assert.match(calls[2].title, /configuration/);
+});
+
+test("drops an in-flight path or response after a same-profile backend switch", async () => {
+  let finishRead, finishPicker;
+  const { render, routing } = await load({
+    rest: () => new Promise((resolve) => { finishRead = resolve; }),
+    pickOpenPath: () => new Promise((resolve) => { finishPicker = resolve; }),
+  });
+  const { surface } = render();
+  const response = surface.authedFetch(url("/setup-v1/status"));
+  const selection = surface.pickOpenPath("REL");
+  routing.epoch += 1;
+  finishRead({ configured: true });
+  finishPicker("C:/work/old.rel");
+  await assert.rejects(response, { name: "AbortError" });
+  assert.equal(await selection, null);
+});
+
+test("reports Hermes REST failures without forwarding bridge diagnostics", async () => {
+  const { render } = await load({
+    rest: async () => { throw new Error("Error invoking remote method: Error: 403: private data"); },
+  });
+  const response = await render().surface.authedFetch(url("/setup-v1/status"));
+  assert.equal(response.ok, false);
+  assert.equal(response.status, 403);
+  assert.equal(await response.json(), null);
+});
