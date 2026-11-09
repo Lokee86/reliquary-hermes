@@ -135,7 +135,7 @@ The trusted source adapter can normalize a text-only snapshot through `NativeImp
 
 ### HP05 turn-scoped retrieval
 
-The model tools send the existing provider envelope to `POST /v1/request`. The host binds the turn controller to the authenticated profile, principal, session and turn and uses the session's durable REL route. Refine uses the opaque search ID for the current controller. Traverse uses the opaque returned cut and Memory seeds from that controller. Root runs its one-hop traversal policy.
+The model tools send the provider envelope to `POST /v1/retrieval/tool`. Automatic prefetch requests its result through `POST /v1/request`. The host binds the turn controller to the authenticated profile, principal, session and turn and uses the session's durable REL route. Refine uses the opaque search ID for the current controller. Traverse uses the opaque returned cut and Memory seeds from that controller. Root runs its one-hop traversal policy.
 
 The adapter can send the same `memory_query` envelope to `POST /v1/retrieval/prepare` ahead of actual prefetch. That response carries preparation status only. The host reuses a matching prepared request when the adapter asks for its result. Turn and source changes invalidate cached context. Selection checks occur before the durable selected return, including the result count, exact projection and live cut.
 

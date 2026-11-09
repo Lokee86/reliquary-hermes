@@ -33,7 +33,7 @@ def _wait(predicate, *, seconds=15):
 
 
 @contextmanager
-def _retrieval_fixture_model():
+def _retrieval_fixture_model(*, slow_query=None):
     """Use deterministic processor fixtures and approve only offered Memories."""
     retrieval_calls = []
     retrieval_ready = Event()
@@ -50,6 +50,9 @@ def _retrieval_fixture_model():
                         with lock:
                             retrieval_calls.append(state["operation"])
                         retrieval_ready.set()
+                    if state.get("operation") == "memory_query" and slow_query is not None and slow_query.is_set():
+                        slow_query.clear()
+                        sleep(8)
                     operation = state.get("operation")
                     if operation == "refine_query_rewrite":
                         body_value = {"version": 1, "query": state["current_query"]}
@@ -218,7 +221,8 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
     monkeypatch.setitem(TEXT, "traveler", "Lantern release evidence is stored in the binder.")
     outbox = SourceOutbox(state, PROFILE, PRINCIPAL)
 
-    with _retrieval_fixture_model() as (url, retrieval_calls, retrieval_ready), ExitStack() as cleanup:
+    slow_query = Event()
+    with _retrieval_fixture_model(slow_query=slow_query) as (url, retrieval_calls, retrieval_ready), ExitStack() as cleanup:
         runtime = _configure(cli, state, url)
         client = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
         client.attach(SESSION)
@@ -395,6 +399,11 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
 
         manager, provider, provider_process = start_provider()
         manager.on_turn_start(1, "Use the retrieval tools")
+        # Explicit recall must wait behind a prepare that exceeds both old deadlines.
+        retrieval_ready.clear()
+        slow_query.set()
+        manager.queue_prefetch_all("amber checklist", session_id=SESSION)
+        assert retrieval_ready.wait(10)
         query_json = json.loads(manager.handle_tool_call(
             "memory_query", {"query": "amber checklist", "limit": 10}, session_id=SESSION,
         ))
@@ -414,6 +423,10 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
             "memory_id": memory_id,
             "source_snapshot_digests": [job.snapshot.snapshot_digest],
         }]
+
+        # Next-turn preparation must leave the most recent confirmed return visible.
+        prepare(manager, provider)
+        assert _dashboard_status(provider._client, SESSION)["latest_recall"] == recall
 
         refined = json.loads(manager.handle_tool_call("refine_query", {
             "query": "amber checklist",

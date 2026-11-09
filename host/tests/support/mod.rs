@@ -159,6 +159,10 @@ fn runtimes(directory: &Path, address: SocketAddr) -> (ConfiguredRuntime, Config
     let url = format!("http://{address}");
     let path = directory.join("runtime.cfg");
     let mut config = ReliquaryConfig::new(&path);
+    // Fixtures supply all model routes explicitly, even when Root installs development defaults.
+    for slot in ModelSlot::ALL {
+        config.clear_model(slot);
+    }
     let credential_id = CredentialId::new("HP02_KEY").unwrap();
     config.add_api_key(
         credential_id.clone(),

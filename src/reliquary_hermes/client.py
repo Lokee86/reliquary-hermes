@@ -22,7 +22,9 @@ _MAX_HEADER = 8192
 # Winsock can take two seconds to report refusal on an unused loopback port.
 _CONNECT_SECONDS = 3.0
 _REQUEST_SECONDS = 1.5
-_RETRIEVAL_SECONDS = 7.0
+# Leave room for the signed host response before the caller's own deadline.
+_PREFETCH_SECONDS = 7.0
+_RETRIEVAL_SECONDS = 67.0
 _STARTUP_SECONDS = 3.0
 
 
@@ -418,7 +420,7 @@ class HostClient:
         except ContractError:
             raise HostUnavailable("invalid_source_receipt") from None
 
-    def request(self, raw: bytes) -> Response:
+    def request(self, raw: bytes, *, recall_tool: bool = False) -> Response:
         """Send a frozen provider request for the currently attached session."""
         request = Request.parse(raw)
         attached = self._attached
@@ -426,9 +428,10 @@ class HostClient:
                 self._profile_id, self._principal_id, attached[1].session_id):
             raise HostUnavailable("host_not_attached")
         discovery, _ = attached
-        budget = (_RETRIEVAL_SECONDS if request.operation in
-                  {"memory_query", "refine_query", "traverse_graph"} else _REQUEST_SECONDS)
-        reply = self._exchange(discovery, "/v1/request", raw,
+        path, budget = "/v1/request", _REQUEST_SECONDS
+        if request.operation in {"memory_query", "refine_query", "traverse_graph"}:
+            path, budget = ("/v1/retrieval/tool", _RETRIEVAL_SECONDS) if recall_tool else (path, _PREFETCH_SECONDS)
+        reply = self._exchange(discovery, path, raw,
                                time.monotonic() + _CONNECT_SECONDS + budget,
                                response_seconds=budget)
         try:

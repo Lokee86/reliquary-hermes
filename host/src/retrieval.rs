@@ -51,15 +51,18 @@ impl RetrievalService {
     }
 
     pub(crate) fn dashboard_recall(&self, session: &str) -> Value {
-        let Some((_, state)) = self
+        let Some((state, search_id, delivery_id)) = self
             .turns
             .iter()
             .filter(|(key, state)| key.2 == session && state.touched.elapsed() <= TURN_TTL)
-            .max_by_key(|(_, state)| state.touched)
-        else {
-            return no_dashboard_recall();
-        };
-        let (Some(search_id), Some(delivery_id)) = (&state.last_search_id, &state.last_delivery_id)
+            .filter_map(|(_, state)| {
+                Some((
+                    state,
+                    state.last_search_id.as_ref()?,
+                    state.last_delivery_id.as_ref()?,
+                ))
+            })
+            .max_by_key(|(state, _, _)| state.touched)
         else {
             return no_dashboard_recall();
         };

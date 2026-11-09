@@ -15,6 +15,7 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 pub(crate) const ATTACH: &str = "/v1/attach";
 pub(crate) const REQUEST: &str = "/v1/request";
 pub(crate) const RETRIEVAL_PREPARE: &str = "/v1/retrieval/prepare";
+pub(crate) const RETRIEVAL_TOOL: &str = "/v1/retrieval/tool";
 pub(crate) const SOURCE: &str = "/v1/source";
 pub(crate) const DASHBOARD_READ: &str = "/v1/dashboard/read";
 pub(crate) const DASHBOARD_TOPOLOGY: &str = "/v1/dashboard/topology";
@@ -213,6 +214,7 @@ fn parse_headers(bytes: &[u8], expected_host: &str) -> Result<RequestHeaders, Ht
         Some(ATTACH) => ATTACH,
         Some(REQUEST) => REQUEST,
         Some(RETRIEVAL_PREPARE) => RETRIEVAL_PREPARE,
+        Some(RETRIEVAL_TOOL) => RETRIEVAL_TOOL,
         Some(SOURCE) => SOURCE,
         Some(DASHBOARD_READ) => DASHBOARD_READ,
         Some(DASHBOARD_TOPOLOGY) => DASHBOARD_TOPOLOGY,

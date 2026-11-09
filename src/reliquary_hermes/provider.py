@@ -385,7 +385,7 @@ class ReliquaryMemoryProvider(MemoryProvider):
             with self._lock:
                 turn_id = self._turn_id
             client, raw, epoch = self._request_bytes(operation, args, session_id=session_id, turn_id=turn_id, current_turn=True)
-            response = client.request(raw)
+            response = client.request(raw, recall_tool=True)
             with self._lock:
                 if (self._scope_epoch != epoch or self._session_id != session_id or
                         self._turn_id != turn_id or self._binding is None or

@@ -254,9 +254,17 @@ The processing and retrieval routes use deterministic loopback model decisions. 
 
 HU04 passed local acceptance. The full pinned run passed 354 Python tests, 20 locked offline Rust host tests and 10 Node tests. TypeScript, Chrome live and enabled/disabled fixture checks, Rust formatting, Git whitespace and the service documentation policy passed.
 
-## Remaining gates
+## HP07 real-model acceptance
 
-- HP07 requires the separately authorized real-model run.
+Use the verified HP06 directory package and the HU04 dashboard from `f3b4256` in an isolated pinned Hermes profile with fresh REL and PHY owners. Install the updated provider client and host together. Point `processing.json` at the authenticated development Reliquary configuration. Limit the isolated Hermes session to the `memory` toolset for recall and leave model fallbacks and MCP servers disabled.
+
+Run a one-shot with two related synthetic facts. Wait for the copied import to reach ready and compare its native provenance against the Hermes message identity and timestamp. Open a new one-shot session with a question that omits the facts and asks Hermes to use `memory_query`. Compare the tool delivery ID and returned Memory IDs with `ui.operational_status`. Check that the tool's source snapshot digest matches the original copy receipt. Stop the isolated gateway and host, verify owner lease release, and repeat from a new session. Attempt the provenance read from a foreign profile and verify typed denial.
+
+HP07 passed with Hermes v0.23.0 at `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19` and the host built against Root `6496b888721588f52b4371f1df92d7b2622872fc`. The run used the existing authenticated Reliquary development configuration, including the General fallback for recall on Codex `gpt-5.6-luna` and OpenRouter's 1024-dimensional `qwen/qwen3-embedding-8b` route. The isolated Hermes profile used its existing OpenRouter endpoint, credential and `openai/gpt-5.5-pro` model with a 2048-token output limit for the recall turns.
+
+Reliquary combined the two Lantern handoff facts into one Memory. The dashboard showed one graph node and zero edges, and its provenance matched the native source digest and original Hermes message. Both real recall turns returned the amber checklist and cedar binder. They returned the same Memory and source snapshot digest in distinct sessions and host instances with distinct delivery IDs. The dashboard matched each tool receipt. Both shutdowns released the owner lease, and the foreign-profile provenance requests returned typed denial.
+
+The focused Python suite passed 19 tests. Its signed-host regression starts an eight-second prepare, then verifies that explicit recall waits and returns the expected Memory. It also verifies that a later prepare preserves the last confirmed dashboard return. All 20 locked offline Rust host tests passed against the same Root snapshot.
 
 ## Related docs
 

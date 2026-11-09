@@ -62,6 +62,8 @@ Configure the `memory-retrieval-decision` model route in the Reliquary configura
 
 Hermes can prefetch relevant Memories at turn start and call `memory_query`, `refine_query` and `traverse_graph` within that turn. The service binds retrieval to the session's REL. Refinement uses the current turn's search ID, and traversal uses the returned Memory IDs and cut. Hermes displays a recall indicator only for context returned by the latest prefetch.
 
+The host checks a 65-second deadline before recording an explicit return. One explicit recall can wait for in-progress prefetch within that budget. The provider client waits up to 67 seconds for the response. Model calls can include both an embedding and a decision. Automatic prefetch keeps a 6.5-second host delivery limit and a 7-second client wait within pinned Hermes' 8-second wait. Enable the `memory` toolset for the session to use explicit recall when automatic prefetch cannot return in time.
+
 Queued prefetch can stage an exact selection in the host. When Hermes asks for matching context, the host checks the current cut and accepted copied-source evidence before recording the selected return. A source crash fence, rewind or tombstone prevents return of Memories grounded in the affected copied evidence.
 
 ## Live dashboard

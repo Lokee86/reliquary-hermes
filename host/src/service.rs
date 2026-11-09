@@ -5,9 +5,9 @@ use crate::{
     runtime::{HEARTBEAT_SECONDS, ReconciliationScope, RuntimeRegistry},
     service_http::{
         ATTACH, DASHBOARD_READ, DASHBOARD_TOPOLOGY, FORBIDDEN, HttpError, HttpRequest,
-        HttpResponse, INVALID, MAX_WIRE_BYTES, RETRIEVAL_PREPARE, RUNTIME_ATTACH, RUNTIME_DETACH,
-        RUNTIME_HEARTBEAT, RUNTIME_SCOPE, SOURCE, TransportKey, UNAVAILABLE, hex, read_request,
-        write_response,
+        HttpResponse, INVALID, MAX_WIRE_BYTES, RETRIEVAL_PREPARE, RETRIEVAL_TOOL, RUNTIME_ATTACH,
+        RUNTIME_DETACH, RUNTIME_HEARTBEAT, RUNTIME_SCOPE, SOURCE, TransportKey, UNAVAILABLE, hex,
+        read_request, write_response,
     },
     service_protocol::{
         AttachRequest, Discovery, HERMES_REVISION, Operation, PROTOCOL_VERSION, ProviderRequest,
@@ -26,17 +26,22 @@ use std::{
     net::{Ipv4Addr, TcpListener, TcpStream},
     path::Path,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard, TryLockError,
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{TrySendError, sync_channel},
     },
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 const WORKERS: usize = 4;
 const QUEUE_CAPACITY: usize = 8;
 const BOOTSTRAP_LIMIT: usize = 4096;
+// Hermes v0.23.0 stops waiting for automatic prefetch after eight seconds.
+// An explicit tool can wait for both configured model calls (embedding and decision).
+const PREFETCH_BUDGET: Duration = Duration::from_millis(6500);
+const RETRIEVAL_TOOL_BUDGET: Duration = Duration::from_secs(65);
+const RETRIEVAL_BUSY: HttpError = HttpError::new(503, "retrieval_busy", true);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,6 +56,7 @@ struct Service {
     key: TransportKey,
     sources: Mutex<SourceService>,
     retrieval: Mutex<RetrievalService>,
+    retrieval_waiter: Mutex<()>,
     runtimes: Mutex<RuntimeRegistry>,
     closing: AtomicBool,
     inflight: AtomicUsize,
@@ -99,7 +105,8 @@ impl Service {
             RUNTIME_HEARTBEAT => self.runtime_heartbeat(&request.body),
             RUNTIME_DETACH => self.runtime_detach(&request.body),
             RUNTIME_SCOPE => self.runtime_scope(&request.body),
-            _ => self.request(&request.body, accepted_at),
+            RETRIEVAL_TOOL => self.request(&request.body, accepted_at, true),
+            _ => self.request(&request.body, accepted_at, false),
         }
     }
 
@@ -360,7 +367,32 @@ impl Service {
         )
     }
 
-    fn request(&self, bytes: &[u8], accepted_at: Instant) -> Result<HttpResponse, HttpError> {
+    fn wait_for_retrieval(
+        &self,
+        deadline: Instant,
+    ) -> Result<MutexGuard<'_, RetrievalService>, HttpError> {
+        // Let one explicit recall wait behind a slow prefetch. Other workers
+        // remain available for lease heartbeats and unrelated service requests.
+        let _waiter = self
+            .retrieval_waiter
+            .try_lock()
+            .map_err(|_| RETRIEVAL_BUSY)?;
+        while Instant::now() < deadline {
+            match self.retrieval.try_lock() {
+                Ok(retrieval) => return Ok(retrieval),
+                Err(TryLockError::WouldBlock) => thread::sleep(Duration::from_millis(25)),
+                Err(TryLockError::Poisoned(_)) => return Err(UNAVAILABLE),
+            }
+        }
+        Err(UNAVAILABLE)
+    }
+
+    fn request(
+        &self,
+        bytes: &[u8],
+        accepted_at: Instant,
+        explicit_recall: bool,
+    ) -> Result<HttpResponse, HttpError> {
         let request: ProviderRequest = decode(bytes).map_err(|_| INVALID)?;
         if !request.valid() {
             return Err(INVALID);
@@ -395,13 +427,22 @@ impl Service {
                         }
                     };
                     drop(registry);
-                    let mut retrieval = match self.retrieval.try_lock() {
+                    let (retrieval_deadline, retrieval) = if explicit_recall {
+                        let deadline = accepted_at + RETRIEVAL_TOOL_BUDGET;
+                        (deadline, self.wait_for_retrieval(deadline))
+                    } else {
+                        (
+                            accepted_at + PREFETCH_BUDGET,
+                            self.retrieval.try_lock().map_err(|_| RETRIEVAL_BUSY),
+                        )
+                    };
+                    let mut retrieval = match retrieval {
                         Ok(retrieval) => retrieval,
-                        Err(_) => {
+                        Err(error) => {
                             return Ok(HttpResponse::ok(request.error(
                                 "unavailable",
-                                "retrieval_busy",
-                                true,
+                                error.code(),
+                                error.retryable(),
                             )));
                         }
                     };
@@ -413,7 +454,7 @@ impl Service {
                         owner,
                         &self.sources,
                         &self.runtimes,
-                        accepted_at + std::time::Duration::from_millis(6500),
+                        retrieval_deadline,
                     ) {
                         Ok(body) => Ok(HttpResponse::ok(body)),
                         Err(error) => Ok(HttpResponse::ok(request.error(
@@ -567,6 +608,7 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
         registry: Mutex::new(registry),
         sources: Mutex::new(SourceService::open(state_dir)?),
         retrieval: Mutex::new(RetrievalService::open(state_dir)?),
+        retrieval_waiter: Mutex::new(()),
         runtimes: Mutex::new(runtimes),
         closing: AtomicBool::new(false),
         inflight: AtomicUsize::new(0),
