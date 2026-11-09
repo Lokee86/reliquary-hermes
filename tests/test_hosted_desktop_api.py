@@ -12,7 +12,7 @@ import time
 import pytest
 
 from reliquary_hermes.client import HostClient
-from reliquary_hermes.settings import read_settings, read_token
+from reliquary_hermes.settings import TOKEN_VAR, read_settings
 from test_hp03_host import binaries, install_setup_host, owner
 from test_hu03_dashboard import _request, _stage_plugin
 
@@ -46,8 +46,13 @@ def _release_host(home):
     discovery = home / "reliquary/discovery.json"
     if not discovery.exists():
         return
+    from dotenv import dotenv_values
+
+    # Read the temporary profile without importing another Hermes checkout into pytest.
+    token = dotenv_values(home / ".env", interpolate=False)[TOKEN_VAR]
+    assert isinstance(token, str) and token
     settings = read_settings(home)
-    guard = HostClient(settings.state_dir, settings.profile_id, settings.principal_id, read_token(home))
+    guard = HostClient(settings.state_dir, settings.profile_id, settings.principal_id, token)
     guard.attach("hu05-hosted-proof")
     guard.attach_runtime("hu05-hosted-proof")
     guard.detach_runtime()
@@ -57,7 +62,7 @@ def _release_host(home):
     assert not discovery.exists()
 
 
-def test_hosted_desktop_compatibility(tmp_path, hosted_checkout, binaries, monkeypatch, plugin_artifact):
+def test_hosted_desktop_compatibility(tmp_path, hosted_checkout, binaries, plugin_artifact):
     checkout, native_mutations = hosted_checkout
     binary, cli = binaries
     launch = tmp_path / "hermes"
@@ -275,7 +280,6 @@ with ExitStack() as stack:
                USERPROFILE=str(tmp_path), APPDATA=str(tmp_path), LOCALAPPDATA=str(tmp_path),
                TEMP=str(tmp_path), TMP=str(tmp_path), TMPDIR=str(tmp_path), PYTHONDONTWRITEBYTECODE="1",
                HERMES_DISABLE_LAZY_INSTALLS="1", HERMES_ENABLE_PROJECT_PLUGINS="0", PYTHONPATH=str(checkout))
-    monkeypatch.syspath_prepend(str(checkout))
     try:
         # On Windows, worker descendants can keep inherited capture pipes open.
         log = tmp_path / "hosted-probe.log"
