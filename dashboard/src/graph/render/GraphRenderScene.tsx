@@ -72,7 +72,9 @@ export function GraphRenderScene({ client, onSelect, onFrameReady }: Props) {
     }
   }, [client, onSelect]);
 
-  const center = boundsCenter(client.manifest.globalBounds);
+  // Keep the camera target stable across viewport/chunk frame updates.
+  // A fresh array on every render retriggers Scene's centering effect and snaps panning back.
+  const center = useMemo(() => boundsCenter(client.manifest.globalBounds), [client]);
   const extent = boundsExtent(client.manifest.globalBounds);
 
   return (
