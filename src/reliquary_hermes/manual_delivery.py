@@ -69,6 +69,9 @@ def queue_imports(settings, client, owner_id: str, snapshots: list[SourceSnapsho
             if remote is not None and remote["state"] == "tombstoned":
                 results[session] = _result(session, "unavailable", "source_terminal")
                 continue
+            if remote is not None and remote["state"] == "unavailable":
+                results[session] = _result(session, "unavailable", "source_status_unavailable")
+                continue
             accepted = prior if prior and prior["receipt"] is not None else remote
             if accepted and accepted["receipt"] is not None:
                 same = accepted["owner_id"] == owner and accepted["snapshot_digest"] == snapshot.snapshot_digest

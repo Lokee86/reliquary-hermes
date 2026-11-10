@@ -1,10 +1,11 @@
 from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 
-from reliquary_hermes import outbox
+from reliquary_hermes import manual_delivery, outbox
 from reliquary_hermes.outbox import BACKPRESSURE, STALE, TERMINAL, UNAVAILABLE, SourceOutbox, SourceOutboxError
 from reliquary_hermes.source import SourceSnapshot
 from reliquary_hermes.validation import ContractError, content_digest, decode
@@ -210,3 +211,19 @@ def test_manual_receipts_preserve_prior_automatic_work_and_skip_permanent_failur
     assert feed.enqueue_manual(selected, owner_id="rel-b") == selected_key
     with pytest.raises(SourceOutboxError, match="manual_import_conflict"):
         feed.enqueue_manual(selected, owner_id="rel-a")
+
+
+def test_missing_native_history_is_unavailable_even_with_a_local_receipt(tmp_path):
+    settings = SimpleNamespace(state_dir=tmp_path, profile_id="profile-a", principal_id="principal-a")
+    selected = snapshot("history-selected")
+    feed = queue(tmp_path)
+    feed.enqueue_manual(selected, owner_id="rel-a")
+    assert feed.acknowledge(feed.next_job(manual_only=True), RECEIPT)
+
+    client = SimpleNamespace(read_source_status=lambda _session_id: {"state": "unavailable"})
+    result = manual_delivery.queue_imports(settings, client, "rel-a", [selected])
+
+    assert result[selected.session_id]["status"] == "unavailable"
+    assert result[selected.session_id]["reason"] == "source_status_unavailable"
+    assert feed.manual_status(selected.session_id)["receipt"] == RECEIPT
+    assert not feed.has_pending_manual()
