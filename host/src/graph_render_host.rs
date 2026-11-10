@@ -627,4 +627,29 @@ mod tests {
         host.expire();
         assert!(host.authority.is_none());
     }
+
+    #[test]
+    fn requests_accept_only_the_fields_for_the_selected_operation() {
+        let mut request = RenderRequest {
+            owner_id: "owner".into(),
+            principal_id: "principal".into(),
+            generation: "17".into(),
+            cut: "a".repeat(64),
+            generation_id: None,
+            chunk_id: None,
+            render_id: None,
+        };
+        assert!(request.valid_for("prepare"));
+
+        request.chunk_id = Some(0);
+        assert!(!request.valid_for("prepare"));
+        request.generation_id = Some("9".into());
+        assert!(request.valid_for("node-chunk"));
+        request.render_id = Some(0);
+        assert!(!request.valid_for("node-chunk"));
+        request.chunk_id = None;
+        assert!(request.valid_for("resolve"));
+        request.cut = "A".repeat(64);
+        assert!(!request.valid_for("resolve"));
+    }
 }
