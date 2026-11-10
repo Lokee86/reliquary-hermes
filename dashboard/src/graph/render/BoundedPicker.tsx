@@ -8,9 +8,10 @@ interface Props {
   client: GraphRenderClient;
   chunks: readonly GraphRenderNodeChunk[];
   markerScale: number;
-  pointsByChunk: Map<number, THREE.Points>;
-  onHover: (renderId: number | null) => void;
-  onPick: (renderId: number) => void;
+  pointsByChunk: Map<number, THREE.Points | THREE.InstancedMesh>;
+  onHover: (renderId: number | null, pointer?: { x: number; y: number }) => void;
+  onPick: (renderId: number, position: readonly [number, number, number]) => void;
+  selectedRenderId: number | null;
 }
 
 export function BoundedPicker({
@@ -20,6 +21,7 @@ export function BoundedPicker({
   pointsByChunk,
   onHover,
   onPick,
+  selectedRenderId,
 }: Props) {
   const { camera, gl } = useThree();
   const raycaster = useMemo(() => {
@@ -57,11 +59,13 @@ export function BoundedPicker({
       );
       const objects = candidateIds
         .map((chunkId) => pointsByChunk.get(chunkId))
-        .filter((value): value is THREE.Points => Boolean(value));
+        .filter((value): value is THREE.Points | THREE.InstancedMesh => Boolean(value));
       if (objects.length === 0) return null;
 
       const hit = raycaster.intersectObjects(objects, false)[0];
-      const itemIndex = hit?.index;
+      const itemIndex = hit?.object instanceof THREE.Points
+        ? hit.index
+        : (hit as THREE.Intersection<THREE.InstancedMesh> | undefined)?.instanceId;
       const chunkId = hit?.object.userData.graphRenderChunkId;
       if (
         itemIndex === undefined
@@ -70,14 +74,26 @@ export function BoundedPicker({
 
       const chunk = chunkById.get(chunkId);
       if (!chunk || itemIndex >= chunk.renderIds.length) return null;
-      return chunk.renderIds[itemIndex];
+      const positionOffset = itemIndex * 3;
+      return {
+        renderId: chunk.renderIds[itemIndex],
+        position: [
+          chunk.positions[positionOffset],
+          chunk.positions[positionOffset + 1],
+          chunk.positions[positionOffset + 2],
+        ] as const,
+      };
     };
 
     const publishHover = (event: PointerEvent) => {
-      const renderId = pickAt(event);
-      if (renderId === hovered.current) return;
+      const hit = pickAt(event);
+      const renderId = hit?.renderId ?? null;
+      if (renderId === hovered.current) {
+        if (renderId !== null) onHover(renderId, { x: event.clientX, y: event.clientY });
+        return;
+      }
       hovered.current = renderId;
-      onHover(renderId);
+      onHover(renderId, renderId === null ? undefined : { x: event.clientX, y: event.clientY });
     };
 
     const move = (event: PointerEvent) => {
@@ -108,23 +124,40 @@ export function BoundedPicker({
       pointerDown.current = null;
       if (!start || start.button !== 0 || event.button !== 0) return;
       if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 3) return;
-      const renderId = pickAt(event);
-      if (renderId !== null) onPick(renderId);
+      const hit = pickAt(event);
+      if (hit) onPick(hit.renderId, hit.position);
+    };
+
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const target = hovered.current ?? selectedRenderId;
+      if (target === null) return;
+      const chunk = chunks.find((value) => value.renderIds.includes(target));
+      if (!chunk) return;
+      const itemIndex = chunk.renderIds.indexOf(target);
+      const offset = itemIndex * 3;
+      onPick(target, [chunk.positions[offset], chunk.positions[offset + 1], chunk.positions[offset + 2]]);
+      event.preventDefault();
     };
 
     canvas.addEventListener("pointermove", move);
     canvas.addEventListener("pointerleave", leave);
     canvas.addEventListener("pointerdown", down);
     canvas.addEventListener("pointerup", up);
+    canvas.addEventListener("keydown", keydown);
     return () => {
       canvas.removeEventListener("pointermove", move);
       canvas.removeEventListener("pointerleave", leave);
       canvas.removeEventListener("pointerdown", down);
       canvas.removeEventListener("pointerup", up);
+      canvas.removeEventListener("keydown", keydown);
       if (frameRequest.current !== null) cancelAnimationFrame(frameRequest.current);
-      if (hovered.current !== null) onHover(null);
+      if (hovered.current !== null) {
+        hovered.current = null;
+        onHover(null);
+      }
     };
-  }, [camera, chunkById, client, gl, onHover, onPick, pointer, pointsByChunk, raycaster]);
+  }, [camera, chunkById, chunks, client, gl, onHover, onPick, pointer, pointsByChunk, raycaster, selectedRenderId]);
 
   return null;
 }

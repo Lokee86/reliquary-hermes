@@ -1,0 +1,72 @@
+.graph-render-scene {
+  overflow: hidden;
+  isolation: isolate;
+  border: 1px solid rgba(164, 145, 205, 0.18);
+  border-radius: 10px;
+  background: #06090f;
+}
+
+.graph-render-scene canvas:focus-visible {
+  outline: 2px solid #ad93ed;
+  outline-offset: -3px;
+}
+
+.graph-render-reset {
+  position: absolute;
+  z-index: 2;
+  top: 12px;
+  right: 12px;
+  border: 1px solid rgba(196, 180, 230, 0.36);
+  border-radius: 7px;
+  padding: 7px 11px;
+  color: #eee8fb;
+  background: rgba(16, 19, 30, 0.9);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.graph-render-reset:hover,
+.graph-render-reset:focus-visible {
+  border-color: #bda8ee;
+  background: #242036;
+}
+
+.graph-render-tooltip {
+  display: grid;
+  gap: 3px;
+  min-width: 150px;
+  max-width: 260px;
+  border: 1px solid rgba(183, 161, 224, 0.42);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: #f5f0ff;
+  background: rgba(15, 17, 27, 0.96);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.35);
+  font-size: 0.82rem;
+}
+
+.graph-render-tooltip span {
+  color: #bcb2d2;
+  font-size: 0.72rem;
+}
+
+.graph-render-relationships {
+  position: absolute;
+  z-index: 2;
+  left: 12px;
+  bottom: 12px;
+  display: grid;
+  gap: 3px;
+  border: 1px solid rgba(145, 187, 231, 0.32);
+  border-radius: 7px;
+  padding: 7px 10px;
+  color: #dcecff;
+  background: rgba(12, 18, 27, 0.9);
+  font-size: 0.76rem;
+  pointer-events: none;
+}
+
+.graph-render-relationships span {
+  color: #b2c9e5;
+}

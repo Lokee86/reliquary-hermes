@@ -6,22 +6,31 @@ import { nodeRgb } from "./renderColors";
 interface Props {
   chunk: GraphRenderNodeChunk;
   markerScale: number;
+  useSpheres: boolean;
   selectedRenderId: number | null;
-  register: (chunkId: number, points: THREE.Points | null) => void;
+  hoveredRenderId: number | null;
+  register: (chunkId: number, pickable: THREE.Points | THREE.InstancedMesh | null) => void;
 }
 
 let pointSprite: THREE.CanvasTexture | null = null;
 
-export function RenderNodeChunk({
+export function RenderNodeChunk(props: Props) {
+  return props.useSpheres
+    ? <InstancedSphereChunk {...props} />
+    : <PointChunk {...props} />;
+}
+
+function PointChunk({
   chunk,
   markerScale,
   selectedRenderId,
+  hoveredRenderId,
   register,
 }: Props) {
   const geometryRef = useRef<THREE.BufferGeometry>(null);
   const colors = useMemo(
-    () => nodeRgb(chunk.packedColors, chunk.renderIds, selectedRenderId),
-    [chunk, selectedRenderId],
+    () => nodeRgb(chunk.packedColors, chunk.renderIds, selectedRenderId, hoveredRenderId),
+    [chunk, hoveredRenderId, selectedRenderId],
   );
   const setPoints = useCallback((points: THREE.Points | null) => {
     if (points) points.userData.graphRenderChunkId = chunk.chunkId;
@@ -54,6 +63,54 @@ export function RenderNodeChunk({
         toneMapped={false}
       />
     </points>
+  );
+}
+
+function InstancedSphereChunk({
+  chunk,
+  selectedRenderId,
+  hoveredRenderId,
+  register,
+}: Props) {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const colors = useMemo(
+    () => nodeRgb(chunk.packedColors, chunk.renderIds, selectedRenderId, hoveredRenderId),
+    [chunk, hoveredRenderId, selectedRenderId],
+  );
+  const setMesh = useCallback((mesh: THREE.InstancedMesh | null) => {
+    if (mesh) mesh.userData.graphRenderChunkId = chunk.chunkId;
+    register(chunk.chunkId, mesh);
+    meshRef.current = mesh;
+  }, [chunk.chunkId, register]);
+
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    const transform = new THREE.Object3D();
+    const color = new THREE.Color();
+    for (let index = 0; index < chunk.nodeCount; index += 1) {
+      const offset = index * 3;
+      transform.position.set(chunk.positions[offset], chunk.positions[offset + 1], chunk.positions[offset + 2]);
+      transform.scale.setScalar(Math.max(0.2, chunk.sizes[index] * 0.5));
+      transform.updateMatrix();
+      mesh.setMatrixAt(index, transform.matrix);
+      color.setRGB(colors[offset] / 255, colors[offset + 1] / 255, colors[offset + 2] / 255, THREE.SRGBColorSpace);
+      mesh.setColorAt(index, color);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  }, [chunk, colors]);
+
+  return (
+    <instancedMesh
+      ref={setMesh}
+      args={[undefined, undefined, chunk.nodeCount]}
+      frustumCulled
+    >
+      <sphereGeometry args={[1, 16, 12]} />
+      <meshBasicMaterial toneMapped={false} />
+    </instancedMesh>
   );
 }
 

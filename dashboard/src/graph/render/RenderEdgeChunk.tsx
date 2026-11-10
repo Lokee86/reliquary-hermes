@@ -3,7 +3,7 @@ import * as THREE from "three";
 import type { GraphRenderEdgeChunk } from "./types";
 import { edgeRgb } from "./renderColors";
 
-export function RenderEdgeChunk({ chunk }: { chunk: GraphRenderEdgeChunk }) {
+export function RenderEdgeChunk({ chunk, muted = false }: { chunk: GraphRenderEdgeChunk; muted?: boolean }) {
   const colors = useMemo(
     () => edgeRgb(chunk.packedColors, chunk.weights),
     [chunk],
@@ -18,6 +18,7 @@ export function RenderEdgeChunk({ chunk }: { chunk: GraphRenderEdgeChunk }) {
       <lineBasicMaterial
         vertexColors
         transparent
+        opacity={muted ? 0.12 : 0.76}
         blending={THREE.AdditiveBlending}
         depthWrite={false}
         toneMapped={false}

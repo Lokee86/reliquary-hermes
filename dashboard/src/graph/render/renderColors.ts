@@ -2,11 +2,14 @@ export function nodeRgb(
   packed: Uint32Array,
   renderIds: Uint32Array,
   selectedRenderId: number | null,
+  hoveredRenderId: number | null = null,
 ) {
   const rgb = new Uint8Array(packed.length * 3);
   for (let index = 0; index < packed.length; index += 1) {
-    const selected = selectedRenderId === null || renderIds[index] === selectedRenderId;
-    writeRgb(rgb, index * 3, packed[index], selected ? 1 : 0.16);
+    const emphasized = (selectedRenderId === null && hoveredRenderId === null)
+      || renderIds[index] === selectedRenderId
+      || renderIds[index] === hoveredRenderId;
+    writeRgb(rgb, index * 3, packed[index], emphasized ? 1 : 0.16);
   }
   return rgb;
 }
