@@ -1,5 +1,5 @@
 diff --git a/hermes_state_common.py b/hermes_state_common.py
-index 47642b7fb7e..0882547dc71 100644
+index 47642b7fb7e888ff7812f0ac630c52ef7848c62f..0882547dc7102a7e1b1d3e6baa5fa5368edb4cd0 100644
 --- a/hermes_state_common.py
 +++ b/hermes_state_common.py
 @@ -483,6 +483,9 @@ CREATE TABLE IF NOT EXISTS sessions (
@@ -13,7 +13,7 @@ index 47642b7fb7e..0882547dc71 100644
      ended_at REAL,
      end_reason TEXT,
 diff --git a/hermes_state_messages.py b/hermes_state_messages.py
-index f7ba486edd4..2241cbc2c2e 100644
+index f7ba486edd4ebb11e31051e0a31f225077afbb9d..2241cbc2c2e2fda94a589939a2159d292d153865 100644
 --- a/hermes_state_messages.py
 +++ b/hermes_state_messages.py
 @@ -46,6 +46,7 @@ _MESSAGE_WRITE_COLUMNS = tuple(
@@ -159,7 +159,7 @@ index f7ba486edd4..2241cbc2c2e 100644
          """Tool results containing ``/pull/``: a deliberately loose scan, oldest-first so the caller takes the last."""
          ids = [s for s in session_ids if s]
 diff --git a/hermes_state_portability.py b/hermes_state_portability.py
-index f794ca6c682..4318de9fd18 100644
+index f794ca6c6825da8f3ecf67bb9c00e4cb72bee42a..4318de9fd18a0f3850152a8e18d9725d8c5ae366 100644
 --- a/hermes_state_portability.py
 +++ b/hermes_state_portability.py
 @@ -43,7 +43,7 @@ _IMPORT_MESSAGE_JSON_FIELDS = (
@@ -180,53 +180,8 @@ index f794ca6c682..4318de9fd18 100644
                             :end_reason, 0, 0, :input_tokens, :output_tokens,
                             :cache_read_tokens, :cache_write_tokens,
                             :reasoning_tokens, :cwd, :git_branch, :git_repo_root,
-diff --git a/hermes_state_sessions.py b/hermes_state_sessions.py
-index 476b3ef51d4..a0c4a80ca03 100644
---- a/hermes_state_sessions.py
-+++ b/hermes_state_sessions.py
-@@ -845,6 +845,40 @@ class SessionSessionsMixin:
-         )
-         return self._session_row_dict(row) if row else None
- 
-+    def is_session_eligible_for_capture(
-+        self, session_id: str, *, profile_id: str, enrollment_cutoff: float
-+    ) -> bool:
-+        """Fail-closed new-session admission using native original-creation provenance.
-+
-+        ``started_at`` is descriptive and can be copied from portable history; it is never used as
-+        proof of a newly created conversation. Legacy rows missing the marker remain ineligible.
-+        """
-+        import math
-+        try:
-+            cutoff = float(enrollment_cutoff)
-+            if not math.isfinite(cutoff):
-+                return False
-+            owner = self._own_profile_name()
-+            if not owner or owner != profile_id:
-+                return False
-+            row = self.get_session(session_id)
-+            if (not row or row.get("profile_name") != owner or row.get("archived") or row.get("hidden")
-+                    or row.get("provenance_restored")):
-+                return False
-+            created = row.get("provenance_created_at")
-+            root_id = row.get("provenance_root_session_id")
-+            if not isinstance(created, (int, float)) or not math.isfinite(created) or created <= cutoff:
-+                return False
-+            if not isinstance(root_id, str) or not root_id:
-+                return False
-+            root = self.get_session(root_id)
-+            return bool(root and root.get("profile_name") == owner
-+                        and root.get("provenance_root_session_id") == root_id
-+                        and root.get("provenance_created_at") == created
-+                        and created > cutoff)
-+        except Exception:
-+            return False
-+
-     def get_session_list_row(self, session_id: str) -> Optional[dict[str, Any]]:
-         """Picker columns only: the live listing skips ``get_session``'s prompt/tool JOIN and flush."""
-         row = self._read_one(
 diff --git a/hermes_state_worker_lifecycle.py b/hermes_state_worker_lifecycle.py
-index 6eb85086f7a..c022e0fb607 100644
+index 6eb85086f7aa98e7b42729a9d259cc85b2596891..c022e0fb607b3e21d5b3407a56827f14a0b7a8c8 100644
 --- a/hermes_state_worker_lifecycle.py
 +++ b/hermes_state_worker_lifecycle.py
 @@ -227,15 +227,39 @@ def insert_session_row_in_transaction(
@@ -284,10 +239,10 @@ index 6eb85086f7a..c022e0fb607 100644
      if system_prompt_hash is not None:
 diff --git a/tests/hermes_state/test_hu08_history_export.py b/tests/hermes_state/test_hu08_history_export.py
 new file mode 100644
-index 00000000000..7320702403c
+index 0000000000000000000000000000000000000000..e44a5b4894150139851987464a39ef6571ee477b
 --- /dev/null
 +++ b/tests/hermes_state/test_hu08_history_export.py
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,238 @@
 +import pytest
 +
 +from hermes_state import SessionDB
@@ -332,6 +287,9 @@ index 00000000000..7320702403c
 +        db.append_message("root", "user", "root")
 +        db.create_session("branch", "cli", parent_session_id="root")
 +        db.append_message("branch", "user", "copied")
++        root_meta, branch_meta = db.get_session("root"), db.get_session("branch")
++        assert branch_meta["provenance_created_at"] == root_meta["provenance_created_at"]
++        assert branch_meta["provenance_root_session_id"] == "root"
 +        assert db.export_history("branch", profile_id="default")["reason"] == "history_unsupported"
 +
 +        db.create_session("large", "cli")
@@ -352,17 +310,18 @@ index 00000000000..7320702403c
 +        db.close()
 +
 +
-+def test_capture_eligibility_uses_native_marker_and_fails_closed_for_legacy(tmp_path, monkeypatch):
++def test_new_session_stores_a_native_creation_root_marker(tmp_path, monkeypatch):
 +    db = _db(tmp_path, monkeypatch)
 +    try:
 +        db.create_session("native", "cli")
 +        native = db.get_session("native")
-+        cutoff = native["provenance_created_at"] - 1
-+        assert db.is_session_eligible_for_capture("native", profile_id="default", enrollment_cutoff=cutoff)
-+        assert not db.is_session_eligible_for_capture("native", profile_id="other", enrollment_cutoff=cutoff)
-+        assert not db.is_session_eligible_for_capture("native", profile_id="default", enrollment_cutoff=native["provenance_created_at"])
++        created = native["provenance_created_at"]
++        assert isinstance(created, (int, float)) and created > 0
++        assert native["provenance_root_session_id"] == "native"
 +        db._conn.execute("UPDATE sessions SET provenance_created_at = NULL, provenance_root_session_id = NULL WHERE id = ?", ("native",))
-+        assert not db.is_session_eligible_for_capture("native", profile_id="default", enrollment_cutoff=cutoff)
++        legacy = db.get_session("native")
++        assert legacy["provenance_created_at"] is None
++        assert legacy["provenance_root_session_id"] is None
 +    finally:
 +        db.close()
 +
@@ -376,7 +335,6 @@ index 00000000000..7320702403c
 +        restored = db.get_session("restored")
 +        assert restored["provenance_created_at"] is None
 +        assert restored["provenance_root_session_id"] is None
-+        assert not db.is_session_eligible_for_capture("restored", profile_id="default", enrollment_cutoff=0)
 +    finally:
 +        db.close()
 +
@@ -390,7 +348,9 @@ index 00000000000..7320702403c
 +        exported = db.export_history("legacy", profile_id="default")
 +        assert exported["status"] == "ready"
 +        assert exported["messages"][0]["timestamp"] == 1234.0
-+        assert not db.is_session_eligible_for_capture("legacy", profile_id="default", enrollment_cutoff=0)
++        legacy = db.get_session("legacy")
++        assert legacy["provenance_created_at"] is None
++        assert legacy["provenance_root_session_id"] is None
 +    finally:
 +        db.close()
 +
@@ -402,7 +362,6 @@ index 00000000000..7320702403c
 +        db.create_session("placeholder", source="cli")
 +        row = db.get_session("placeholder")
 +        assert row["provenance_created_at"] is None
-+        assert not db.is_session_eligible_for_capture("placeholder", profile_id="default", enrollment_cutoff=0)
 +    finally:
 +        db.close()
 +
@@ -443,7 +402,6 @@ index 00000000000..7320702403c
 +        reset = db.get_session("reset")
 +        assert reset["provenance_root_session_id"] == "reset"
 +        assert reset["provenance_created_at"] >= cutoff
-+        assert db.is_session_eligible_for_capture("reset", profile_id="default", enrollment_cutoff=cutoff)
 +    finally:
 +        db.close()
 +
@@ -462,7 +420,6 @@ index 00000000000..7320702403c
 +        assert message["message_uid"] and message["timestamp"]
 +        db.create_session("restored", "cli")  # resume is an upsert, not a new native conversation
 +        assert db.get_session("restored")["provenance_restored"] == 1
-+        assert not db.is_session_eligible_for_capture("restored", profile_id="default", enrollment_cutoff=0)
 +        assert db.export_history("restored", profile_id="default")["reason"] == "history_session_unavailable"
 +    finally:
 +        db.close()
