@@ -376,8 +376,21 @@ The probes use synthetic profiles and deterministic local processing. They cover
 
 Manual history export v2 removes the whole-conversation message/byte cap while retaining bounded, overlapping source windows and the existing native import/processing boundary. Version 1 remains sufficient for automatic new-session capture but **not** unrestricted manual history import. Verify a 300-message ordered/restartable outbox and the signed-host test that inspects the oldest and newest original Root turns after sequential extensions (`tests/test_hu08_long_history.py`, `tests/test_hu08_manual_processing.py`). Do not claim that compressed or copied-branch lineages are importable until their original source history can be exported and verified. No installed plugin or upstream PR is updated by these local tests.
 
+## HU09 native-dialog feasibility and acceptance
+
+On the Windows Hermes checkout at `458829681db8761e50b8242aa034d23ae9bcdcd5`, the local Web dashboard exposes the authenticated `authedFetch` transport. It provides no supported picker or proof of a user gesture in the interactive Windows session. Hermes issues its existing profile-scoped native HTTP tickets through the private same-user control transport and rejects browser requests carrying an Origin. An authenticated Web setup status returning HTTP 200 with `desktop_native_mutations: false` is expected. Serving on loopback does not establish a trusted interactive caller.
+
+Web therefore shows **Native file dialogs unavailable for this connection** and an explicit **Enter path manually** action. The shared setup form sends no directory-listing requests. The compatibility browse route is separate from the form. Desktop continues to use the Hermes `ctx.os` native picker for Open File and Save As.
+
+The remaining Hermes contract is a Web SDK capability backed by a trusted native bridge in the same interactive Windows user session. Availability must be passive. The bridge must issue a short-lived, single-use permit for a verified click, bound to the authenticated profile, Reliquary plugin, backend activation, request and allowed dialog operation. The allowed operations are `open_rel`, `open_phy`, `open_config`, `save_rel` and `save_phy`. The broker must limit concurrent dialogs, handle cancellation and scope changes, and return only one absolute host candidate path or a typed cancellation, busy, failure or unavailable result. An ordinary browser request, its Origin and its network peer provide no such permit. The dialog never creates or binds an owner. Save As additionally needs a one-use receipt bound to the exact destination, redeemed at explicit creation confirmation so a Web request cannot grant itself native path authority. The existing setup endpoints retain validation and explicit non-overwriting creation.
+
+Run the Web and Desktop builds, Node tests and TypeScript check above, plus `tests/test_setup.py`, `tests/test_setup_api.py` and `tests/test_hosted_desktop_api.py`. Use an isolated Hermes home for write-capable acceptance. Before declaring native Web support, verify all four owner dialogs on the installed Windows dashboard and exercise cancellation, duplicate clicks, existing Save As targets and a profile or backend switch. On stock Web, verify that the manual fields appear only after opt-in and that cancellation or an unavailable picker causes no write.
+
+The local Windows Web smoke used the installed Hermes runtime with an isolated profile. All four native controls were disabled, and the explicit manual form completed REL and PHY creation, rejected overwrites byte for byte, rejected the wrong owner kind, and connected only after review. Cancellation created no file. The browser sent no browse requests.
+
 ## Related docs
 
+- [HU09 native file-dialog specification](hu09-native-file-dialogs-onboarding-spec-2026-11-09.md)
 - [Documentation policy and ownership](documentation-policy.md)
 - [Contract documentation index](INDEX.md)
 - [Repository status and usage](../README.md)

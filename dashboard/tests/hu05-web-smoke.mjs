@@ -48,23 +48,20 @@ try {
     assert.equal(await owner.count(), 0);
     const general = page.getByRole("region", { name: "General memory", exact: true });
     const identity = page.getByRole("region", { name: "Active identity", exact: true });
-    const picker = page.getByRole("region", { name: "Browse Hermes host files" });
-    const advanced = page.getByText("Advanced", { exact: true });
-    await general.getByRole("button", { name: "Select REL", exact: true }).click();
-    await picker.getByText("Browsing files on the machine hosting Hermes.").waitFor();
-    await picker.getByRole("button", { name: "Cancel", exact: true }).click();
-    await advanced.click();
-    await main.waitFor();
-    assert.equal(await page.getByRole("textbox", { name: /^Project \d+ ID$/ }).count(), 0);
-    await page.getByRole("button", { name: "Create Hermes project", exact: true }).click();
-    await page.getByText("hermes project create <name>", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Refresh projects", exact: true }).click();
-
-    async function pick(region, kind, path) {
-      await region.getByRole("button", { name: "Select " + kind, exact: true }).click();
-      await picker.getByTitle(profilePath, { exact: true }).click();
-      await picker.getByRole("button", { name: path.split(/[\\/]/).at(-1), exact: true }).click();
+    await page.getByText("Native file dialogs unavailable for this connection", { exact: true }).waitFor();
+    assert.equal(await page.getByText("Permitted folders", { exact: true }).count(), 0);
+    assert.equal(await main.count(), 0);
+    assert.equal(await phy.count(), 0);
+    assert.equal(await config.count(), 0);
+    assert.equal(await page.getByText("Project memories", { exact: true }).count(), 0);
+    for (const [region, kind] of [[general, "REL"], [identity, "PHY"]]) {
+      for (const action of ["Select", "Create"]) {
+        assert.equal(await region.getByRole("button", { name: action + " " + kind, exact: true }).isDisabled(), true);
+      }
     }
+    await page.getByRole("button", { name: "Enter path manually", exact: true }).click();
+    await main.waitFor();
+
     const presentation = [];
     for (const [theme, mode] of [["Hermes Teal", "dark"], ["Nous Blue", "light"]]) {
       await page.getByRole("button", { name: "Switch theme" }).click();
@@ -97,46 +94,38 @@ try {
     for (const [region, kind, filename] of [[general, "REL", createOwner], [identity, "PHY", createPhy]]) {
       if (!filename) continue;
       assert(profilePath);
-      await region.getByRole("button", { name: "Create " + kind, exact: true }).click();
-      await picker.getByTitle(profilePath, { exact: true }).click();
-      await picker.getByRole("textbox", { name: "New file name" }).fill(filename);
-      await picker.getByRole("button", { name: "Use this destination" }).click();
-      await page.getByRole("button", { name: "Create owner file", exact: true }).click();
+      const destination = join(profilePath, filename);
+      await (kind === "REL" ? main : phy).fill(destination);
+      await region.getByRole("button", { name: "Create " + kind + " at this path", exact: true }).click();
+      const confirmation = page.getByRole("region", { name: "Confirm owner creation", exact: true });
+      await confirmation.getByText(destination, { exact: true }).waitFor();
+      await confirmation.getByRole("button", { name: "Create " + kind, exact: true }).click();
       await page.getByText("Created owner files remain on disk if connection fails.").waitFor();
-      await region.getByText(join(profilePath, filename), { exact: true }).waitFor();
     }
-    if (profilePath) {
-      await pick(general, "REL", paths.main);
-      await pick(identity, "PHY", paths.phy);
-    } else {
-      await main.fill(paths.main);
-      await phy.fill(paths.phy);
-    }
-    if (expectGeneralOnly) {
-      await checkGeneralOnly();
-    } else if (paths.project) {
-      assert(projectName, "Pass the actual Hermes project display name as projectName.");
-      const project = page.getByRole("region", { name: projectName, exact: true });
-      await project.getByText("Using General memory", { exact: true }).waitFor();
-      if (profilePath) await pick(project, "REL", paths.project);
-      else await page.getByRole("textbox", { name: projectName + " REL path", exact: true }).fill(paths.project);
-      await project.getByText(/^Dedicated REL/).waitFor();
-    }
+    await main.fill(paths.main);
+    await phy.fill(paths.phy);
     await validate.click();
     await page.getByText("Validation passed.", { exact: true }).waitFor();
-    for (const id of Object.values(ids)) await page.getByText(new RegExp("Accepted · .*" + id)).waitFor();
+    for (const id of [ids.main, ids.phy].filter(Boolean)) {
+      await page.getByText(new RegExp("Accepted · .*" + id)).waitFor();
+    }
+    await connectSetup(0);
+
+    if (paths.project && !expectGeneralOnly) {
+      assert(projectName, "Pass the actual Hermes project display name as projectName.");
+      await page.getByRole("button", { name: "Manage memory setup", exact: true }).click();
+      await page.getByText("Project memories", { exact: true }).click();
+      await page.getByRole("button", { name: "Enter path manually", exact: true }).click();
+      await page.getByRole("textbox", { name: projectName + " REL path", exact: true }).fill(paths.project);
+      await connectSetup(fallbackCount ?? 0);
+    }
+  }
+
+  async function connectSetup(fallback) {
     await page.getByRole("button", { name: "Review and connect" }).click();
     const review = page.getByRole("region", { name: "Review connection" });
-    await review.waitFor();
-    if (expectGeneralOnly) {
-      await review.getByRole("button", { name: "Connect Reliquary", exact: true }).waitFor();
-      assert.equal(await review.getByRole("button", { name: "Continue", exact: true }).count(), 0);
-    } else if (fallbackCount) {
-      await review.getByText(new RegExp("^" + fallbackCount + " projects? will use General memory")).waitFor();
-      await review.getByRole("button", { name: "Back to edit", exact: true }).click();
-      await page.getByRole("button", { name: "Review and connect" }).click();
-      await review.waitFor();
-    }
+    if (fallback) await review.getByText(new RegExp("^" + fallback + " projects? will use General memory")).waitFor();
+    else await review.getByRole("button", { name: "Connect Reliquary", exact: true }).waitFor();
     const applying = page.waitForResponse((response) =>
       new URL(response.url()).pathname.endsWith("/setup-v1/apply") && response.request().method() === "POST");
     await review.getByRole("button", { name: /^(Continue|Connect Reliquary)$/ }).click();
@@ -145,6 +134,7 @@ try {
     assert(response.ok() && result.configured === true,
       `Setup apply failed (HTTP ${response.status()}): ${result.detail ?? result.topology_error ?? "invalid response"}`);
   }
+
   await owner.waitFor();
   assert.equal(await setupHeading.count(), 0);
   for (const name of ["Refresh owner data", "Look up session"]) {
@@ -176,8 +166,11 @@ try {
   assert.equal(await setupHeading.count(), 0);
   if (screenshots) await page.screenshot({ path: join(screenshots, "web-configured.png") });
   await page.getByRole("button", { name: "Manage memory setup", exact: true }).click();
-  if (expectGeneralOnly) await checkGeneralOnly(paths.project);
-  else if (projectName) await page.getByRole("region", { name: projectName, exact: true }).getByText(/^Dedicated REL/).waitFor();
+  if (expectGeneralOnly || projectName) {
+    await page.getByText("Project memories", { exact: true }).click();
+    if (expectGeneralOnly) await checkGeneralOnly(paths.project);
+    else await page.getByRole("region", { name: projectName, exact: true }).getByText(/^Dedicated REL/).waitFor();
+  }
   await page.getByRole("button", { name: "Back to dashboard", exact: true }).click();
   await owner.waitFor();
   assert.deepEqual(errors, []);

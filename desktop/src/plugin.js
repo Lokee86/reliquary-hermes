@@ -23,8 +23,28 @@ const methods = new Map([
 const pickers = {
   REL: { title: "Choose a Reliquary REL", filters: [{ name: "Reliquary REL", extensions: ["rel"] }] },
   PHY: { title: "Choose a Reliquary PHY", filters: [{ name: "Reliquary PHY", extensions: ["phy"] }] },
-  config: { title: "Choose a Reliquary configuration" },
+  config: { title: "Choose a Reliquary configuration", filters: [{ name: "Reliquary configuration", extensions: ["cfg"] }] },
 };
+const saveNames = { REL: "general.rel", PHY: "active.phy" };
+
+function scopedPicker(current, pick) {
+  return async (kind) => {
+    if (!current()) return null;
+
+    // A switch can return to the same profile before the OS dialog resolves.
+    let changed = false;
+    const invalidate = () => { changed = true; };
+    const stopProfile = host.state.profile.listen(invalidate);
+    const stopConnection = host.state.connectionId.listen(invalidate);
+    try {
+      const path = await pick(kind);
+      return !changed && current() ? path : null;
+    } finally {
+      stopConnection();
+      stopProfile();
+    }
+  };
+}
 
 function httpStatus(error) {
   const status = error?.statusCode ?? Number(/(?:^|: )([45][0-9]{2}):/.exec(error?.message ?? "")?.[1]);
@@ -94,27 +114,24 @@ const paneStyle = { width: "100%", height: "100%", overflow: "auto" };
 function ReliquaryPane({ ctx }) {
   const epoch = useGatewayActivationEpoch();
   const profile = useValue(host.state.profile);
+  const connection = useValue(host.state.connectionId);
   const Surface = useMemo(() => {
-    const current = () => gatewayActivationEpoch() === epoch && host.state.profile.get() === profile;
+    const current = () => gatewayActivationEpoch() === epoch && host.state.profile.get() === profile &&
+      host.state.connectionId.get() === connection;
     return createReliquarySurface({
       React,
       components,
       authedFetch: dashboardTransport(ctx, current),
-      async pickOpenPath(kind) {
-        if (!current()) return null;
-        const path = await ctx.os.pickOpenPath(pickers[kind]);
-        return current() ? path : null;
-      },
-      async pickSavePath(kind) {
-        if (!current()) return null;
-        const options = { ...pickers[kind], title: "Create a Reliquary " + kind };
-        const path = await ctx.os.pickSavePath(options);
-        return current() ? path : null;
-      },
+      pickOpenPath: typeof ctx.os?.pickOpenPath === "function"
+        ? scopedPicker(current, (kind) => ctx.os.pickOpenPath(pickers[kind])) : undefined,
+      pickSavePath: typeof ctx.os?.pickSavePath === "function"
+        ? scopedPicker(current, (kind) => ctx.os.pickSavePath({
+          ...pickers[kind], title: "Create a Reliquary " + kind, defaultPath: saveNames[kind],
+        })) : undefined,
       mutationBlockReason: (status) => status.desktop_native_mutations === true ? undefined : nativeWriteNotice,
       surfaceLabel: "HERMES DESKTOP PLUGIN",
     });
-  }, [ctx, epoch, profile]);
+  }, [ctx, epoch, profile, connection]);
 
   return h("div", { className: "rly-desktop", style: paneStyle },
     h("style", null, reliquaryStyles),

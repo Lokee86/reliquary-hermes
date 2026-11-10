@@ -404,15 +404,6 @@ export interface SetupProjectInventory {
   routing_available: boolean;
 }
 
-export type SetupBrowseKind = "rel" | "phy" | "config";
-
-export interface SetupListing {
-  path: string | null;
-  parent: string | null;
-  entries: { path: string; name: string; kind: "directory" | "file" }[];
-  truncated: boolean;
-}
-
 export type SetupCreateKind = "general_rel" | "project_rel" | "phy";
 
 export interface SetupCreateRequest {
@@ -424,7 +415,6 @@ export interface SetupCreateRequest {
 export interface SetupClient {
   status(signal: AbortSignal): Promise<SetupStatus>;
   projects(signal: AbortSignal): Promise<SetupProjectInventory>;
-  browse(kind: SetupBrowseKind, path: string | null, signal: AbortSignal): Promise<SetupListing>;
   create(value: SetupCreateRequest, signal: AbortSignal): Promise<SetupOwner & { path: string }>;
   validate(candidate: SetupCandidate, signal: AbortSignal): Promise<SetupReport>;
   apply(candidate: SetupCandidate, signal: AbortSignal): Promise<

@@ -97,8 +97,6 @@
 .rly-setup-card, .rly-setup-picker { margin-block: 1rem; }
 .rly-setup-card .rly-setup-card { padding-inline-start: 1rem; }
 .rly-setup-check, .rly-setup-value { overflow-wrap: anywhere; }
-.rly-setup-entries { display: grid; gap: .4rem; max-height: 16rem; overflow: auto; padding-inline-start: 0; list-style: none; }
-.rly-setup-entries button { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
 .rly-setup-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .65rem; }
 .rly-sources { display: grid; gap: 1rem; min-width: 0; }
 .rly-sources h2, .rly-sources h3, .rly-sources p { margin-block: .25rem; }

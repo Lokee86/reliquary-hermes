@@ -22,14 +22,6 @@
     ["project_discovery_unavailable", "Refresh the projects list to try again."],
     ["unknown_hermes_project", "The selected project is unavailable in this Hermes profile. Refresh the projects list."],
     ["same_origin_required", "Hermes did not authorize a setup write from this surface."],
-    ["invalid_browse_kind", "Hermes could not determine which files to list."],
-    ["invalid_local_path", "Hermes rejected this host path."],
-    ["browse_outside_roots", "This location is outside the folders permitted for browsing in this profile."],
-    ["browse_reparse_point", "This location goes through a filesystem link. Choose a permitted local folder."],
-    ["browse_not_directory", "This location is no longer a folder."],
-    ["browse_not_found", "This folder is no longer available."],
-    ["browse_unreadable", "Hermes could not list this folder. Choose another folder or use an Advanced path."],
-    ["browse_timeout", "Hermes could not finish listing this folder. Try again or choose another folder."],
     ["invalid_owner_path", "Choose a valid local destination for the new owner file."],
     ["owner_already_exists", "A file already exists at that location. Select it or choose another destination."],
     ["owner_creation_failed", "Reliquary could not create the owner file. Check the destination before retrying."],
@@ -133,18 +125,6 @@
           new Set(projects.map((project) => project.id)).size !== projects.length) {
           throw new Error("invalid_setup_response");
         }
-        return data;
-      },
-      async browse(kind, path, signal) {
-        const query = new URLSearchParams({ kind });
-        if (path !== null) query.set("path", path);
-        const data = await request("browse?" + query, signal);
-        const entries = data?.entries;
-        if (!Array.isArray(entries) || typeof data.truncated !== "boolean" ||
-            (data.path !== null && typeof data.path !== "string") ||
-            (data.parent !== null && typeof data.parent !== "string") ||
-            entries.some((entry) => typeof entry?.name !== "string" || typeof entry.path !== "string" ||
-              (entry.kind !== "directory" && entry.kind !== "file"))) throw new Error("invalid_setup_response");
         return data;
       },
       async create(value, signal) {

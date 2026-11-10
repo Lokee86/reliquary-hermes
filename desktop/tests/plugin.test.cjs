@@ -13,7 +13,22 @@ const sharedStub = [
 async function load({ rest, pickOpenPath, pickSavePath } = {}) {
   const contributions = [];
   const options = [];
-  const routing = { epoch: 1, profile: "default" };
+  const routing = { epoch: 1, profile: "default", connection: "local" };
+  function mockState(key) {
+    const listeners = new Set();
+    return {
+      get: () => routing[key],
+      set(value) {
+        routing[key] = value;
+        for (const listener of listeners) listener(value);
+      },
+      listen(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      listenerCount: () => listeners.size,
+    };
+  }
   const context = createContext({ DOMException, record: (value) => options.push(value) });
   const react = {
     createElement(type, props, ...children) { return { type, props, children }; },
@@ -26,7 +41,7 @@ async function load({ rest, pickOpenPath, pickSavePath } = {}) {
     SIDEBAR_NAV_AREA: "sidebar.nav",
     gatewayActivationEpoch: () => routing.epoch,
     useGatewayActivationEpoch: () => routing.epoch,
-    host: { state: { profile: { get: () => routing.profile } } },
+    host: { state: { profile: mockState("profile"), connectionId: mockState("connection") } },
     useValue: (atom) => atom.get(),
   };
   function mock(exports) {
@@ -189,6 +204,7 @@ test("uses the native picker for REL, PHY and config and keeps cancel inert", as
   assert.equal(calls[0].filters[0].extensions[0], "rel");
   assert.equal(calls[1].filters[0].extensions[0], "phy");
   assert.match(calls[2].title, /configuration/);
+  assert.equal(calls[2].filters[0].extensions[0], "cfg");
 });
 
 test("uses the native save picker for new owners and discards canceled destinations", async () => {
@@ -204,7 +220,17 @@ test("uses the native save picker for new owners and discards canceled destinati
   assert.equal(await surface.pickSavePath("REL"), null);
   assert.equal(await surface.pickSavePath("PHY"), "C:/work/new.phy");
   assert.equal(calls[0].title, "Create a Reliquary REL");
+  assert.equal(calls[0].filters[0].extensions[0], "rel");
+  assert.equal(calls[0].defaultPath, "general.rel");
   assert.equal(calls[1].filters[0].extensions[0], "phy");
+  assert.equal(calls[1].defaultPath, "active.phy");
+});
+
+test("omits missing picker capabilities so the shared form can offer manual paths", async () => {
+  const { render } = await load();
+  const { pickOpenPath, pickSavePath } = render().surface;
+  assert.equal(pickOpenPath, undefined);
+  assert.equal(pickSavePath, undefined);
 });
 
 test("drops an in-flight path or response after a same-profile backend switch", async () => {
@@ -221,6 +247,30 @@ test("drops an in-flight path or response after a same-profile backend switch", 
   finishPicker("C:/work/old.rel");
   await assert.rejects(response, { name: "AbortError" });
   assert.equal(await selection, null);
+});
+
+test("drops native paths after profile or connection changes even when the selection returns to its original scope", async () => {
+  let finishOpen, finishSave;
+  const { render, sdk } = await load({
+    pickOpenPath: () => new Promise((resolve) => { finishOpen = resolve; }),
+    pickSavePath: () => new Promise((resolve) => { finishSave = resolve; }),
+  });
+  const { surface } = render();
+  const { profile, connectionId } = sdk.host.state;
+  const open = surface.pickOpenPath("REL");
+  profile.set("other");
+  profile.set("default");
+  finishOpen("C:/work/old.rel");
+  assert.equal(await open, null);
+
+  const save = surface.pickSavePath("PHY");
+  connectionId.set("remote");
+  connectionId.set("local");
+  finishSave("C:/work/old.phy");
+  assert.equal(await save, null);
+
+  assert.equal(profile.listenerCount(), 0);
+  assert.equal(connectionId.listenerCount(), 0);
 });
 
 test("keeps typed setup errors from the bridge", async () => {

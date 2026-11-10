@@ -129,8 +129,13 @@ try {
   });
   if (readOnly) await compatibilityNotice.waitFor();
 
-  async function checkGeneralOnly() {
-    const projects = root.getByRole("region", { name: "Project memories", exact: true });
+  async function showProjects() {
+    const summary = root.locator("summary").filter({ hasText: "Project memories" });
+    await summary.click();
+    return root.getByRole("region", { name: "Project memories", exact: true });
+  }
+
+  async function checkGeneralOnly(projects) {
     await projects.getByText("Unavailable on this Hermes build", { exact: true }).waitFor();
     await projects.getByText("Project conversations use General memory on this Hermes version.", { exact: true }).waitFor();
     const project = projects.getByRole("region", { name: fixture.projectName, exact: true });
@@ -144,12 +149,16 @@ try {
   }
 
   if (fixture.candidate) {
-    const { mainRel, activePhy, configPath, createPhy, projectRel, projectName } = fixture.candidate;
+    const { mainRel, activePhy, configPath, createPhy } = fixture.candidate;
     const general = root.getByRole("region", { name: "General memory", exact: true });
     const identity = root.getByRole("region", { name: "Active identity", exact: true });
     const selectRel = general.getByRole("button", { name: "Select REL", exact: true });
     const input = (label) => root.getByRole("textbox", { name: label, exact: true });
     await connect.waitFor();
+    assert.equal(await root.locator("summary").filter({ hasText: "Project memories" }).count(), 0);
+    assert.equal(await input("Main REL path").count(), 0);
+    assert.equal(await input("Active PHY path").count(), 0);
+    assert.equal(await input("Reliquary config path (optional)").count(), 0);
     await selectRel.click();
     await general.getByText("A General REL is required.", { exact: true }).waitFor();
     await selectRel.click();
@@ -161,35 +170,29 @@ try {
       await identity.getByText("An active PHY is required.", { exact: true }).waitFor();
       await create.click();
       await confirm.getByText(createPhy, { exact: true }).waitFor();
-      await confirm.getByRole("button", { name: "Create owner file", exact: true }).click();
+      await confirm.getByRole("button", { name: "Create PHY", exact: true }).click();
       await root.getByText("Created owner files remain on disk if connection fails.").waitFor();
       await identity.getByText(createPhy, { exact: true }).waitFor();
     } else {
       await identity.getByRole("button", { name: "Select PHY", exact: true }).click();
       await identity.getByText(activePhy, { exact: true }).waitFor();
     }
-    await root.getByRole("button", { name: "Create Hermes project", exact: true }).click();
-    await root.getByText(/In Hermes Desktop Chat, choose New project/).waitFor();
-    await root.getByRole("button", { name: "Refresh projects", exact: true }).click();
-    if (fixture.expectGeneralOnly) {
-      await checkGeneralOnly();
-    } else if (projectRel) {
-      assert(projectName);
-      const project = root.getByRole("region", { name: projectName, exact: true });
-      await project.getByRole("button", { name: "Select REL", exact: true }).click();
-      await project.getByText(projectRel, { exact: true }).waitFor();
+    if (configPath) {
+      const config = root.getByRole("region", { name: "Reliquary configuration", exact: true });
+      await config.getByRole("button", { name: "Change configuration", exact: true }).click();
+      await config.getByText(configPath, { exact: true }).waitFor();
     }
-    await root.getByText("Advanced", { exact: true }).click();
+    await root.getByRole("button", { name: "Enter path manually", exact: true }).click();
     const main = input("Main REL path");
     assert.equal(await main.inputValue(), mainRel);
     assert.equal(await main.getAttribute("data-slot"), "input");
     await main.press("Tab");
-    assert.equal(await input("Active PHY path").evaluate((field) => field.matches(":focus-visible")), true);
+    await page.keyboard.press("Shift+Tab");
+    assert.equal(await main.evaluate((field) => field.matches(":focus-visible")), true);
+    if (configPath) assert.equal(await input("Reliquary config path (optional)").inputValue(), configPath);
+    await root.getByRole("button", { name: "Hide manual paths", exact: true }).click();
+    assert.equal(await main.count(), 0);
     assert.equal(await root.evaluate((element) => element.scrollWidth <= element.clientWidth + 1), true);
-    if (configPath) {
-      await root.getByRole("button", { name: "Select configuration", exact: true }).click();
-      assert.equal(await input("Reliquary config path (optional)").inputValue(), configPath);
-    }
     const validate = root.getByRole("button", { name: "Validate", exact: true });
     if (HU07_SCREENSHOT_DIR) await page.screenshot({ path: join(HU07_SCREENSHOT_DIR, `desktop-setup-${appearance}.png`) });
     if (readOnly) {
@@ -205,26 +208,38 @@ try {
       for (const id of fixture.ownerIds) await root.getByText(id, { exact: false }).first().waitFor();
       await connect.click();
       const review = root.getByRole("region", { name: "Review connection", exact: true });
-      if (fixture.expectGeneralOnly) {
-        await review.getByRole("button", { name: "Connect Reliquary", exact: true }).waitFor();
-        assert.equal(await review.getByRole("button", { name: "Continue", exact: true }).count(), 0);
-      } else if (fixture.fallbackCount) {
-        await review.getByText(new RegExp("^" + fixture.fallbackCount + " projects? will use General memory")).waitFor();
-      }
-      await review.getByRole("button", { name: /^(Continue|Connect Reliquary)$/ }).click();
+      await review.getByRole("button", { name: "Connect Reliquary", exact: true }).click();
     }
   }
 
   if (readOnly && fixture.candidate) {
     console.log("Desktop setup and picker remained visible with Validate and Connect disabled.");
   } else {
-    await browseOwners(root, page, connect, compatibilityNotice);
-    if (fixture.expectGeneralOnly) {
+    const { projectRel, projectName } = fixture.candidate || {};
+    if (fixture.expectGeneralOnly || projectRel) {
       await root.getByRole("button", { name: "Manage memory setup", exact: true }).click();
-      await checkGeneralOnly();
-      await root.getByRole("button", { name: "Back to dashboard", exact: true }).click();
-      console.log("Desktop confirmed stock General-only setup on the configured profile.");
+      const projects = await showProjects();
+      await projects.getByRole("button", { name: "Create Hermes project", exact: true }).click();
+      await projects.getByText(/Create a project in Hermes Desktop Chat/).waitFor();
+      await projects.getByRole("button", { name: "Refresh projects", exact: true }).click();
+      if (fixture.expectGeneralOnly) {
+        await checkGeneralOnly(projects);
+        await root.getByRole("button", { name: "Back to dashboard", exact: true }).click();
+        console.log("Desktop confirmed stock General-only setup on the configured profile.");
+      } else {
+        assert(projectName);
+        const project = projects.getByRole("region", { name: projectName, exact: true });
+        await project.getByRole("button", { name: "Select REL", exact: true }).click();
+        await project.getByText(projectRel, { exact: true }).waitFor();
+        await connect.click();
+        const review = root.getByRole("region", { name: "Review connection", exact: true });
+        if (fixture.fallbackCount) {
+          await review.getByText(new RegExp("^" + fixture.fallbackCount + " projects? will use General memory")).waitFor();
+        }
+        await review.getByRole("button", { name: /^(Continue|Connect Reliquary)$/ }).click();
+      }
     }
+    await browseOwners(root, page, connect, compatibilityNotice);
   }
 } finally {
   await app.close();
