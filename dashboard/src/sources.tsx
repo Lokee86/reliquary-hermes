@@ -158,8 +158,8 @@ export function Sources({ host, readOnly, captureStatus }: {
           : "Automatic capture is unavailable on this Hermes build."}</p>
       </section>}
       <p className="knowledge-muted">Choose existing Hermes conversations and explicitly import them into an authorized REL.</p>
-      {!open ? <Button onClick={() => setOpen(true)}>Import Existing Sessions</Button>
-        : <Button disabled={busy} onClick={() => { setOpen(false); setReview(false); }}>Close import</Button>}
+      {!open ? <Button className="add-scope warlock-workflow-toggle" onClick={() => setOpen(true)}>Import Existing Sessions</Button>
+        : <Button className="add-scope warlock-workflow-toggle" disabled={busy} onClick={() => { setOpen(false); setReview(false); }}>Close import</Button>}
       {readOnly && <p role="note" className="knowledge-muted">{readOnly}</p>}
     </aside>
     <main className="knowledge-memory-list warlock-workflow-center" aria-label="Hermes conversations">
@@ -172,7 +172,7 @@ export function Sources({ host, readOnly, captureStatus }: {
             <Input value={query} maxLength={128} disabled={review || busy} onChange={event => setQuery(event.currentTarget.value)} />
           </label>
           <Button type="submit" disabled={review || busy}>Search</Button>
-          <Button type="button" disabled={review || busy} onClick={() => setSearch({ ...search })}>Refresh</Button>
+          <Button type="button" className="secondary" disabled={review || busy} onClick={() => setSearch({ ...search })}>Refresh</Button>
         </form>}
       </header>
       <div className="knowledge-memory-rows">
@@ -199,8 +199,8 @@ export function Sources({ host, readOnly, captureStatus }: {
             </li>;
           })}</ul>
           <div className="warlock-workflow-actions">
-            <Button disabled={review || search.offset === 0} onClick={() => setSearch({ ...search, offset: Math.max(0, search.offset - 16) })}>Previous page</Button>
-            <Button disabled={review || page.next_offset === null} onClick={() => {
+            <Button className="secondary" disabled={review || search.offset === 0} onClick={() => setSearch({ ...search, offset: Math.max(0, search.offset - 16) })}>Previous page</Button>
+            <Button className="secondary" disabled={review || page.next_offset === null} onClick={() => {
               if (page.next_offset !== null) setSearch({ ...search, offset: page.next_offset });
             }}>Next page</Button>
             {!review && !readOnly && <Button disabled={!destination || !selected.length} onClick={() => setReview(true)}>Review selected ({selected.length})</Button>}
@@ -227,7 +227,7 @@ export function Sources({ host, readOnly, captureStatus }: {
           <ul className="warlock-source-review-list">{page.sessions.filter(row => selected.includes(row.session_id)).map(row => <li key={row.session_id}>{row.title}</li>)}</ul>
           <div className="warlock-workflow-actions">
             <Button disabled={busy} onClick={() => void submit()}>{busy ? "Importing…" : "Import selected"}</Button>
-            <Button disabled={busy} onClick={() => setReview(false)}>Cancel</Button>
+            <Button className="secondary" disabled={busy} onClick={() => setReview(false)}>Cancel</Button>
           </div>
         </section>}
       </>}

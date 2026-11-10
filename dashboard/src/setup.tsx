@@ -183,7 +183,7 @@ export function Setup({ host, status, readOnly, onConnected }: {
             autoComplete="off" maxLength={4096} />
         </label> : <p className="knowledge-provenance warlock-workflow-path">{target.value || "No file selected"}</p>}
         <div className="warlock-workflow-actions">
-          <Button type="button" disabled={!webDialogs && !host.pickOpenPath} onClick={() => void pick(target, false)}>Select {target.kind}</Button>
+          <Button type="button" className="secondary" disabled={!webDialogs && !host.pickOpenPath} onClick={() => void pick(target, false)}>Select {target.kind}</Button>
           {target.createKind && canWrite && <>
             <Button type="button" disabled={!webDialogs && !host.pickSavePath} onClick={() => void pick(target, true)}>Create {target.kind}</Button>
             {manual && <Button type="button" disabled={!validLocalPath(target.value.trim())}
@@ -201,15 +201,12 @@ export function Setup({ host, status, readOnly, onConnected }: {
 
   return <section className="knowledge-panel" aria-label="Reliquary setup">
     <aside className="knowledge-nav" aria-label="Setup navigation">
-      <div className="knowledge-heading"><span className="eyebrow">SETUP</span><strong>Connect owners</strong></div>
+      <div className="knowledge-heading"><span className="eyebrow">SETUP</span><strong>Owner paths</strong></div>
       {readOnly && <p role="note" className="knowledge-muted">{readOnly}</p>}
       <p className="knowledge-muted">{status.runtime_detected ? "Reliquary runtime detected" : "Reliquary runtime unavailable"}</p>
       {!webDialogs && !host.pickOpenPath && <p role="note" className="knowledge-muted">Native file dialogs are unavailable for this connection.</p>}
-      <div className="knowledge-inspector-section">
-        <h3>Owner paths</h3>
-        <p className="knowledge-muted">Choose the General REL, active PHY, and configuration used by this Hermes profile.</p>
-      </div>
-      <Button type="button" aria-expanded={manual} disabled={busy || !!confirm}
+      <p className="knowledge-muted">Choose the General REL, active PHY, and configuration used by this Hermes profile.</p>
+      <Button type="button" className="add-scope warlock-workflow-toggle" aria-expanded={manual} disabled={busy || !!confirm}
         onClick={() => setManual(value => !value)}>{manual ? "Hide manual paths" : "Enter path manually"}</Button>
       {status.configured && <p className="knowledge-muted">Existing sessions keep their accepted memory routes.</p>}
     </aside>
@@ -240,7 +237,7 @@ export function Setup({ host, status, readOnly, onConnected }: {
             </details>}
           </div>
           {canWrite && <div className="warlock-workflow-actions">
-            <Button type="button" onClick={() => void validate(false)}>Validate</Button>
+            <Button type="button" className="secondary" onClick={() => void validate(false)}>Validate</Button>
             <Button type="submit" disabled={status.configured && !inventory && !inventoryError}>Review and connect</Button>
           </div>}
         </fieldset>
@@ -267,7 +264,7 @@ export function Setup({ host, status, readOnly, onConnected }: {
           <Button type="button" disabled={busy} onClick={() => void commit()}>
             {confirm.mode === "create" ? "Create " + confirm.target.kind : "Connect Reliquary"}
           </Button>
-          <Button type="button" disabled={busy} onClick={() => setConfirm(null)}>Cancel</Button>
+          <Button type="button" className="secondary" disabled={busy} onClick={() => setConfirm(null)}>Cancel</Button>
         </div>
       </section>}
       {created.length > 0 && <section className="knowledge-inspector-section" role="status">

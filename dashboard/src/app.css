@@ -28,10 +28,12 @@
 .knowledge-surface .scope-chip.selected { border-color: #7556c2; background: #1c1725; }
 .knowledge-surface .add-scope { border: 0; border-radius: 7px; background: #211d29; color: #cfc7d9; padding: 8px 10px; text-align: left; }
 .knowledge-surface .scope-controls { display: grid; gap: 7px; padding-top: 4px; }
-.knowledge-surface .scope-controls input, .knowledge-surface .scope-controls select { min-width: 0; width: 100%; border: 1px solid #373040; background: #0b0a0f; color: #f4f0fb; padding: 7px 8px; border-radius: 7px; }
+.knowledge-surface .scope-controls :is(input, select),
+.knowledge-surface :is(.warlock-setup-path, .warlock-source-search) input,
+.knowledge-surface .warlock-source-destination :is(select, [role=combobox]) { min-width: 0; width: 100%; border: 1px solid #373040; background: #0b0a0f; color: #f4f0fb; padding: 7px 8px; border-radius: 7px; }
 .knowledge-surface .scope-control-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.knowledge-surface .scope-control-actions button { border: 0; border-radius: 7px; background: #7f5bd6; color: white; padding: 7px 8px; font-size: 0.75rem; }
-.knowledge-surface .scope-control-actions .secondary { background: #211d29; color: #d6cfdf; }
+.knowledge-surface :is(.scope-control-actions, .warlock-workflow-actions, .warlock-source-search) button { border: 0; border-radius: 7px; background: #7f5bd6; color: white; padding: 7px 8px; font-size: 0.75rem; }
+.knowledge-surface :is(.scope-control-actions, .warlock-workflow-actions, .warlock-source-search) .secondary { background: #211d29; color: #d6cfdf; }
 .knowledge-surface .scope-options { display: grid; gap: 7px; margin-bottom: 12px; }
 .knowledge-surface .scope-options > summary { cursor: pointer; font-size: 0.72rem; }
 .knowledge-surface .scope-options[open] > summary { margin-bottom: 6px; }

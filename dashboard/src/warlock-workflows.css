@@ -20,3 +20,8 @@
 .warlock-source-row > div { grid-column: 2; gap: .35rem; }
 .warlock-source-row > div:only-child { grid-column: 1 / -1; }
 .warlock-source-row .warlock-source-id { overflow-wrap: anywhere; white-space: normal; }
+.knowledge-surface :is(.warlock-workflow-actions, .warlock-source-search) button,
+.knowledge-surface .warlock-source-destination [role=combobox],
+.knowledge-surface .warlock-workflow-toggle {
+  min-height: 0; height: auto; letter-spacing: normal; line-height: 1.4; white-space: normal; text-transform: none;
+}
