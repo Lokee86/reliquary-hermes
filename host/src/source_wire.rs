@@ -261,6 +261,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn manual_snapshot_requires_a_configured_owner_request_field_and_accepts_a_scoped_lease() {
+        let request = |target_owner: Option<&str>, fence_epoch: Option<u64>| {
+            let mut value = serde_json::json!({
+                "protocol_version": 1,
+                "profile_id": "profile-one",
+                "principal_id": "principal-one",
+                "session_id": "history-session",
+                "generation": 0,
+                "idempotency_key": "a".repeat(64),
+                "operation": "manual_snapshot",
+                "arguments": {"snapshot_digest": "b".repeat(64), "source_json": "{}"},
+                "lease_id": "runtime-lease",
+            });
+            if let Some(owner) = target_owner {
+                value["target_owner_id"] = serde_json::json!(owner);
+            }
+            if let Some(epoch) = fence_epoch {
+                value["fence_epoch"] = serde_json::json!(epoch);
+            }
+            serde_json::to_vec(&value).unwrap()
+        };
+        assert!(SourceRequest::parse(&request(None, None)).is_err());
+        assert!(SourceRequest::parse(&request(Some("configured-rel"), None)).is_ok());
+        assert!(SourceRequest::parse(&request(Some("configured-rel"), Some(7))).is_ok());
+    }
+
+    #[test]
+    fn automatic_snapshot_rejects_a_client_supplied_destination() {
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "protocol_version": 1,
+            "profile_id": "profile-one",
+            "principal_id": "principal-one",
+            "session_id": "history-session",
+            "generation": 0,
+            "idempotency_key": "a".repeat(64),
+            "operation": "snapshot",
+            "arguments": {"snapshot_digest": "b".repeat(64), "source_json": "{}"},
+            "target_owner_id": "configured-rel"
+        })).unwrap();
+        assert!(SourceRequest::parse(&bytes).is_err());
+    }
+
+    #[test]
     fn original_decimal_does_not_round_through_binary_epoch_seconds() {
         assert_eq!(
             epoch_ns("1700000000.0000001"),

@@ -321,7 +321,14 @@ impl Service {
             let selected = registry
                 .configured_source_owner(request.target_owner_id.as_deref().ok_or(INVALID)?)
                 .map_err(attach_error)?;
-            if prior_source_owner.is_some_and(|prior| prior != selected) {
+            let accepted_source_owner = if prior_source_owner.is_some() {
+                prior_source_owner
+            } else if sources.has_source_head(&request.session_id)? {
+                Some(registry.source_owner(&request.session_id, true).map_err(attach_error)?)
+            } else {
+                None
+            };
+            if accepted_source_owner.is_some_and(|prior| prior != selected) {
                 return Err(HttpError::new(409, "source_owner_conflict", false));
             }
             selected

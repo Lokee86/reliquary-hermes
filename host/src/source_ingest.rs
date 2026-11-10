@@ -138,7 +138,7 @@ impl SourceService {
                     .map_err(|_| UNAVAILABLE)?;
                 if progress.failed > 0 || progress.held > 0 {
                     "failed"
-                } else if progress.pending > 0 || progress.processing > 0 {
+                } else if progress.processing > 0 {
                     "processing"
                 } else if status.state == NativeImportState::Staged || status.state == NativeImportState::Settled {
                     "staged"
@@ -570,6 +570,11 @@ impl SourceService {
             });
         }
         Ok(provenance)
+    }
+
+    pub(crate) fn has_source_head(&self, session: &str) -> Result<bool, HttpError> {
+        let state = self.store.read(&self.store.path(session))?;
+        Ok(state.accepted.is_some() || state.pending.is_some())
     }
 
     pub(crate) fn source_owner(&self, session: &str) -> Result<Option<OwnerId>, HttpError> {
