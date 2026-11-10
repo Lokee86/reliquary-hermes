@@ -95,8 +95,10 @@ export async function exerciseKnowledge(page, fixture, surface) {
   await inspector.getByRole("heading", { name: "History", exact: true }).waitFor();
   await screenshot("inspector");
   if (fixture.community) {
-    await exerciseCommunity(app, fixture.community, screenshot);
-    console.log(surface + ": community navigation, filtering and rename passed");
+    await exerciseCommunity(app, fixture.community, screenshot, surface);
+    console.log(surface + (surface === "desktop"
+      ? ": community navigation and filtering passed (read-only Desktop)"
+      : ": community navigation, filtering and rename passed"));
   }
   await rail.getByRole("button", { name: /^PHY\b/ }).click();
   await rail.getByText(fixture.ownerIds.phy, { exact: true }).waitFor();
@@ -114,7 +116,7 @@ export async function exerciseKnowledge(page, fixture, surface) {
 }
 
 
-async function exerciseCommunity(app, community, screenshot) {
+async function exerciseCommunity(app, community, screenshot, surface) {
   const nav = app.getByRole("complementary", { name: "Knowledge navigation" });
   const list = app.getByRole("region", { name: "Memory list" });
   const rows = list.locator(".knowledge-memory-row");
@@ -144,6 +146,7 @@ async function exerciseCommunity(app, community, screenshot) {
     await next.click();
     await original.click({ timeout: 30000 });
   }
+  if (surface === "desktop") return;
   await nav.getByLabel("Community name").fill(community.renamed);
   await nav.getByRole("button", { name: "Rename", exact: true }).click();
   if (community.onNextPage) await next.click({ timeout: 30000 });
