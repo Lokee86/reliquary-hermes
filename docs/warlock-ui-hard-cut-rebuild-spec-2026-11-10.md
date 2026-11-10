@@ -44,6 +44,34 @@ Reconfirm these recorded Warlock/Hermes source commits and the clean source-path
 | `src-tauri/src/graph_render_commands.rs`, `src/features/graph/render/tauriTransport.ts` | Tauri transport reference | **Replace**, not retain, with Hermes authenticated transport |
 | `docs/GRAPH_RENDER_ARCHITECTURE.md` and `GRAPH_RENDER_BASELINE_2026-09-28.md` | Visualization contract and characterization | **Acceptance authority** for renderer invariants, with environment-specific measurements retaken in Hermes |
 
+## Mandatory original React component reuse — non-graph UI
+
+**This section is the single authoritative non-graph implementation contract.** It consolidates the former separate non-graph direct-port specification into this full-UI plan. Use the actual original Warlock React component implementations and CSS as the starting source, **not newly styled lookalikes**. The current scalable graph/data integration and its separate [original graph component hard-cut](warlock-original-react-graph-component-hard-cut-spec-2026-11-10.md) remain independently owned.
+
+**Historical visual source:** `C:\!bin\workspace\Warlock-graph-original-review-2026-11-10` at `d9e38cb9e53dd2f8de345dd90cba08d00c27ac3b`. The newer `warlock-v2` renderer is the scalability reference, not a license to substitute different non-graph design. Inspect `src/features/workspace/{KnowledgePanel,KnowledgeInspector,KnowledgeRelationsEditor,KnowledgeGraph,knowledgeUi,WorkspaceShell,ScopeControls,MountedScopeActions}.tsx/ts` and the actual `src/styles.css` Knowledge selectors. Record source commit/path and changes for each port in a **source-parity ledger**.
+
+| Source to copy or reference | Non-graph destination / requirement | Justified adaptations |
+| --- | --- | --- |
+| Original `KnowledgePanel.tsx` | Copy original Knowledge navigation, List/Graph switch, community/search/filter/create controls, shared selected Memory and **three-column** composition | Bounded/paginated Hermes list data; current graph inserted as-is; owner/cut/selection data |
+| `KnowledgeInspector.tsx` | Copy original title/body/detail/provenance/relationship composition and editing presentation | Hermes revision/history/provenance and capability-safe edit/retire operations |
+| `KnowledgeRelationsEditor.tsx`, `knowledgeUi.ts` | Copy original relation controls, state labels, typography and relevant pure formatters | Hermes `user_association` write authorization; other kinds remain read-only |
+| `WorkspaceShell.tsx`, `ScopeControls.tsx`, `MountedScopeActions.tsx` | Reuse Knowledge shell/scope placement, proportions and UX, **not** Warlock's unrelated desktop shell | Hermes authorized REL/PHY owner switcher and existing picker/setup boundary; no Tauri dialog import |
+| `src/styles.css` Knowledge selectors | Copy original `.knowledge-panel`, `.knowledge-nav`, `.knowledge-memory-list`, `.knowledge-inspector`, `.knowledge-view-switch`, `.knowledge-memory-row`, `.knowledge-create`, `.knowledge-relation-editor`, `.knowledge-source-evidence` and relevant companion rules | Isolated host token/embedding mappings and accessibility fixes only; no invented CSS theme |
+| Current Hermes `KnowledgeGraph.tsx` | Preserve public graph props/transport in this **non-graph** migration | Parent mounting/selection wiring only; graph visuals are governed by the separate graph specification |
+| Warlock `knowledgeApi.ts` / `workspaceApi.ts` | Reference semantics, not runtime dependencies | Retain existing Hermes authenticated `dashboard/src/knowledge/client.ts`, `host.ts`, `dashboard-v1`, and owner/cut authority |
+
+**Layout contract:** one Knowledge grid, original `230px / flexible center / 300–420px` columns. Navigation and inspector scroll independently; List scrolls in center; Graph fills center. No extra `rly-rail`, duplicate owner sidebar, separate dashboard banner or second graph/list navigation; retain original list row hierarchy and readable owner scope. For narrow viewports, introduce the minimum verified collapse/drawer behavior while preserving the component tree.
+
+**Unified state:** one selection and owner/cut/filter model shared across List, Graph and Inspector. Owner changes abort stale requests, clear invalid selections, honor capabilities and prevent cross-owner content. Preserve Hermes pagination, expected revisions, authoritative history/provenance, source/retirement statuses and granted mutations; do **not** revive Warlock's whole-owner `KnowledgeSnapshot` or Tauri `invoke`.
+
+**Hermes-only sections:** Setup must retain `setup-v1` validation, owner selection/create confirmation, native picker/manual fallback and current General/project policy. Sources must retain explicit historical import, new-session-only enrollment, authorization, pagination/search/selection, progress/retry/deduplication. Reuse Warlock's panel/form/list/dialog presentation patterns for these **new workflows** without reimplementing their backend or inventing support.
+
+**Hard-cut deletion:** remove the obsolete non-graph `rly-app-header`, `rly-workspace`, `rly-rail`, redundant navigation, duplicate inspector/list markup, bespoke Knowledge styling and presentation-only helpers. No compatibility theme, alternate view or second set of React components. **Preserve** real Hermes auth, owner binding, source ingestion, setup and import services, and all graph transport.
+
+**Implementation sequence:** (1) freeze the historical source and record CSS/component hashes; locate all consumers; (2) isolate non-graph work from the **currently uncommitted** graph/KnowledgePanel/CSS changes in a separate worktree or explicitly disjoint ownership; (3) copy original component implementations/CSS into final Hermes modules; (4) adapt bounded Knowledge client and host surfaces minimally; (5) replace redundant shell, port Setup/Sources presentation, remove obsolete UI code; (6) reconcile with graph work at the shared Knowledge boundary and complete one integration gate. No UI rewrite of the graph files or Rust graph layout is authorized by the non-graph slice.
+
+**Non-graph acceptance:** source-to-port diffs with documented host-only deviations; matched screenshots/DOM at identical viewport of original and Hermes navigation, Memory list, selected inspector, relation editor and empty/loading states; original proportions, colors, typography, spacing, scrolling and keyboard/focus behavior; search, create/edit/retire, communities/relations, owner switching, cut/revision denial, provenance; Setup/Sources functionality; Web/Desktop shared build and installed smoke. Confirm stale/cross-profile denial, unchanged REL/PHY files and no original Tauri imports or surviving obsolete `rly-*` UI. **Tests alone do not demonstrate visual parity.** Graph algorithms, appearance, geometry, labels, picking, camera and binary transports remain exclusively owned by the separate graph work.
+
 ## Target architecture
 
 ```text
