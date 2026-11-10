@@ -470,7 +470,8 @@ async def graph_render_v1(request: Request, operation: str):
         if code == "graph_title_unavailable":
             raise HTTPException(status_code=404, detail=code) from None
         if code in {"graph_node_limit", "graph_relation_limit", "graph_community_limit",
-                    "graph_generation_limit", "graph_manifest_limit", "graph_chunk_limit"}:
+                    "graph_generation_limit", "graph_manifest_limit", "graph_chunk_limit",
+                    "graph_source_scan_limit"}:
             raise HTTPException(status_code=413, detail=code) from None
         status = {"host_denied": 403, "host_conflict": 409}.get(code, 503)
         raise HTTPException(status_code=status, detail={

@@ -275,7 +275,7 @@ class HostClient:
                     if isinstance(graph_code, str) and graph_code in {
                         "graph_title_unavailable", "graph_node_limit", "graph_relation_limit",
                         "graph_community_limit", "graph_generation_limit", "graph_manifest_limit",
-                        "graph_chunk_limit",
+                        "graph_chunk_limit", "graph_source_scan_limit",
                     }:
                         code = graph_code
                 except ContractError:

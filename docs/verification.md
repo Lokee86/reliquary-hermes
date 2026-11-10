@@ -416,6 +416,10 @@ The isolated release benchmark compiled the production renderer modules for each
 
 All three tiers retained the baseline packed chunk size. The 1M tier used 32,129,472 packed bytes and a 26,598-byte manifest. The two release-gated tiers met both ceilings. The standalone release harness passed 15 layout and hierarchy tests, including weight-sensitive distance across territories, exact deterministic positions, and minimum node clearance across local population boundaries.
 
+The locked offline host suite passed 95 tests. The Root integration probe verified that graph and List selected the same Memory for combined query, category, type and lifecycle filters. It also verified induced links, early visitor stop, and stale-cut denial. The pinned Python API, setup and source lifecycle run passed 19 tests. The installed-source run passed six capture, history and manual processing tests. The shared dashboard passed typecheck and four TypeScript tests and produced both bundles.
+
+The signed loopback smoke used independent copies of the November 8 owners. It verified 11 active and 13 total REL Memories, v3 descriptors, binary framing, title inspection, incident counts, locate, filter exclusion, and stale and cross-owner denial. Both owner hashes matched before and after browsing. For 20 sequential reads each on the debug host, signed loopback p95 was 100.76 ms for inspection and 102.70 ms for the neighborhood. These samples cover the signed host round trip.
+
 ## Related docs
 
 - [HU09 native file-dialog specification](hu09-native-file-dialogs-onboarding-spec-2026-11-09.md)

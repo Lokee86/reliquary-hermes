@@ -116,6 +116,7 @@ The renderer uses the following limits.
 | Aggregate relaxation | 32 representatives per population, four iterations, 32 retained neighbors per representative |
 | Center movement | Six units per aggregate center within a 24-unit base clearance. Local movement stays inside each node's grid clearance. |
 | Selection | 128 incident edges, with the exact total and omitted count |
+| Root scan | 2M retained Memories or membership entries and 20M relation states examined. A scan beyond these limits fails before publishing a generation. |
 | Signed source | 1M Memories and 10M induced render relations, a 4 MiB manifest and 1 MiB binary chunks |
 
 **Reuse and invalidation correction:** Current `graph_render_prepare.rs` reuses layout when node keys/hierarchy are identical even if relations change. This rule is wrong for a relation-driven layout. Use a stable weighted-topology fingerprint (and any layout-policy/version fingerprint) so adjacency/weight changes invalidate the affected layout regions. Preserve and reuse unchanged chunks and hierarchy branches where correct; **never reuse old node/edge chunk geometry when positions change**. The next generation has fresh immutable node positions and properly updated edges/bounds, and structural reuse is supported by deterministic equivalence tests.

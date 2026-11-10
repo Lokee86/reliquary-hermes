@@ -69,6 +69,8 @@ Each `POST /api/plugins/reliquary-hermes/graph-render-v1/{operation}` takes `own
 - `resolve` takes `generation_id` and `render_id` and returns the authorized Memory ID. `inspect` also returns the readable title and position. `neighborhood` returns up to 128 directed incident links with typed styles, endpoint IDs and positions, the exact total count, and a truncation flag. `locate` takes `generation_id` and `memory_id` and returns the render ID and position or null for a Memory outside the generation.
 - `eligible` takes `memory_id` and the same `filters` as prepare. List uses this exact-cut read to revalidate its selection without preparing a graph or walking pages.
 
+Root bounds the source scan independently of the filtered result. A scan beyond the 2M retained Memory or membership limit, or the 20M relation-state limit, returns `413 graph_source_scan_limit`. The host publishes a generation only for a complete projection.
+
 `ui.graph_page` serves the inspector’s bounded relation editor. The editor reads nearby semantic relation endpoints with revision and cut and offers writes for authorized user associations. The spatial renderer consumes the separate prepared generation and its binary chunks.
 
 ## Related docs

@@ -10,7 +10,7 @@ use crate::graph_render_style::edge_weight_from_units;
 use crate::service_http::HttpError;
 use reliquary_memory::{
     InspectionCut, Instance, MemoryListFilters, NodeRef, OwnerId, OwnerKind, RelationKind,
-    RelationOrigin, SemanticGraphProjectionItem,
+    RelationOrigin, SemanticGraphProjectionItem, SemanticGraphProjectionStatus,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
@@ -34,7 +34,7 @@ pub(super) fn read_source(
     let mut relation_sources = Vec::new();
     let mut indexed_edges = Vec::new();
     let mut error = None;
-    instance
+    let status = instance
         .visit_semantic_graph_projection(owner, kind, cut, filters, |item| {
             match item {
                 SemanticGraphProjectionItem::Community(community) => {
@@ -125,6 +125,15 @@ pub(super) fn read_source(
         .map_err(super::product_error)?;
     if let Some(error) = error {
         return Err(error);
+    }
+    match status {
+        SemanticGraphProjectionStatus::Complete => {}
+        SemanticGraphProjectionStatus::ScanLimit => {
+            return Err(HttpError::new(413, "graph_source_scan_limit", false));
+        }
+        SemanticGraphProjectionStatus::VisitorStopped => {
+            return Err(HttpError::new(503, "graph_source_invalid", false));
+        }
     }
     drop(render_ids);
     let inspection = GraphInspection {
