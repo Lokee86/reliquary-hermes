@@ -26,6 +26,11 @@ impl Default for GraphRenderService {
 }
 
 impl GraphRenderService {
+    pub(crate) fn clear(&mut self) {
+        self.latest_by_owner.clear();
+        self.generations.clear();
+    }
+
     pub(crate) fn prepare(
         &mut self,
         source: GraphRenderSource,
