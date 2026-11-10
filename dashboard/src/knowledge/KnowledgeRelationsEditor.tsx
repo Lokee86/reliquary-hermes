@@ -59,7 +59,7 @@ export function KnowledgeRelationsEditor({ client, scope, memory, controls, bloc
   }, [client, scope, memory.memory_id, onError]);
 
   const byId = useMemo(() => new Map(nodes.filter((node) => node.memory_id).map((node) => [node.memory_id!, node])), [nodes]);
-  const related = edges.filter((edge) => edge.active && edge.source_id === memory.memory_id || edge.active && edge.target_id === memory.memory_id);
+  const related = edges.filter((edge) => edge.source_id === memory.memory_id || edge.target_id === memory.memory_id);
   const userAssociations = related.filter((edge) => edge.kind === "user_association" && edge.origin === "user");
   const options = nodes.filter((node) => node.memory_id && node.memory_id !== memory.memory_id)
     .map((node) => ({ value: node.memory_id!, label: node.label || shortId(node.memory_id!) }));
@@ -102,8 +102,8 @@ export function KnowledgeRelationsEditor({ client, scope, memory, controls, bloc
           const other = byId.get(otherId);
           const editable = canEdit && edge.kind === "user_association" && edge.origin === "user";
           return <div className="knowledge-relation-editor" key={edge.edge_id}>
-            <div><strong>{outgoing ? "→" : "←"} {other?.label || shortId(otherId)}</strong><span>{edge.origin} · {edge.kind}</span></div>
-            {editable && <Button type="button" disabled={busy} onClick={() => void change(edge, other ?? {
+            <div><strong>{outgoing ? "→" : "←"} {other?.label || shortId(otherId)}</strong><span>{edge.origin} · {edge.kind.replaceAll("_", " ")} · {edge.active ? "active" : "inactive"}</span></div>
+            {editable && edge.active && <Button type="button" disabled={busy} onClick={() => void change(edge, other ?? {
               node_id: otherId, kind: "memory", memory_id: otherId, community_id: null, label: otherId,
               origin: "memory", revision: memory.revision, cut: scope.owner.cut,
             })}>Remove user association</Button>}

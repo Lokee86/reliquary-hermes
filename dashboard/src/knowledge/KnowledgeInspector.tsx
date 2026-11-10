@@ -63,6 +63,16 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
   useEffect(() => {
     const controller = new AbortController();
     lifetime.current = controller;
+    // Clear the previous owner's/revision's evidence before the next bounded read
+    // resolves; otherwise the inspector briefly presents stale content after a scope switch.
+    setDetail(null);
+    setCurrentRevision(null);
+    setHistory([]);
+    setHistoryCursor(null);
+    setHistoryNext(null);
+    setRevision(null);
+    setProvenance(null);
+    setProvenanceUnavailable(false);
     setError(null);
     if (memoryId) void loadDetail(memoryId, null, controller.signal).then(next =>
       scope.owner.capabilities.history && !next.tombstone
@@ -183,7 +193,8 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
           : provenanceUnavailable ? <p className="knowledge-muted">Source evidence is unavailable at this revision.</p>
           : !provenance ? <p className="knowledge-muted">Loading source evidence…</p> : provenance.sources.length === 0
           ? <p className="knowledge-muted">No source evidence is attached.</p>
-          : provenance.sources.map((source, index) => <ProvenanceItem key={`${source.kind}:${index}`} source={source} />)}
+        : <div className="knowledge-source-evidence">{provenance.sources.map((source, index) =>
+          <ProvenanceItem key={`${source.kind}:${index}`} source={source} />)}</div>}
       </section>
       {blocked && <p className="knowledge-muted" role="status">{blocked}</p>}
     </aside>
