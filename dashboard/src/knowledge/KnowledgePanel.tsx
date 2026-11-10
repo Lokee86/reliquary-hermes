@@ -191,8 +191,11 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
               <Input value={memoryType} maxLength={128} onChange={(event) => changeMemoryType(event.currentTarget.value)} />
             </label>
             {mode === "list" && <CreateMemory client={client} scope={scope} controls={controls} blocked={mutationBlocked} onSaved={refresh} />}
-            <Checkbox checked={showArchived} aria-label="Show non-active memories" onCheckedChange={value => { setShowArchived(value); setCursor(null); }} />
-            <span className="knowledge-muted">Show non-active memories</span>
+            <label className="knowledge-lifecycle-filter knowledge-muted">
+              <Checkbox checked={showArchived} aria-label="Show non-active memories"
+                onCheckedChange={value => { setShowArchived(value); setCursor(null); }} />
+              <span>Show non-active memories</span>
+            </label>
             <Button type="button" aria-pressed={!communityId} onClick={() => { setCommunityId(null); setCursor(null); }}>
               All memories
             </Button>

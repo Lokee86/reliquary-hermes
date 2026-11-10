@@ -35,6 +35,7 @@ export function BoundedPicker({
     [chunks],
   );
   const pointerDown = useRef<{ x: number; y: number; button: number; moved: boolean } | null>(null);
+  const lastPrimaryPick = useRef<{ x: number; y: number; time: number } | null>(null);
   const hovered = useRef<number | null>(null);
   const pendingMove = useRef<PointerEvent | null>(null);
   const frameRequest = useRef<number | null>(null);
@@ -126,8 +127,15 @@ export function BoundedPicker({
       pointerDown.current = null;
       if (!start || start.button !== 0 || event.button !== 0 || start.moved) return;
       if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 3) return;
+      const last = lastPrimaryPick.current;
+      // Focus can move a different node under the second click of a double-click.
+      if (last && event.timeStamp - last.time <= 350
+          && Math.hypot(event.clientX - last.x, event.clientY - last.y) <= 3) return;
       const hit = pickAt(event);
-      if (hit) onPick(hit.renderId, hit.position);
+      if (hit) {
+        lastPrimaryPick.current = { x: event.clientX, y: event.clientY, time: event.timeStamp };
+        onPick(hit.renderId, hit.position);
+      }
     };
 
     const keydown = (event: KeyboardEvent) => {

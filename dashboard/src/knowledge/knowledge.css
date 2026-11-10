@@ -25,6 +25,8 @@
 .rly-app .knowledge-nav > button { white-space: normal; text-align: left; justify-content: start;
   min-height: 2.25rem; height: auto; line-height: 1.35; letter-spacing: .04em; }
 .knowledge-search-label { display: grid; gap: .3rem; font-size: .85rem; }
+.knowledge-lifecycle-filter { display: inline-flex; align-items: center; gap: .45rem; }
+.knowledge-lifecycle-filter > :is(button, input, [role="checkbox"]) { flex: 0 0 1rem; inline-size: 1rem; block-size: 1rem; }
 .knowledge-memory-list { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
 .knowledge-memory-list > header { display: flex; gap: .7rem; flex-wrap: wrap; justify-content: space-between; padding: .8rem 1rem; border-bottom: 1px solid var(--rly-border); }
 .knowledge-memory-list > header > div { display: flex; align-items: center; gap: .6rem; min-width: 0; }
@@ -64,9 +66,6 @@
 }
 .knowledge-graph-status { top: .65rem; }
 .knowledge-graph-help { bottom: .65rem; }
-.graph-tooltip { display: grid; gap: .2rem; max-width: 20rem; padding: .5rem .6rem; border: 1px solid #353245; border-radius: .5rem; background: rgba(18, 16, 27, .95); color: #e6dfed; }
-.graph-tooltip strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .78rem; }
-.graph-tooltip span { color: #b4a9c2; font-size: .72rem; }
 @container (max-width: 48rem) {
   .knowledge-panel { grid-template-columns: minmax(8.5rem, 10rem) minmax(0, 1fr); }
   .knowledge-panel[data-view="graph"] { grid-template-columns: minmax(0, 1fr); }
