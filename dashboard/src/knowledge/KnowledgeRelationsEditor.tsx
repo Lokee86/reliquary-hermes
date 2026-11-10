@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import type { GraphEdge, GraphNode, MemorySummary } from "../../types";
-import type { HostControls } from "../host";
 import type { KnowledgeClient, KnowledgeScope } from "./client";
 import { relationLabel, shortId } from "./knowledgeUi";
 
@@ -8,13 +7,12 @@ interface Props {
   client: KnowledgeClient;
   scope: KnowledgeScope;
   memory: MemorySummary;
-  controls: HostControls;
   blocked?: string;
   onChanged: () => void;
   onError: (error: string | null) => void;
 }
 
-export function KnowledgeRelationsEditor({ client, scope, memory, controls, blocked, onChanged, onError }: Props) {
+export function KnowledgeRelationsEditor({ client, scope, memory, blocked, onChanged, onError }: Props) {
   const [nodes, setNodes] = useState<GraphNode[]>([]);
   const [edges, setEdges] = useState<GraphEdge[]>([]);
   const [targetId, setTargetId] = useState("");
@@ -22,7 +20,6 @@ export function KnowledgeRelationsEditor({ client, scope, memory, controls, bloc
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [truncated, setTruncated] = useState(false);
-  const { Button, Select } = controls;
   const canEdit = !blocked && scope.owner.owner_kind === "REL" && scope.owner.capabilities.view
     && scope.owner.capabilities.manage && scope.owner.capabilities.relation_edit;
 
@@ -104,27 +101,30 @@ export function KnowledgeRelationsEditor({ client, scope, memory, controls, bloc
           return <div className="knowledge-relation-editor" key={edge.edge_id}>
             <div>
               <strong>{outgoing ? "→" : "←"} {other?.label || shortId(otherId)}</strong>
-              <span>{edge.origin} · {relationLabel(edge.kind)} · {edge.active ? "active" : "inactive"}</span>
+              <span>{edge.origin} · {edge.active ? "active" : "inactive"}</span>
             </div>
-            <Select label="Relationship type" value={edge.kind} options={[
-              { value: edge.kind, label: relationLabel(edge.kind) },
-            ]} disabled onValueChange={() => undefined} />
-            {editable && edge.active && other && <Button type="button" disabled={busy}
-              onClick={() => void change(edge, other)}>Remove user association</Button>}
+            <select value={edge.kind} aria-label="Relationship type" disabled>
+              <option value={edge.kind}>{relationLabel(edge.kind)}</option>
+            </select>
+            {editable && edge.active && other && <button type="button" aria-label="Remove user association" disabled={busy}
+              onClick={() => void change(edge, other)}>Remove</button>}
           </div>;
         })}
       {canEdit && <div className="knowledge-add-relation">
-        <Select label="Relationship direction" value={direction} options={[
-          { value: "outgoing", label: "This memory → target" },
-          { value: "incoming", label: "Target → this memory" },
-        ]} disabled={busy} onValueChange={(value) => setDirection(value as "outgoing" | "incoming")} />
-        <Select label="Link to Memory" value={targetId} options={options} disabled={busy || options.length === 0}
-          onValueChange={setTargetId} />
-        <Button type="button" disabled={busy || !targetId} onClick={() => {
+        <select aria-label="Relationship direction" value={direction} disabled={busy}
+          onChange={event => setDirection(event.currentTarget.value === "incoming" ? "incoming" : "outgoing")}>
+          <option value="outgoing">This memory → target</option>
+          <option value="incoming">Target → this memory</option>
+        </select>
+        <select aria-label="Link to Memory" value={targetId} disabled={busy || options.length === 0}
+          onChange={event => setTargetId(event.currentTarget.value)}>
+          {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </select>
+        <button type="button" aria-label="Link Memories" disabled={busy || !targetId} onClick={() => {
           const target = byId.get(targetId);
           if (!target) return;
           void change(null, target);
-        }}>Link Memories</Button>
+        }}>Add relation</button>
       </div>}
       {!scope.owner.capabilities.graph && <p className="knowledge-muted">The authorized graph capability is required to inspect relationship endpoints.</p>}
       {truncated && <p className="knowledge-muted" role="status">This relationship neighborhood is truncated at the API limit. Results above are incomplete; refine by selecting a specific Memory or refresh after the owner changes.</p>}

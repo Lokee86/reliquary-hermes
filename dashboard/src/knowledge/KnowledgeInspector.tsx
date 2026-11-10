@@ -181,7 +181,7 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
         <div><dt>Memory ID</dt><dd>{memory.memory_id}</dd></div>
       </dl>
 
-      {!archived && revision === null && <KnowledgeRelationsEditor client={client} scope={scope} memory={memory} controls={controls} blocked={blocked} onChanged={onChanged} onError={setError} />}
+      {!archived && revision === null && <KnowledgeRelationsEditor client={client} scope={scope} memory={memory} blocked={blocked} onChanged={onChanged} onError={setError} />}
 
       <section className="knowledge-inspector-section" aria-label="Memory history">
         <h3>History</h3>
