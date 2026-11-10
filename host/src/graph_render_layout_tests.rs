@@ -72,8 +72,9 @@ fn sibling_territories_are_packed_with_clear_sphere_separation() {
     .unwrap();
     let layout = build_graph_render_layout(&hierarchy, 2);
 
-    assert_eq!(layout.positions, vec![[-23.2, 0.0, 0.0], [23.2, 0.0, 0.0]]);
-    assert!(distance(layout.positions[0], layout.positions[1]) >= 2.0);
+    assert_eq!(layout.positions[0][0], -layout.positions[1][0]);
+    assert!(layout.positions[0][0] < 0.0);
+    assert!(distance(layout.positions[0], layout.positions[1]) >= GRAPH_RENDER_CHILD_GAP + 2.0);
 }
 
 #[test]
@@ -130,6 +131,11 @@ fn weighted_walk_keeps_cross_population_neighbors_together() {
         build_graph_render_layout_with_topology(&hierarchy, memories.len() as u32, &topology);
 
     assert!(distance(layout.positions[0], layout.positions[128]) < 3.0);
+    for (index, position) in layout.positions.iter().enumerate() {
+        for other in &layout.positions[index + 1..] {
+            assert!(distance(*position, *other) >= GRAPH_RENDER_NODE_RADIUS * 2.0);
+        }
+    }
     assert!(
         layout
             .positions
@@ -153,7 +159,7 @@ fn cross_territory_topology_places_linked_territories_adjacent() {
         2,
     )
     .unwrap();
-    let mut topology = GraphRenderLayoutTopology {
+    let topology = GraphRenderLayoutTopology {
         offsets: vec![0, 1, 1, 2],
         neighbors: vec![
             GraphRenderLayoutNeighbor {

@@ -44,6 +44,10 @@ fn territory_metadata_distinguishes_communities_and_encloses_positioned_nodes() 
     assert_eq!(territories[1].label, "Unassigned");
     assert!(territories[1].community_id.is_none());
     assert_ne!(territories[0].color, territories[1].color);
+    let center_distance: f32 = (0..3)
+        .map(|axis| (territories[0].center[axis] - territories[1].center[axis]).powi(2))
+        .sum();
+    assert!(center_distance.sqrt() >= territories[0].radius + territories[1].radius);
     let positions = &service.layout(generation).unwrap().positions;
     for (index, position) in positions.iter().enumerate() {
         let territory = territories[usize::from(index == 2)];

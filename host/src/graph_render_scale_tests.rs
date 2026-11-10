@@ -10,6 +10,7 @@ use std::time::Instant;
 #[test]
 #[ignore = "large synthetic renderer characterization; run explicitly with --ignored"]
 fn warlock_renderer_medium_and_large_synthetic_tiers() {
+    characterize(25_000, 2_500_000);
     characterize(100_000, 1_000_000);
     characterize(1_000_000, 10_000_000);
 }

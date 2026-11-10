@@ -25,7 +25,7 @@ pub(crate) fn build_graph_render_manifest(
         while let Some(id) = parent {
             let territory = &hierarchy.nodes[id as usize];
             if territory.kind == GraphRenderHierarchyKind::Territory {
-                let center = bounds_center(layout.hierarchy[id as usize].bounds);
+                let center = layout.hierarchy[id as usize].center;
                 for render_id in &leaf.render_ids {
                     let point = layout.positions[render_id.get() as usize];
                     let distance = (0..3)
@@ -77,7 +77,7 @@ pub(crate) fn build_graph_render_manifest(
                     community_id,
                     label,
                     color,
-                    center: bounds_center(layout.hierarchy[node.id as usize].bounds),
+                    center: layout.hierarchy[node.id as usize].center,
                     radius: radii_squared[node.id as usize].sqrt() + 2.5,
                 }
             }),
@@ -104,10 +104,6 @@ pub(crate) fn build_graph_render_manifest(
             .map(|payload| payload.descriptor.clone())
             .collect(),
     }
-}
-
-fn bounds_center(bounds: crate::graph_render_contract::GraphRenderBounds) -> [f32; 3] {
-    std::array::from_fn(|axis| (bounds.min[axis] + bounds.max[axis]) * 0.5)
 }
 
 fn community_color(id: [u8; 32]) -> [f32; 3] {

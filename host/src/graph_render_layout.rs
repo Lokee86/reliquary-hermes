@@ -22,6 +22,7 @@ const GRAPH_RENDER_LAYOUT_CENTER_ITERATIONS: usize = 4;
 const GRAPH_RENDER_LAYOUT_MAX_CENTER_SHIFT: f32 = 6.0;
 const GRAPH_RENDER_LAYOUT_CENTER_CLEARANCE: f32 = GRAPH_RENDER_CHILD_GAP * 0.5;
 
+#[cfg(test)]
 pub(crate) fn build_graph_render_layout(
     hierarchy: &GraphRenderHierarchy,
     node_count: u32,
@@ -149,7 +150,7 @@ fn sibling_connectivity(
             }
             let source_path = &leaf_paths[leaf_by_render[source] as usize];
             let target_path = &leaf_paths[leaf_by_render[target] as usize];
-            for (parent, source_child) in &source_path {
+            for (parent, source_child) in source_path {
                 if let Some((_, target_child)) = target_path
                     .iter()
                     .find(|(candidate, _)| candidate == parent)
@@ -228,41 +229,62 @@ fn refine_leaf_positions(
         if population.len() < 2 {
             continue;
         }
-        let start = 0;
+        let mut slots = population
+            .iter()
+            .enumerate()
+            .map(|(slot, id)| (id.get(), slot))
+            .collect::<Vec<_>>();
+        slots.sort_unstable_by_key(|&(id, _)| id);
         let mut links = Vec::new();
         for (source_local, render_id) in population.iter().enumerate() {
             let source = render_id.get() as usize;
-            for neighbor in strongest_local_neighbors(source, population, topology) {
-                let target_local = population
-                    .binary_search_by_key(&neighbor.render_id, |candidate| candidate.get())
-                    .expect("local neighbor belongs to the current population");
-                if source < neighbor.render_id as usize {
-                    links.push((source_local, target_local, neighbor.weight_units));
-                }
+            for (target_local, weight) in strongest_local_neighbors(source, &slots, topology) {
+                links.push((
+                    source_local.min(target_local),
+                    source_local.max(target_local),
+                    weight,
+                ));
             }
         }
+        links.sort_unstable();
+        links.dedup();
         if links.is_empty() {
             continue;
         }
-        let mut local_positions = population
+        let initial_positions = population
             .iter()
             .map(|render_id| positions[render_id.get() as usize])
             .collect::<Vec<_>>();
+        let mut local_positions = initial_positions.clone();
         let repulsion_pairs = nearby_repulsion_pairs(&local_positions);
         for _ in 0..GRAPH_RENDER_LAYOUT_MAX_ITERATIONS {
             let mut force = vec![[0.0_f32; 3]; population.len()];
             for &(source, target, weight) in &links {
-                apply_attraction(&mut force, start, source, target, weight, &local_positions);
+                apply_attraction(&mut force, source, target, weight, &local_positions);
             }
             for &(left, right) in &repulsion_pairs {
                 apply_repulsion(&mut force, left, right, &local_positions);
             }
-            for (position, delta) in local_positions.iter_mut().zip(force) {
-                let length = length(delta);
-                let scale = if length > 0.35 { 0.35 / length } else { 1.0 };
-                for axis in 0..3 {
-                    position[axis] += delta[axis] * scale;
-                }
+            for ((position, initial), delta) in local_positions
+                .iter_mut()
+                .zip(&initial_positions)
+                .zip(force)
+            {
+                let step = length(delta);
+                let candidate = add(
+                    *position,
+                    scale(delta, if step > 0.35 { 0.35 / step } else { 1.0 }),
+                );
+                let displacement = subtract(candidate, *initial);
+                let distance = length(displacement);
+                *position = if distance > MAX_LOCAL_DISPLACEMENT {
+                    add(
+                        *initial,
+                        scale(displacement, MAX_LOCAL_DISPLACEMENT / distance),
+                    )
+                } else {
+                    candidate
+                };
             }
         }
         for (render_id, position) in population.iter().zip(local_positions) {
@@ -273,29 +295,20 @@ fn refine_leaf_positions(
 
 fn strongest_local_neighbors(
     source: usize,
-    population: &[crate::graph_render_identity::RenderNodeId],
+    slots: &[(u32, usize)],
     topology: &GraphRenderLayoutTopology,
-) -> Vec<crate::graph_render_edge_projection_model::GraphRenderLayoutNeighbor> {
+) -> Vec<(usize, u64)> {
     let mut selected = Vec::with_capacity(GRAPH_RENDER_LAYOUT_MAX_NEIGHBORS);
     for neighbor in topology.neighbors(source) {
-        if population
-            .binary_search_by_key(&neighbor.render_id, |candidate| candidate.get())
-            .is_err()
-        {
+        let Ok(index) = slots.binary_search_by_key(&neighbor.render_id, |&(id, _)| id) else {
             continue;
-        }
+        };
         let insert_at = selected
             .iter()
-            .position(
-                |current: &crate::graph_render_edge_projection_model::GraphRenderLayoutNeighbor| {
-                    neighbor.weight_units > current.weight_units
-                        || (neighbor.weight_units == current.weight_units
-                            && neighbor.render_id < current.render_id)
-                },
-            )
+            .position(|&(_, weight)| neighbor.weight_units > weight)
             .unwrap_or(selected.len());
         if insert_at < GRAPH_RENDER_LAYOUT_MAX_NEIGHBORS {
-            selected.insert(insert_at, *neighbor);
+            selected.insert(insert_at, (slots[index].1, neighbor.weight_units));
             selected.truncate(GRAPH_RENDER_LAYOUT_MAX_NEIGHBORS);
         }
     }
@@ -304,15 +317,12 @@ fn strongest_local_neighbors(
 
 fn apply_attraction(
     force: &mut [[f32; 3]],
-    population_start: usize,
     source: usize,
     target: usize,
     weight_units: u64,
     positions: &[[f32; 3]],
 ) {
-    let source_local = source - population_start;
-    let target_local = target - population_start;
-    let delta = subtract(positions[target_local], positions[source_local]);
+    let delta = subtract(positions[target], positions[source]);
     let distance = length(delta);
     if distance <= f32::EPSILON {
         return;
@@ -321,8 +331,8 @@ fn apply_attraction(
     let target_distance = 2.0 + 1.7 / (1.0 + weight_units as f32 / 160.0);
     let amount = (distance - target_distance) * strength * 0.12;
     let unit = scale(delta, 1.0 / distance);
-    add_to(&mut force[source_local], scale(unit, amount));
-    add_to(&mut force[target_local], scale(unit, -amount));
+    add_to(&mut force[source], scale(unit, amount));
+    add_to(&mut force[target], scale(unit, -amount));
 }
 
 fn apply_repulsion(force: &mut [[f32; 3]], left: usize, right: usize, positions: &[[f32; 3]]) {
@@ -345,7 +355,10 @@ fn apply_repulsion(force: &mut [[f32; 3]], left: usize, right: usize, positions:
     add_to(&mut force[right], scale(unit, amount));
 }
 
-const MAX_LOCAL_DISPLACEMENT: f32 = 0.35 * GRAPH_RENDER_LAYOUT_MAX_ITERATIONS as f32;
+// Each node stays inside its own grid cell's clearance, including at
+// population boundaries where the bounded solver does not compare the pair.
+const MAX_LOCAL_DISPLACEMENT: f32 =
+    GRAPH_RENDER_NODE_SPACING * 0.5 - GRAPH_RENDER_NODE_RADIUS - 0.01;
 
 fn nearby_repulsion_pairs(positions: &[[f32; 3]]) -> Vec<(usize, usize)> {
     let mut pairs = Vec::new();
@@ -433,7 +446,16 @@ fn refine_hierarchy_centers(
     children: &[Vec<u32>],
     sibling_edges: &[BTreeMap<u32, Vec<(u32, u64)>>],
 ) {
+    let grid_centers = centers.to_vec();
     for (parent_id, child_ids) in children.iter().enumerate() {
+        // A parent is visited before its descendants. Carry its accumulated
+        // translation into the child grid before refining those siblings.
+        let translation = subtract(centers[parent_id], grid_centers[parent_id]);
+        if translation != [0.0; 3] {
+            for &id in child_ids {
+                centers[id as usize] = add(centers[id as usize], translation);
+            }
+        }
         for population in child_ids.chunks(GRAPH_RENDER_LAYOUT_MAX_CENTER_POPULATION) {
             if population.len() < 2 {
                 continue;

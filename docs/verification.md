@@ -406,6 +406,16 @@ Run the existing Rust, Python and dashboard suites from the integration checkout
 
 The paired renderer benchmark uses the baseline at `8136458` and the candidate under the same release profile and graph generator. For the 100k-node/1M-edge and 1M-node/10M-edge tiers, the release gate allows up to 2.5 times the baseline preparation time and twice its peak working set. The million-node preparation must also fit the 30-second host response window before host and transport overhead. Report a dense moderate tier separately. Hosted timings must record browser heap, frame timing and p95 hover and selected-neighborhood response time. Record the sample count and build for every reported timing.
 
+The isolated release benchmark compiled the production renderer modules for each revision. It alternated two baseline and two candidate runs per tier on the same Windows host. The timer covers generation preparation, and peak working set includes creation of the synthetic source. Root mounting, network transfer and GPU work are outside these measurements.
+
+| Nodes / input edges | Baseline prepare | Candidate prepare | Baseline peak working set | Candidate peak working set |
+| --- | ---: | ---: | ---: | ---: |
+| 25k / 2.5M | 0.81–0.85 s | 1.31–1.35 s | 258 MB | 377–378 MB |
+| 100k / 1M | 0.46–0.50 s | 0.87–0.96 s | 149–150 MB | 195 MB |
+| 1M / 10M | 4.99–5.36 s | 8.29–8.79 s | 1,447 MB | 1,911 MB |
+
+All three tiers retained the baseline packed chunk size. The 1M tier used 32,129,472 packed bytes and a 26,598-byte manifest. The two release-gated tiers met both ceilings. The standalone release harness passed 15 layout and hierarchy tests, including weight-sensitive distance across territories, exact deterministic positions, and minimum node clearance across local population boundaries.
+
 ## Related docs
 
 - [HU09 native file-dialog specification](hu09-native-file-dialogs-onboarding-spec-2026-11-09.md)
