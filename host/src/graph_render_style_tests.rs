@@ -89,7 +89,8 @@ fn reliquary_style_preserves_detail_sampler_discriminator_and_user_override() {
             );
             assert_eq!(
                 style.detail_priority_tag,
-                ((kind.code() as u64) << 16) ^ ((origin.code() as u64) << 8)
+                ((expected_kind_code(kind) as u64) << 16)
+                    ^ ((expected_origin_code(origin) as u64) << 8)
             );
         }
     }
@@ -97,4 +98,27 @@ fn reliquary_style_preserves_detail_sampler_discriminator_and_user_override() {
         style_for_relation(RelationKind::Topical, RelationOrigin::User).packed_color,
         0xc084_fcff
     );
+}
+
+fn expected_kind_code(kind: RelationKind) -> u16 {
+    match kind {
+        RelationKind::Topical => 1,
+        RelationKind::Factual => 2,
+        RelationKind::Causal => 3,
+        RelationKind::Recurrent => 4,
+        RelationKind::References => 5,
+        RelationKind::DuplicateOf => 6,
+        RelationKind::Supersedes => 7,
+        RelationKind::StructuralParent => 8,
+        RelationKind::EntityAssociation => 100,
+        RelationKind::PrincipalAssociation => 101,
+    }
+}
+
+fn expected_origin_code(origin: RelationOrigin) -> u8 {
+    match origin {
+        RelationOrigin::Dream => 1,
+        RelationOrigin::User => 2,
+        RelationOrigin::Perception => 3,
+    }
 }

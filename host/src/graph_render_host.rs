@@ -15,12 +15,11 @@ use crate::{
     service_protocol::decode,
 };
 use reliquary_memory::{
-    CommunityId, Instance, MemoryId, NodeRef, OwnerId, OwnerKind, ProductError, ProductErrorKind,
-    Relation, SemanticGraphCut,
+    CommunityId, InspectionCut, Instance, MemoryId, NodeRef, OwnerId, OwnerKind, ProductError,
+    ProductErrorKind, Relation, SemanticGraphCut,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+use serde::Deserialize;
+use serde_json::json;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -197,7 +196,13 @@ impl GraphRenderHost {
         self.renderer.clear();
         self.authority = None;
         let summary = self.renderer.prepare(source).map_err(|_| UNAVAILABLE)?;
-        let latest_cut = current_cut(instance, owner, kind)?;
+        let latest_cut = match current_cut(instance, owner, kind) {
+            Ok(cut) => cut,
+            Err(error) => {
+                self.renderer.clear();
+                return Err(error);
+            }
+        };
         if latest_cut != cut {
             self.renderer.clear();
             return Err(HttpError::new(409, "owner_cut_changed", false));
@@ -521,20 +526,7 @@ fn memory_key(id: MemoryId) -> GraphRenderNodeKey {
 }
 
 fn cut_binding(cut: &SemanticGraphCut) -> (String, String) {
-    let generation =
-        u128::from_le_bytes(cut.generation[..16].try_into().expect("fixed generation"));
-    #[derive(Serialize)]
-    struct CutHashInput {
-        owner_id: [u8; 16],
-        generation: [u8; 32],
-        archive: Option<u64>,
-        memory: u64,
-        perception: u64,
-        relationship: u64,
-        graph: u64,
-        community: Option<u64>,
-    }
-    let hash_input = CutHashInput {
+    let inspection_cut = InspectionCut {
         owner_id: cut.owner_id,
         generation: cut.generation,
         archive: cut.archive,
@@ -544,8 +536,10 @@ fn cut_binding(cut: &SemanticGraphCut) -> (String, String) {
         graph: cut.graph,
         community: cut.community,
     };
-    let cut_hash = Sha256::digest(serde_json::to_vec(&hash_input).expect("serializable graph cut"));
-    (generation.to_string(), crate::service_http::hex(&cut_hash))
+    (
+        crate::dashboard::generation_id(&inspection_cut),
+        crate::dashboard::cut_id(&inspection_cut),
+    )
 }
 
 fn product_error(error: ProductError) -> HttpError {
