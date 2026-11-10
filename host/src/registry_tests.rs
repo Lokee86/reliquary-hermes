@@ -118,6 +118,38 @@ fn routes_persist_across_restart_and_keep_the_active_phy_independent() {
 }
 
 #[test]
+fn legacy_project_scoped_general_rel_mounts_without_rewriting_file_or_routes() {
+    let fixture = Fixture::new();
+    let legacy_general = fixture.main.with_file_name("legacy-general.rel");
+    let owner_id = Rel::create(&legacy_general, OwnerScope::Project)
+        .unwrap()
+        .owner_id();
+    let original_bytes = std::fs::read(&legacy_general).unwrap();
+    let mut config = fixture.config();
+    config.main_rel = legacy_general.clone();
+    let initial = {
+        let mut registry = Registry::open(config, &fixture.state, TOKEN).unwrap();
+        let fallback = registry
+            .bind_session("legacy-general-session", None)
+            .unwrap();
+        assert_eq!(fallback.rel_id, owner_id.to_string());
+        assert_eq!(fallback.user_id, fixture.phy_id.to_string());
+        fallback
+    };
+    let mut config = fixture.config();
+    config.main_rel = legacy_general.clone();
+    let mut reopened = Registry::open(config, &fixture.state, TOKEN).unwrap();
+    assert_eq!(
+        reopened
+            .bind_session("legacy-general-session", None)
+            .unwrap(),
+        initial
+    );
+    drop(reopened);
+    assert_eq!(std::fs::read(&legacy_general).unwrap(), original_bytes);
+}
+
+#[test]
 fn dashboard_topology_is_read_only_and_rejects_unbound_unknown_sessions() {
     let fixture = Fixture::new();
     let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();

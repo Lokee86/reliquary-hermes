@@ -181,10 +181,25 @@ fn identifies_wrong_kind_wrong_scope_missing_and_corrupt_files() {
     assert_eq!(report["projects"]["corrupt"]["owner_id"], Value::Null);
 
     request["owners"]["main_rel"] = json!(fixture.project);
-    assert_eq!(
-        fixture.report(&request)["main_rel"]["error"],
-        "main_rel_scope"
-    );
+    let report = fixture.report(&request);
+    assert_eq!(report["main_rel"]["accepted"], true);
+    assert_eq!(report["main_rel"]["scope"], "project");
+}
+
+#[test]
+fn project_scoped_existing_rel_is_accepted_as_general_without_mutation() {
+    let fixture = Fixture::new();
+    let project_scoped_main = fixture.scratch.path().join("historical-general.rel");
+    Rel::create(&project_scoped_main, OwnerScope::Project).unwrap();
+    let before = fs::read(&project_scoped_main).unwrap();
+    let mut request = fixture.request();
+    request["owners"]["main_rel"] = json!(project_scoped_main);
+    let report = fixture.report(&request);
+    assert_eq!(report["valid"], true, "{report:?}");
+    assert_eq!(report["main_rel"]["scope"], "project");
+    assert_eq!(report["main_rel"]["accepted"], true);
+    assert_eq!(fs::read(&project_scoped_main).unwrap(), before);
+    assert!(!fixture.state.exists());
 }
 
 #[test]

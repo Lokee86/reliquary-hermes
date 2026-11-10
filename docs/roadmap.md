@@ -32,13 +32,21 @@ Before implementation, define:
 
 Do not add this policy opportunistically during HP04. It belongs to a later service lifecycle/configuration phase.
 
+## Deferred REL scope retirement (core architecture)
+
+**Status:** deferred. ADR 0029 (accepted 2026-09-04) requires homogeneous RELs and a dependency DAG. The rebuilt core still persists legacy `OwnerScope` values, and this Hermes integration historically rejected project-scoped RELs as General memory.
+
+**Immediate bridge:** The Hermes host now accepts **any valid legacy REL scope in the General slot** while preserving all existing owner identity, format, PHY, project route, writer grant and topology checks. Dedicated project entries retain their existing scope check for now. The bridge is not a new REL class or a migration.
+
+**Full correction:** The authoritative roadmap is `C:\!bin\workspace\Reliquary\docs\rel-homogeneity-and-dependency-roadmap-2026-11-10.md`. Inventory and remove behavioral scope predicates from core and host adapters, preserve legacy owner file compatibility, and verify/restore explicit multi-parent inter-REL dependency DAG semantics. No core change or on-disk rewrite is authorized as part of the Hermes test workaround.
+
 ## Purpose
 
-Record deferred service lifecycle work outside the current acceptance scope.
+Record deferred integration lifecycle and REL-homogeneity work outside the current acceptance scope.
 
 ## Overview
 
-The only roadmap item here is configurable queued-work keepalive, explicitly deferred until a later lifecycle/configuration phase.
+Current deferred items are configurable queued-work keepalive and the core REL-scope/homogeneous-dependency correction. Neither is part of the immediate Hermes compatibility patch.
 
 ## Related docs
 
@@ -48,4 +56,4 @@ The only roadmap item here is configurable queued-work keepalive, explicitly def
 
 ## Notes
 
-This roadmap entry does not alter current milestone behavior or authorize implementation during HP04.
+These roadmap entries do not authorize the deferred architectural work during the current Hermes compatibility patch.

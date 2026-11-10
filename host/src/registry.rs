@@ -602,12 +602,14 @@ impl Topology {
     }
 }
 
+// Temporary Hermes integration compatibility: legacy REL scope is not a
+// property of the General owner role. The homogeneous-REL/DAG correction is
+// deferred to the Reliquary roadmap; do not rewrite existing owner headers.
 fn validate_rel_scope(scope: OwnerScope, project: bool) -> Result<(), RegistryError> {
-    match (scope == OwnerScope::Project, project) {
-        (true, false) => Err(RegistryError::Invalid("main_rel_scope")),
-        (false, true) => Err(RegistryError::Invalid("project_rel_scope")),
-        _ => Ok(()),
+    if project && scope != OwnerScope::Project {
+        return Err(RegistryError::Invalid("project_rel_scope"));
     }
+    Ok(())
 }
 
 fn valid_id(value: &str) -> bool {
