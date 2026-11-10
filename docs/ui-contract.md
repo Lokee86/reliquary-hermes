@@ -54,6 +54,12 @@ Memory detail uses the exact Root payload at the authorized cut. Retained non-ar
 
 Owner changes cancel requests and clear private selections/cache before new rendering. The DTO correlation tests reject prior-owner/cut results; actual cancellation/render cleanup requires HU01/HU02 component/browser tests. The backend must enforce these checks independently of hidden controls. HTML/Markdown/source text stays untrusted, requiring safe rendering, safe URLs, no raw executable HTML and no tool execution; there is no frontend renderer in HP01 to certify.
 
+## Sources history and import
+
+The authenticated Sources API is scoped to the active Hermes plugin profile. `GET /sources-v1/sessions` takes bounded `offset` and `q` parameters and returns metadata, accessible REL destinations and a next offset. The picker uses explicit selection and the history export capability. It receives no transcript bodies.
+
+`POST /sources-v1/import` accepts a batch of up to eight session IDs, one authorized REL ID and an explicit true confirmation. The server rechecks each exact session and destination. Web uses the existing same-origin gate and Desktop requires verified native admission. `POST /sources-v1/status` reads the selected sessions' current status without admitting new work. Queued, Staged, Processing and Complete distinguish durable submission, a signed staging receipt, active Root work and completed Root processing. An exact repeat returns Already imported. A changed source or different destination for an accepted session returns a conflict or unavailable result.
+
 ## Related docs
 
 - [Host and web SDK audit](host-audit.md)

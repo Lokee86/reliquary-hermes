@@ -431,12 +431,14 @@ class HostClient:
         reply = self._exchange(discovery, "/v1/source/status", body,
                                time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS)
         try:
-            result = obj(decode(reply), {"session_id", "state", "receipt", "import_id"})
+            result = obj(decode(reply), {"session_id", "state", "receipt", "import_id", "owner_id", "snapshot_digest"})
             require(result["session_id"] == session and result["state"] in {
                 "none", "staged", "processing", "complete", "failed", "tombstoned", "unavailable"},
                 "invalid_source_status")
             require(result["receipt"] is None or digest(result["receipt"]), "invalid_source_status")
             require(result["import_id"] is None or identifier(result["import_id"]), "invalid_source_status")
+            require(result["owner_id"] is None or identifier(result["owner_id"]), "invalid_source_status")
+            require(result["snapshot_digest"] is None or digest(result["snapshot_digest"]), "invalid_source_status")
             return result
         except ContractError:
             raise HostUnavailable("invalid_source_status") from None

@@ -21,7 +21,7 @@ from reliquary_hermes.outbox import SourceOutbox
 from reliquary_hermes.settings import TOKEN_VAR, read_settings, read_token
 from reliquary_hermes.validation import canonical, decode
 from test_hp03_host import binaries, install_setup_host, owner, stop
-from test_hp03_provider import pinned_provider
+from test_hp03_provider import history_provider
 from test_hp04_host import TEXT, _cli
 from test_hp05_retrieval import _configure, _retrieval_fixture_model, _wait
 from test_hu03_dashboard import _stage_plugin
@@ -200,7 +200,7 @@ def _dashboard_phase(primary, foreign, checkout, scratch, memory, result, *, arc
 
 @pytest.mark.skipif(os.environ.get("HU04_LIVE_ACCEPTANCE") != "1", reason="Enable installed HU04 acceptance")
 def test_hu04_installed_hermes_browser_recall_restart_and_archive(
-    tmp_path, pinned_checkout, pinned_provider, binaries, monkeypatch,
+    tmp_path, history_checkout, history_provider, binaries, monkeypatch,
 ):
     from hermes_cli.plugins import _reset_plugin_managers_for_tests, get_plugin_manager
     from hermes_constants import profile_name_for_home, reset_hermes_home_override, set_hermes_home_override
@@ -214,7 +214,7 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
     rel, phy, project = home / "main.rel", home / "active.phy", home / "project.rel"
     ids = {"main": owner(cli, "rel", rel, "unspecified"), "phy": owner(cli, "phy", phy),
            "project": owner(cli, "rel", project, "project")}
-    installed, settings = _install(home, pinned_checkout, binary, rel, phy, project, ids)
+    installed, settings = _install(home, history_checkout, binary, rel, phy, project, ids)
     state = settings.state_dir
     with _retrieval_fixture_model() as (url, calls, _), ExitStack() as cleanup:
         scope = set_hermes_home_override(home)
@@ -277,7 +277,7 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
                 "memory_id": memory_id, "source_snapshot_digests": [accepted_snapshot.snapshot_digest],
             }]
             original_instance = decode((state / "discovery.json").read_bytes())["instance_id"]
-            _dashboard_phase(primary, foreign, pinned_checkout, tmp_path / "before", memories[memory_id], first)
+            _dashboard_phase(primary, foreign, history_checkout, tmp_path / "before", memories[memory_id], first)
         with _runtime(home, installed, RECALL, ids) as (manager, _):
             assert decode((state / "discovery.json").read_bytes())["instance_id"] != original_instance
             later = _query(manager)
@@ -285,7 +285,7 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
             later = later["result"]
             for key in ("memory_ids", "provenance", "context"):
                 assert later[key] == first[key]
-            _dashboard_phase(primary, foreign, pinned_checkout, tmp_path / "after", memories[memory_id], later)
+            _dashboard_phase(primary, foreign, history_checkout, tmp_path / "after", memories[memory_id], later)
         assert calls.count("memory_query") == 2
 
         _reset_plugin_managers_for_tests()
@@ -307,5 +307,5 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
                 replay.deliver_source_job(original_job)
             denied = _query(manager)
             assert denied["status"] in {"conflict", "unavailable"}, denied
-            _dashboard_phase(primary, foreign, pinned_checkout, tmp_path / "archived",
+            _dashboard_phase(primary, foreign, history_checkout, tmp_path / "archived",
                              memories[memory_id], later, archived=True)

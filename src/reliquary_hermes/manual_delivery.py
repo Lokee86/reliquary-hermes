@@ -1,11 +1,13 @@
 """Explicit selected-session delivery through the signed host source lane."""
 
+from threading import Lock
+
 from .client import HostUnavailable
 from .outbox import SourceOutbox, SourceOutboxError
 from .source import SourceSnapshot
 from .source_worker import SourceWorker
 from .validation import ContractError, identifier, require, sequence
-from threading import Lock
+
 
 _MAX_IMPORTS = 16
 _MAX_WORKERS = 8
@@ -13,114 +15,107 @@ _WORKERS = {}
 _WORKERS_LOCK = Lock()
 
 
-def ensure_manual_worker(settings, client):
-    """Start or reuse one profile-owned queue worker; it only drains durable jobs."""
-    key = (str(settings.state_dir), settings.profile_id, settings.principal_id)
-    with _WORKERS_LOCK:
-        worker = _WORKERS.get(key)
-        if worker is not None:
-            return worker
-        if len(_WORKERS) >= _MAX_WORKERS:
-            raise RuntimeError("manual_worker_limit")
-        worker = SourceWorker(settings, client.independent(), manual_only=True)
-        _WORKERS[key] = worker
-        return worker
-
-
 def _outbox(settings):
     return SourceOutbox(settings.state_dir, settings.profile_id, settings.principal_id)
 
 
-def _result(session_id, status, *, reason=None, retryable=False, receipt=None, import_id=None):
-    return {"session_id": session_id, "status": status, "reason": reason,
-            "retryable": retryable, "receipt": receipt, "import_id": import_id}
+def ensure_manual_worker(settings, client):
+    """Resume only already-confirmed jobs, using an independent client and scoped lease."""
+    if not _outbox(settings).has_pending_manual():
+        return
+    key = (settings.state_dir, settings.profile_id, settings.principal_id)
+    with _WORKERS_LOCK:
+        for prior in tuple(_WORKERS):
+            if not _WORKERS[prior].running:
+                del _WORKERS[prior]
+        if key not in _WORKERS:
+            if len(_WORKERS) >= _MAX_WORKERS:
+                raise SourceOutboxError("manual_worker_unavailable")
+            _WORKERS[key] = SourceWorker(settings, client.independent(), manual_only=True)
+
+
+def _result(session_id, status, reason=None, *, retryable=False):
+    return {"session_id": session_id, "status": status, "reason": reason, "retryable": retryable}
+
+
+def _remote_status(client, session_id, *, reconnect=False):
+    try:
+        return client.read_source_status(session_id)
+    except HostUnavailable:
+        if reconnect:
+            try:
+                client.connect_dashboard(None)
+                return client.read_source_status(session_id)
+            except HostUnavailable:
+                pass
+        return None
 
 
 def queue_imports(settings, client, owner_id: str, snapshots: list[SourceSnapshot]) -> dict[str, dict]:
-    """Durably queue explicit, server-trusted snapshots for one configured REL.
-
-    The authenticated dashboard adapter must build the snapshots from the active
-    Hermes profile and verify their source provenance before calling this method.
-    This method never attaches or switches a live session route.
-    """
+    """Durably enqueue server-verified copies without attaching a live session."""
     owner = identifier(owner_id)
     selected = sequence(snapshots, _MAX_IMPORTS, nonempty=True)
-    require(len({snapshot.session_id for snapshot in selected if type(snapshot) is SourceSnapshot}) == len(selected),
-            "duplicate_manual_import")
+    require(all(type(item) is SourceSnapshot for item in selected), "invalid_source_snapshot")
+    require(len({item.session_id for item in selected}) == len(selected), "duplicate_manual_import")
     outbox = _outbox(settings)
-    delivery_client = client.independent()
     results = {}
-    queued_any = False
     for snapshot in selected:
-        session = getattr(snapshot, "session_id", "")
+        session = snapshot.session_id
         try:
-            require(type(snapshot) is SourceSnapshot, "invalid_source_snapshot")
             require(snapshot.profile_id == settings.profile_id, "source_scope_mismatch")
             snapshot.require_current()
-            prior = outbox.manual_status(snapshot.session_id)
-            if prior is not None and prior["receipt"] is not None:
-                if prior["owner_id"] == owner and prior["snapshot_digest"] == snapshot.snapshot_digest:
-                    results[session] = _result(session, "already_imported", receipt=prior["receipt"],
-                                               import_id=prior.get("import_id"))
-                    continue
-                results[session] = _result(session, "unavailable", reason="manual_import_conflict")
+            prior = outbox.manual_status(session)
+            remote = _remote_status(client, session)
+            if remote is not None and remote["state"] == "tombstoned":
+                results[session] = _result(session, "unavailable", "source_terminal")
                 continue
-            lease_id, reconciliation = delivery_client.add_runtime_scope(snapshot.session_id)
-            outbox.enqueue_manual(snapshot, owner_id=owner, lease_id=lease_id,
-                                  fence_epoch=reconciliation.get(snapshot.session_id))
+            accepted = prior if prior and prior["receipt"] is not None else remote
+            if accepted and accepted["receipt"] is not None:
+                same = accepted["owner_id"] == owner and accepted["snapshot_digest"] == snapshot.snapshot_digest
+                results[session] = (_result(session, "already_imported") if same else
+                                    _result(session, "unavailable", "manual_import_conflict"))
+                continue
+            outbox.enqueue_manual(snapshot, owner_id=owner)
             results[session] = _result(session, "queued")
-            queued_any = True
-        except (SourceOutboxError, ContractError, HostUnavailable) as error:
-            reason = str(error)
-            results[session] = _result(session, "unavailable", reason=reason,
-                                       retryable=reason in {"source_outbox_unavailable", "source_outbox_full",
-                                                           "host_unavailable", "host_timeout"})
-    if queued_any:
-        try:
-            ensure_manual_worker(settings, delivery_client)
-        except RuntimeError:
-            for session, status in results.items():
-                if status["status"] == "queued":
-                    results[session] = _result(session, "unavailable", reason="manual_worker_unavailable", retryable=True)
+        except (SourceOutboxError, ContractError) as error:
+            code = str(error)
+            results[session] = _result(session, "unavailable", code,
+                                       retryable=code in {"source_outbox_unavailable", "source_outbox_full"})
+    try:
+        ensure_manual_worker(settings, client)
+    except SourceOutboxError:
+        # The jobs are durable. A progress poll can resume them when a worker is available.
+        pass
     return results
 
 
-def import_status(settings, client, session_ids: list[str]) -> dict[str, dict]:
-    """Read durable outbox receipts for selected sessions without enqueueing work."""
-    sessions = sequence(session_ids, _MAX_IMPORTS, nonempty=True)
-    require(len({identifier(session) for session in sessions}) == len(sessions), "duplicate_manual_import")
+def import_status(settings, client, session_ids: list[str], *, resume=False) -> dict[str, dict]:
+    """Read durable progress. An explicit status poll can resume confirmed queued jobs."""
+    sessions = [identifier(sid) for sid in sequence(session_ids, _MAX_IMPORTS, nonempty=True)]
+    require(len(set(sessions)) == len(sessions), "duplicate_manual_import")
     outbox = _outbox(settings)
     results = {}
     for session in sessions:
-        session = identifier(session)
+        local = outbox.manual_status(session)
+        if local is not None and local["receipt"] is None:
+            results[session] = _result(session, local["status"], local["reason"], retryable=local["retryable"])
+            continue
+        remote = _remote_status(client, session, reconnect=resume and local is not None)
+        if remote is not None and remote["state"] in {"tombstoned", "unavailable"}:
+            results[session] = _result(session, "unavailable", "source_status_unavailable")
+        elif local is None:
+            status = "already_imported" if remote and remote["receipt"] is not None else "available"
+            results[session] = _result(session, status)
+        elif remote is None:
+            results[session] = _result(session, "staged")
+        elif (remote["receipt"], remote["owner_id"], remote["snapshot_digest"]) != (
+                local["receipt"], local["owner_id"], local["snapshot_digest"]):
+            results[session] = _result(session, "unavailable", "source_receipt_mismatch")
+        else:
+            results[session] = _result(session, remote["state"])
+    if resume and any(item["status"] == "queued" for item in results.values()):
         try:
-            status = outbox.manual_status(session)
-            if status is None:
-                results[session] = _result(session, "available")
-            elif status["receipt"] is None and status["status"] == "failed":
-                results[session] = _result(session, "failed", reason=status["reason"],
-                                           retryable=status["retryable"])
-            elif status["receipt"] is None:
-                try:
-                    ensure_manual_worker(settings, client)
-                    results[session] = _result(session, "queued", reason=status["reason"],
-                                               retryable=status["retryable"])
-                except RuntimeError:
-                    results[session] = _result(session, "unavailable", reason="manual_worker_unavailable", retryable=True)
-            else:
-                try:
-                    remote = client.read_source_status(session)
-                except (HostUnavailable, AttributeError):
-                    remote = {"state": "staged", "receipt": status["receipt"], "import_id": None}
-                if remote["state"] in {"none", "unavailable", "tombstoned"}:
-                    results[session] = _result(session, "unavailable", reason="source_status_unavailable", retryable=True)
-                elif remote.get("receipt") not in {None, status["receipt"]}:
-                    results[session] = _result(session, "unavailable", reason="source_receipt_mismatch")
-                else:
-                    state = {"staged": "staged", "processing": "processing", "complete": "complete",
-                             "failed": "failed"}.get(remote["state"], "unavailable")
-                    results[session] = _result(session, state, receipt=status["receipt"],
-                                               import_id=remote.get("import_id"))
-        except (SourceOutboxError, ContractError) as error:
-            results[session] = _result(session, "unavailable", reason=str(error), retryable=True)
+            ensure_manual_worker(settings, client)
+        except SourceOutboxError:
+            pass
     return results

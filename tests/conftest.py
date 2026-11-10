@@ -23,6 +23,16 @@ def pinned_checkout():
 
 
 @pytest.fixture(scope="session")
+def history_checkout():
+    value = os.environ.get("HU08_HERMES_INSTALLED_CHECKOUT")
+    if not value:
+        pytest.skip("Set HU08_HERMES_INSTALLED_CHECKOUT for the trusted Hermes history contract")
+    checkout = Path(value).resolve(strict=True)
+    assert (checkout / "hermes_state.py").is_file()
+    return checkout
+
+
+@pytest.fixture(scope="session")
 def pinned_abc(pinned_checkout):
     spec = importlib.util.spec_from_file_location(
         "hp01_pinned_memory_provider", pinned_checkout / "agent" / "memory_provider.py"

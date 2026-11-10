@@ -91,7 +91,9 @@ Expiry durably records an unclean runtime and establishes a fence for each affec
 
 ## HP04 private source adapter
 
-The provider admits new automatic snapshots using the profile enrollment cutoff and the exact owned Hermes session row before copying any callback content. An unavailable row or ambiguous known ancestry prevents capture. The normal Hermes egress callback remains the source of copied bytes, original timestamps and logical message IDs. Existing outbox jobs retain their original session, generation and digest.
+The provider admits new automatic snapshots only when the owned Hermes row carries native original-creation and root provenance beyond the profile enrollment cutoff. Legacy and restored rows cannot gain that proof on resume. The normal Hermes egress callback supplies copied bytes, original timestamps and logical message IDs. Existing outbox jobs retain their original session, generation and digest.
+
+A confirmed manual import uses the same copied snapshot and outbox. Hermes v1 history export applies whole-transcript provider scrubbing before Reliquary receives any message fields. The source request carries the explicitly selected configured REL ID under the authenticated profile and scoped lease. The host pins the accepted source owner and returns a receipt using the same public Root importer. Status distinguishes the durable queue and receipt from native processing completion.
 
 `POST /v1/source` uses the same instance-bound transport proof and requires the configured profile and principal. The provider invokes this private channel from its filtered Hermes callback and the committed lifecycle observer. The profile credential authorizes this adapter. A JSON authority claim in a model-facing request conveys no source grant.
 

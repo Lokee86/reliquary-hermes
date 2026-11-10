@@ -453,3 +453,51 @@ async def dashboard_v1(request: Request):
         same_origin = browser_request.operation in MUTATIONS and _same_origin(request)
         response = await run_in_threadpool(_service_dashboard_request, home, browser_request, same_origin)
     return JSONResponse(response.value, headers={"Cache-Control": "no-store"})
+
+
+async def _sources_request(request: Request, operation: str, *args):
+    """Admit source requests under the same Hermes profile and mutation gate as setup."""
+    _require_hermes_auth(request, "sources_admission_failed")
+    home = _host_home(request)
+    if operation == "queue" and not _same_origin(request):
+        raise HTTPException(status_code=403, detail="same_origin_required")
+    if operation in {"queue", "status"}:
+        content_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
+        if content_type != "application/json":
+            raise HTTPException(status_code=415, detail="sources_json_required")
+        try:
+            args = (decode(await _read_bounded_body(request, limit=8192, error="sources_request_too_large")),)
+        except ContractError:
+            raise HTTPException(status_code=400, detail="invalid_sources_request") from None
+
+    try:
+        from . import history
+
+        result = await run_in_threadpool(getattr(history, operation), home, *args)
+    except ContractError as exc:
+        status, detail = {
+            "history_destination_denied": (403, "history_destination_denied"),
+            "history_export_unavailable": (503, "history_export_unavailable"),
+            "history_import_busy": (503, "history_import_busy"),
+            "source_capture_setup_required": (409, "source_capture_setup_required"),
+            "sources_setup_required": (409, "sources_setup_required"),
+        }.get(str(exc), (400, "invalid_sources_request"))
+        raise HTTPException(status_code=status, detail=detail) from None
+    except Exception:
+        raise HTTPException(status_code=503, detail="sources_unavailable") from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/sources-v1/sessions")
+async def source_sessions(request: Request, offset: int = 0, q: str = ""):
+    return await _sources_request(request, "list_sessions", offset, q)
+
+
+@router.post("/sources-v1/import")
+async def source_import(request: Request):
+    return await _sources_request(request, "queue")
+
+
+@router.post("/sources-v1/status")
+async def source_import_status(request: Request):
+    return await _sources_request(request, "status")

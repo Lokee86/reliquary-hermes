@@ -1,0 +1,526 @@
+diff --git a/hermes_state_common.py b/hermes_state_common.py
+index 47642b7fb7e..0882547dc71 100644
+--- a/hermes_state_common.py
++++ b/hermes_state_common.py
+@@ -483,6 +483,9 @@ CREATE TABLE IF NOT EXISTS sessions (
+     system_prompt TEXT,
+     system_prompt_hash TEXT,
+     parent_session_id TEXT,
++    provenance_created_at REAL,
++    provenance_root_session_id TEXT,
++    provenance_restored INTEGER NOT NULL DEFAULT 0,
+     started_at REAL NOT NULL,
+     ended_at REAL,
+     end_reason TEXT,
+diff --git a/hermes_state_messages.py b/hermes_state_messages.py
+index f7ba486edd4..2241cbc2c2e 100644
+--- a/hermes_state_messages.py
++++ b/hermes_state_messages.py
+@@ -46,6 +46,7 @@ _MESSAGE_WRITE_COLUMNS = tuple(
+     re.findall(r"\w+", _INSERT_MESSAGE_SQL.split("(", 1)[1].split(")", 1)[0])
+ )
+ _MESSAGE_SCHEMA_KEYS = frozenset(_MESSAGE_WRITE_COLUMNS) | {"id", "compacted", "display_order"}
++_HISTORY_EXPORT_MAX_BYTES = 256 * 1024
+ _BUMP_GENERATION_SQL = """
+             INSERT INTO conversation_generations (source, session_key, generation)
+             VALUES (?, ?, 1)
+@@ -1435,6 +1436,133 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin,
+                 rows.reverse()
+         return [self._row_to_message_dict(row, warn_context="get_messages", summary_flag=True) for row in rows]
+ 
++    HISTORY_EXPORT_VERSION = 1
++
++    def export_history(self, session_id: str, *, profile_id: str, max_messages: int = 128) -> dict[str, Any]:
++        """Return an owner-scoped, bounded, provider-redacted transcript copy for explicit history import.
++
++        This read API never changes or resumes the source session. It supports only unambiguous top-level
++        sessions whose current display transcript is complete within the caller's bound. Compression and
++        copied branches require lineage-aware aggregation and are unavailable in v1.
++        """
++        def unavailable(reason: str) -> dict[str, Any]:
++            return {"status": "unavailable", "reason": reason, "profile_id": profile_id,
++                    "session_id": session_id, "started_at": None, "messages": []}
++
++        if not isinstance(session_id, str) or not session_id.strip():
++            return unavailable("history_session_unavailable")
++        if type(max_messages) is not int or not 1 <= max_messages <= 128:
++            return unavailable("history_unsupported")
++        bound = max_messages
++        try:
++            owner = self._own_profile_name()
++            if not owner or profile_id != owner:
++                return unavailable("history_session_unavailable")
++            session = self.get_session(session_id)
++            if not session or session.get("profile_name") != owner:
++                return unavailable("history_session_unavailable")
++            if session.get("hidden") or session.get("archived"):
++                return unavailable("history_session_unavailable")
++            if session.get("provenance_restored") or session.get("source") == "import":
++                return unavailable("history_session_unavailable")
++            if session.get("source") == "tool":
++                return unavailable("history_unsupported")
++            from hermes_state_local_migration import NOT_CLIENT_LABELS
++            source = str(session.get("source") or "").strip()
++            if not source or source in NOT_CLIENT_LABELS:
++                return unavailable("history_unsupported")
++            from hermes_state_sessions import _parse_model_config
++            config = _parse_model_config(session.get("model_config"))
++            if (session.get("_branched_from") or config.get("_branched_from") or config.get("_delegate_from")):
++                return unavailable("history_unsupported")
++            if session.get("parent_session_id") or session.get("end_reason") in {"compression", "branched"}:
++                return unavailable("history_unsupported")
++            from hermes_state_mutation_binding import BINDING_PREFIX
++            if self._read_one("SELECT 1 FROM state_meta WHERE key = ?", (BINDING_PREFIX + session_id,)):
++                return unavailable("history_session_unavailable")
++
++            # Include compacted display rows (the canonical visible history), exclude rewind/inactive rows,
++            # and ask for one beyond the hard ceiling so truncation is never reported as success.
++            rows = self.get_messages(session_id, include_compacted=True, limit=bound + 1)
++            if len(rows) > bound:
++                return unavailable("history_too_large")
++            if not rows:
++                return unavailable("history_identity_unavailable")
++            normalized = []
++            seen_uids = set()
++            import math
++
++            def contains_data_url(value):
++                if isinstance(value, str):
++                    return "data:" in value.lower()
++                if isinstance(value, dict):
++                    return any(contains_data_url(v) for v in value.values())
++                if isinstance(value, (list, tuple)):
++                    return any(contains_data_url(v) for v in value)
++                return False
++
++            for row in rows:
++                uid = row.get("message_uid")
++                stamp = row.get("timestamp")
++                role = row.get("role")
++                if (not isinstance(uid, str) or not uid.strip() or uid in seen_uids
++                        or not isinstance(stamp, (int, float)) or not math.isfinite(stamp)
++                        or role not in {"user", "assistant", "tool"}):
++                    return unavailable("history_identity_unavailable")
++                if row.get("_compressed_summary") or row.get("absorbed_message_uids"):
++                    return unavailable("history_unsupported")
++                if not isinstance(row.get("content"), str):
++                    return unavailable("history_unsupported")
++                seen_uids.add(uid)
++                # Keep the whole logical row (including API-content and display sidecars) for byte
++                # accounting and secret learning; drop physical row/session IDs and visibility state.
++                item = {key: value for key, value in row.items() if key not in {
++                    "id", "session_id", "active", "compacted", "display_order", "observed",
++                    "display_identity",
++                }}
++                if contains_data_url(item):
++                    return unavailable("history_unsupported")
++                normalized.append(item)
++
++            try:
++                transcript_bytes = len(json.dumps(
++                    normalized, ensure_ascii=False, allow_nan=False, separators=(",", ":")
++                ).encode("utf-8"))
++            except (TypeError, ValueError, UnicodeError, RecursionError):
++                return unavailable("history_unsupported")
++            if transcript_bytes > _HISTORY_EXPORT_MAX_BYTES:
++                return unavailable("history_too_large")
++
++            # Match the installed MemoryManager's whole-transcript provider egress path exactly. If that
++            # shared redactor cannot run, raw history must never fall through as a successful export.
++            from agent.memory_manager import _redact_for_provider
++            redacted = _redact_for_provider(normalized)
++            latest = self.get_session(session_id)
++            if (not latest or latest.get("profile_name") != owner or latest.get("archived")
++                    or latest.get("hidden") or latest.get("provenance_restored") != session.get("provenance_restored")
++                    or latest.get("source") != session.get("source")
++                    or latest.get("model_config") != session.get("model_config")
++                    or latest.get("parent_session_id") != session.get("parent_session_id")
++                    or latest.get("end_reason") != session.get("end_reason")
++                    or latest.get("message_count") != session.get("message_count")
++                    or latest.get("transcript_revision") != session.get("transcript_revision")):
++                return unavailable("history_session_unavailable")
++            if not isinstance(redacted, list) or len(redacted) != len(normalized) or any(
++                not isinstance(row, dict) or row.get("message_uid") != original["message_uid"]
++                or row.get("timestamp") != original["timestamp"]
++                for row, original in zip(redacted, normalized)
++            ):
++                return unavailable("history_identity_unavailable")
++            # The provider path scrubs full rows as one transcript so a secret detected in one row is
++            # masked wherever it repeats. Only canonical visible fields leave this adapter; display
++            # sidecars (including withheld prompt metadata), reasoning, and storage identity never do.
++            exported = [{key: row[key] for key in ("message_uid", "timestamp", "role", "content")} for row in redacted]
++            return {"status": "ready", "reason": None, "profile_id": owner,
++                    "session_id": session_id, "started_at": session.get("started_at"),
++                    "messages": exported}
++        except Exception:
++            return unavailable("history_identity_unavailable")
++
+     def find_pr_url_messages(self, session_ids: list[str]) -> list[dict[str, Any]]:
+         """Tool results containing ``/pull/``: a deliberately loose scan, oldest-first so the caller takes the last."""
+         ids = [s for s in session_ids if s]
+diff --git a/hermes_state_portability.py b/hermes_state_portability.py
+index f794ca6c682..4318de9fd18 100644
+--- a/hermes_state_portability.py
++++ b/hermes_state_portability.py
+@@ -43,7 +43,7 @@ _IMPORT_MESSAGE_JSON_FIELDS = (
+ _IMPORT_SESSION_INSERT_SQL = """INSERT INTO sessions (
+                            id, source, user_id, model, model_config, system_prompt,
+                            system_prompt_hash,
+-                           parent_session_id, started_at, ended_at, end_reason,
++                           parent_session_id, provenance_restored, started_at, ended_at, end_reason,
+                            message_count, tool_call_count, input_tokens, output_tokens,
+                            cache_read_tokens, cache_write_tokens, reasoning_tokens,
+                            cwd, git_branch, git_repo_root,
+@@ -53,7 +53,7 @@ _IMPORT_SESSION_INSERT_SQL = """INSERT INTO sessions (
+                        )
+                        VALUES (
+                            :id, :source, :user_id, :model, :model_config,
+-                           NULL, :system_prompt_hash, NULL, :started_at, :ended_at,
++                           NULL, :system_prompt_hash, NULL, 1, :started_at, :ended_at,
+                            :end_reason, 0, 0, :input_tokens, :output_tokens,
+                            :cache_read_tokens, :cache_write_tokens,
+                            :reasoning_tokens, :cwd, :git_branch, :git_repo_root,
+diff --git a/hermes_state_sessions.py b/hermes_state_sessions.py
+index 476b3ef51d4..a0c4a80ca03 100644
+--- a/hermes_state_sessions.py
++++ b/hermes_state_sessions.py
+@@ -845,6 +845,40 @@ class SessionSessionsMixin:
+         )
+         return self._session_row_dict(row) if row else None
+ 
++    def is_session_eligible_for_capture(
++        self, session_id: str, *, profile_id: str, enrollment_cutoff: float
++    ) -> bool:
++        """Fail-closed new-session admission using native original-creation provenance.
++
++        ``started_at`` is descriptive and can be copied from portable history; it is never used as
++        proof of a newly created conversation. Legacy rows missing the marker remain ineligible.
++        """
++        import math
++        try:
++            cutoff = float(enrollment_cutoff)
++            if not math.isfinite(cutoff):
++                return False
++            owner = self._own_profile_name()
++            if not owner or owner != profile_id:
++                return False
++            row = self.get_session(session_id)
++            if (not row or row.get("profile_name") != owner or row.get("archived") or row.get("hidden")
++                    or row.get("provenance_restored")):
++                return False
++            created = row.get("provenance_created_at")
++            root_id = row.get("provenance_root_session_id")
++            if not isinstance(created, (int, float)) or not math.isfinite(created) or created <= cutoff:
++                return False
++            if not isinstance(root_id, str) or not root_id:
++                return False
++            root = self.get_session(root_id)
++            return bool(root and root.get("profile_name") == owner
++                        and root.get("provenance_root_session_id") == root_id
++                        and root.get("provenance_created_at") == created
++                        and created > cutoff)
++        except Exception:
++            return False
++
+     def get_session_list_row(self, session_id: str) -> Optional[dict[str, Any]]:
+         """Picker columns only: the live listing skips ``get_session``'s prompt/tool JOIN and flush."""
+         row = self._read_one(
+diff --git a/hermes_state_worker_lifecycle.py b/hermes_state_worker_lifecycle.py
+index 6eb85086f7a..c022e0fb607 100644
+--- a/hermes_state_worker_lifecycle.py
++++ b/hermes_state_worker_lifecycle.py
+@@ -227,15 +227,39 @@ def insert_session_row_in_transaction(
+         raise RuntimeStoreError('not_found')
+     if not (profile_name or "").strip():
+         profile_name = self._own_profile_name()
++    existing = conn.execute(
++        "SELECT 1 FROM sessions WHERE id = ?", (session_id,)
++    ).fetchone()
++    now = time.time()
++    provenance_created_at = None
++    provenance_root_session_id = None
++    independent_reset = bool(
++        parent_session_id and isinstance(model_config, dict)
++        and model_config.get("_reset_from") == parent_session_id
++    )
++    if not existing:
++        if parent_session_id and not independent_reset:
++            parent = conn.execute(
++                "SELECT provenance_created_at, provenance_root_session_id FROM sessions WHERE id = ?",
++                (parent_session_id,),
++            ).fetchone()
++            if parent and parent[0] is not None and parent[1]:
++                provenance_created_at, provenance_root_session_id = parent[0], parent[1]
++        elif source != "unknown":
++            # This marker is native provenance, distinct from portable/session timestamps. Legacy
++            # rows, placeholders and direct restore SQL stay NULL and cannot be made eligible by a later upsert.
++            # Canonical /new rows carry _reset_from=parent and intentionally start independent history.
++            provenance_created_at = now
++            provenance_root_session_id = session_id
+     system_prompt_hash = self._store_system_prompt(conn, system_prompt)
+     conn.execute(
+         """INSERT INTO sessions (
+            id, source, created_source, user_id, session_key, chat_id, chat_type, thread_id,
+            model, model_config, system_prompt, system_prompt_hash,
+-           parent_session_id, cwd, profile_name, transport_profile, git_repo_root,
++           parent_session_id, provenance_created_at, provenance_root_session_id, cwd, profile_name, transport_profile, git_repo_root,
+            origin_json, display_name, started_at
+         )
+-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                source = CASE
+                    WHEN sessions.source = 'unknown'
+@@ -276,8 +300,8 @@ def insert_session_row_in_transaction(
+         (
+             session_id, source, source, user_id, session_key, chat_id, chat_type, thread_id, model,
+             json.dumps(model_config) if model_config else None, system_prompt_hash,
+-            parent_session_id, cwd, profile_name, transport_profile, git_repo_root, origin_json,
+-            display_name, time.time(),
++            parent_session_id, provenance_created_at, provenance_root_session_id, cwd, profile_name,
++            transport_profile, git_repo_root, origin_json, display_name, now,
+         ),
+     )
+     if system_prompt_hash is not None:
+diff --git a/tests/hermes_state/test_hu08_history_export.py b/tests/hermes_state/test_hu08_history_export.py
+new file mode 100644
+index 00000000000..7320702403c
+--- /dev/null
++++ b/tests/hermes_state/test_hu08_history_export.py
+@@ -0,0 +1,236 @@
++import pytest
++
++from hermes_state import SessionDB
++
++
++def _db(tmp_path, monkeypatch):
++    db = SessionDB(db_path=tmp_path / "state.db")
++    monkeypatch.setattr(db, "_own_profile_name", lambda: "default")
++    return db
++
++
++def test_export_is_owner_scoped_redacted_and_preserves_message_identity(tmp_path, monkeypatch):
++    db = _db(tmp_path, monkeypatch)
++    try:
++        db.create_session("old", "cli")
++        db.append_message("old", "user", "sensitive input", timestamp=1000)
++        row = db.get_messages("old")[0]
++        seen = []
++
++        def redactor(messages):
++            seen.extend(messages)
++            return [{**message, "content": "[redacted]"} for message in messages]
++
++        monkeypatch.setattr("agent.memory_manager._redact_for_provider", redactor)
++        result = db.export_history("old", profile_id="default")
++        assert result["status"] == "ready"
++        assert result["reason"] is None
++        assert result["messages"][0]["message_uid"] == row["message_uid"]
++        assert result["messages"][0]["timestamp"] == 1000.0
++        assert result["messages"][0]["content"] == "[redacted]"
++        assert "session_id" not in result["messages"][0] and "id" not in result["messages"][0]
++        assert seen[0]["message_uid"] == row["message_uid"]
++        assert db.export_history("old", profile_id="other")["reason"] == "history_session_unavailable"
++    finally:
++        db.close()
++
++
++def test_export_rejects_copied_branches_and_oversize(tmp_path, monkeypatch):
++    db = _db(tmp_path, monkeypatch)
++    try:
++        db.create_session("root", "cli")
++        db.append_message("root", "user", "root")
++        db.create_session("branch", "cli", parent_session_id="root")
++        db.append_message("branch", "user", "copied")
++        assert db.export_history("branch", profile_id="default")["reason"] == "history_unsupported"
++
++        db.create_session("large", "cli")
++        db.append_messages_batch("large", [{"role": "user", "content": str(i)} for i in range(129)])
++        assert db.export_history("large", profile_id="default")["reason"] == "history_too_large"
++    finally:
++        db.close()
++
++
++def test_export_rejects_missing_original_message_identity(tmp_path, monkeypatch):
++    db = _db(tmp_path, monkeypatch)
++    try:
++        db.create_session("legacy", "cli")
++        db.append_message("legacy", "user", "legacy")
++        db._conn.execute("UPDATE messages SET message_uid = NULL WHERE session_id = ?", ("legacy",))
++        assert db.export_history("legacy", profile_id="default")["reason"] == "history_identity_unavailable"
++    finally:
++        db.close()
++
++
++def test_capture_eligibility_uses_native_marker_and_fails_closed_for_legacy(tmp_path, monkeypatch):
++    db = _db(tmp_path, monkeypatch)
++    try:
++        db.create_session("native", "cli")
++        native = db.get_session("native")
++        cutoff = native["provenance_created_at"] - 1
++        assert db.is_session_eligible_for_capture("native", profile_id="default", enrollment_cutoff=cutoff)
++        assert not db.is_session_eligible_for_capture("native", profile_id="other", enrollment_cutoff=cutoff)
++        assert not db.is_session_eligible_for_capture("native", profile_id="default", enrollment_cutoff=native["provenance_created_at"])
++        db._conn.execute("UPDATE sessions SET provenance_created_at = NULL, provenance_root_session_id = NULL WHERE id = ?", ("native",))
++        assert not db.is_session_eligible_for_capture("native", profile_id="default", enrollment_cutoff=cutoff)
++    finally:
++        db.close()
++
++
++def test_restore_like_upsert_cannot_claim_native_creation_marker(tmp_path, monkeypatch):
++    db = _db(tmp_path, monkeypatch)
++    try:
++        db.create_session("restored", "cli")
++        db._conn.execute("UPDATE sessions SET provenance_created_at = NULL, provenance_root_session_id = NULL WHERE id = ?", ("restored",))
++        db.create_session("restored", "cli")  # first resume/upsert after restore
++        restored = db.get_session("restored")
++        assert restored["provenance_created_at"] is None
++        assert restored["provenance_root_session_id"] is None
++        assert not db.is_session_eligible_for_capture("restored", profile_id="default", enrollment_cutoff=0)
++    finally:
++        db.close()
++
++
++def test_legacy_durable_history_remains_manually_exportable(tmp_path, monkeypatch):
++    db = _db(tmp_path, monkeypatch)
++    try:
++        db.create_session("legacy", "cli")
++        db._conn.execute("UPDATE sessions SET provenance_created_at = NULL, provenance_root_session_id = NULL WHERE id = ?", ("legacy",))
++        db.append_message("legacy", "user", "durable old message", timestamp=1234)
++        exported = db.export_history("legacy", profile_id="default")
++        assert exported["status"] == "ready"
++        assert exported["messages"][0]["timestamp"] == 1234.0
++        assert not db.is_session_eligible_for_capture("legacy", profile_id="default", enrollment_cutoff=0)
++    finally:
++        db.close()
++
++
++def test_unknown_placeholder_does_not_mint_native_creation_provenance(tmp_path, monkeypatch):
++    db = _db(tmp_path, monkeypatch)
++    try:
++        db.ensure_session("placeholder", source="unknown")
++        db.create_session("placeholder", source="cli")
++        row = db.get_session("placeholder")
++        assert row["provenance_created_at"] is None
++        assert not db.is_session_eligible_for_capture("placeholder", profile_id="default", enrollment_cutoff=0)
++    finally:
++        db.close()
++
++
++def test_export_redacts_across_rows_then_projects_only_visible_fields(tmp_path, monkeypatch):
++    secret = "sk-proj-abc123def456ghi789jkl012"
++    db = _db(tmp_path, monkeypatch)
++    monkeypatch.setattr("agent.redact._REDACT_ENABLED", True)
++    try:
++        db.create_session("redact", "cli")
++        db.append_message("redact", "tool", f"config key={secret}")
++        db.append_message("redact", "assistant", f"I found {secret}", display_metadata={"withheld_prompt": "private blocked prompt"})
++        exported = db.export_history("redact", profile_id="default")
++        assert exported["status"] == "ready"
++        assert secret not in repr(exported)
++        assert all(set(message) == {"message_uid", "timestamp", "role", "content"} for message in exported["messages"])
++        assert "private blocked prompt" not in repr(exported)
++    finally:
++        db.close()
++
++
++def test_export_rejects_compressed_summary_that_loses_absorbed_row_identities(tmp_path, monkeypatch):
++    db = _db(tmp_path, monkeypatch)
++    try:
++        db.create_session("compressed", "cli")
++        db.append_message("compressed", "user", "summary", _compressed_summary=True)
++        assert db.export_history("compressed", profile_id="default")["reason"] == "history_unsupported"
++    finally:
++        db.close()
++
++
++def test_independent_reset_gets_its_own_native_creation_provenance(tmp_path, monkeypatch):
++    db = _db(tmp_path, monkeypatch)
++    try:
++        db.create_session("parent", "cli")
++        cutoff = db.get_session("parent")["provenance_created_at"]
++        db.create_session("reset", "cli", parent_session_id="parent", model_config={"_reset_from": "parent"})
++        reset = db.get_session("reset")
++        assert reset["provenance_root_session_id"] == "reset"
++        assert reset["provenance_created_at"] >= cutoff
++        assert db.is_session_eligible_for_capture("reset", profile_id="default", enrollment_cutoff=cutoff)
++    finally:
++        db.close()
++
++
++def test_import_without_original_times_is_marked_restored_and_stays_blocked_after_resume(tmp_path, monkeypatch):
++    db = _db(tmp_path, monkeypatch)
++    try:
++        result = db.import_sessions([{"id": "restored", "source": "cli", "messages": [
++            {"role": "user", "content": "payload omitted original UID and timestamp"}
++        ]}])
++        assert result["ok"] and result["imported"] == 1
++        db._conn.execute("UPDATE sessions SET profile_name = 'default' WHERE id = 'restored'")
++        session = db.get_session("restored")
++        message = db.get_messages("restored")[0]
++        assert session["provenance_restored"] == 1
++        assert message["message_uid"] and message["timestamp"]
++        db.create_session("restored", "cli")  # resume is an upsert, not a new native conversation
++        assert db.get_session("restored")["provenance_restored"] == 1
++        assert not db.is_session_eligible_for_capture("restored", profile_id="default", enrollment_cutoff=0)
++        assert db.export_history("restored", profile_id="default")["reason"] == "history_session_unavailable"
++    finally:
++        db.close()
++
++
++def test_prepatch_history_control_binding_blocks_ambiguous_restored_manual_export(tmp_path, monkeypatch):
++    from hermes_state_mutation_binding import BINDING_PREFIX
++
++    db = _db(tmp_path, monkeypatch)
++    try:
++        db.create_session("bound-import", "cli")
++        db.append_message("bound-import", "user", "resume me")
++        db._conn.execute("UPDATE sessions SET provenance_created_at = NULL, provenance_root_session_id = NULL WHERE id = ?", ("bound-import",))
++        db._conn.execute("INSERT INTO state_meta(key, value) VALUES(?, ?)", (BINDING_PREFIX + "bound-import", "[\"default\",\"auth:v1:[]\"]"))
++        db.create_session("bound-import", "cli")
++        assert db.export_history("bound-import", profile_id="default")["reason"] == "history_session_unavailable"
++    finally:
++        db.close()
++
++
++def test_export_rejects_detached_branch_and_delegate_markers(tmp_path, monkeypatch):
++    db = _db(tmp_path, monkeypatch)
++    try:
++        db.create_session("detached-branch", "cli", model_config={"_branched_from": "old-parent"})
++        db.append_message("detached-branch", "user", "copied payload")
++        db.create_session("detached-delegate", "cli", model_config={"_delegate_from": "coordinator"})
++        db.append_message("detached-delegate", "user", "subagent payload")
++        assert db.export_history("detached-branch", profile_id="default")["reason"] == "history_unsupported"
++        assert db.export_history("detached-delegate", profile_id="default")["reason"] == "history_unsupported"
++    finally:
++        db.close()
++
++
++def test_export_stops_oversized_transcript_before_redaction(tmp_path, monkeypatch):
++    db = _db(tmp_path, monkeypatch)
++    monkeypatch.setattr("agent.memory_manager._redact_for_provider", lambda _messages: pytest.fail("redactor must not see oversized input"))
++    try:
++        db.create_session("huge", "cli")
++        db.append_message("huge", "user", "x" * (256 * 1024 + 1))
++        assert db.export_history("huge", profile_id="default")["reason"] == "history_too_large"
++        db.create_session("huge-sidecar", "cli")
++        db.append_message("huge-sidecar", "user", "short visible text", api_content="x" * (256 * 1024 + 1))
++        assert db.export_history("huge-sidecar", profile_id="default")["reason"] == "history_too_large"
++    finally:
++        db.close()
++
++
++def test_export_rejects_nontext_inline_data_and_noninteger_message_bounds(tmp_path, monkeypatch):
++    db = _db(tmp_path, monkeypatch)
++    try:
++        db.create_session("nontext", "cli")
++        db.append_message("nontext", "user", [{"type": "text", "text": "hello"}])
++        assert db.export_history("nontext", profile_id="default")["reason"] == "history_unsupported"
++
++        db.create_session("inline", "cli")
++        db.append_message("inline", "user", "data:image/png;base64,AAAA")
++        assert db.export_history("inline", profile_id="default")["reason"] == "history_unsupported"
++        assert db.export_history("inline", profile_id="default", max_messages=1.0)["reason"] == "history_unsupported"
++        assert db.export_history("inline", profile_id="default", max_messages=True)["reason"] == "history_unsupported"
++    finally:
++        db.close()

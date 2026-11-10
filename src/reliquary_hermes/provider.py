@@ -122,7 +122,10 @@ class ReliquaryMemoryProvider(MemoryProvider):
                 self._client = HostClient(
                     settings.state_dir, settings.profile_id, settings.principal_id, token, binary=settings.binary,
                 )
-                ensure_manual_worker(settings, self._client)
+                try:
+                    ensure_manual_worker(settings, self._client)
+                except (OSError, RuntimeError, ContractError):
+                    pass  # Failure of a manual worker cannot disable provider recall.
                 self._source = SourceWorker(settings, self._client)
                 self._source_profile = settings.profile_id
             except (OSError, HostUnavailable, RuntimeError, ValueError):

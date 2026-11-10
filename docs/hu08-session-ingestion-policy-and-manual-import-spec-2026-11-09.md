@@ -1,7 +1,7 @@
 # HU08 — New-session-only ingestion and selective Hermes history import
 
 **Date:** 2026-11-09
-**Status:** Automatic capture implemented. Manual import blocked on a supported Hermes history egress contract.
+**Status:** Implemented for Hermes hosts with the version 1 trusted history-export contract.
 **Baseline:** `reliquary-hermes` `main` at `28356c5`
 **Scope:** plugin setup/provider, trusted Hermes session-store adapter, existing source pipeline, Hermes-native Web/Desktop dashboard
 
@@ -124,4 +124,4 @@ If the Hermes history reader cannot provide original message identity/time or a 
 
 Verified existing seams on the pinned Hermes checkout: `SessionDB.list_sessions_rich` supplies paginated profile-visible records with `started_at`; `get_session_list_row` exposes creation and status metadata; `get_messages` returns stored message rows, including stable IDs where present, and supports paginated reads/ancestors. Hermes normal external-memory `sync_all` applies provider egress redaction, and finalization can pass a full messages slice. The current plugin uses `provider.py::sync_turn` → `source_capture.capture_snapshot` → `SourceWorker`/`SourceOutbox` → authenticated host source ingestion. The configured Reliquary dashboard does **not** currently have a Sources tab; this spec adds it. The exact historical adapter's preservation of copied-source identities/redaction and the existing importer's long-transcript behavior remain implementation acceptance gates.
 
-The [verification guide](verification.md#hu08-automatic-capture) records the automatic capture checks. The [host audit](host-audit.md) records the manual import contract gap.
+The [verification guide](verification.md#hu08-selective-import-and-automatic-capture) records the compatibility and installed-host checks. The [host audit](host-audit.md) describes the trusted export and original-creation contract.

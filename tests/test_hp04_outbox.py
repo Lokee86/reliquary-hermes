@@ -183,3 +183,30 @@ def test_reopened_queue_rejects_a_payload_under_the_wrong_scope(tmp_path):
         db.commit()
     with pytest.raises(SourceOutboxError, match=UNAVAILABLE):
         queue(tmp_path).next_job()
+
+
+def test_manual_receipts_preserve_prior_automatic_work_and_skip_permanent_failures(tmp_path):
+    feed = queue(tmp_path)
+    refused = snapshot("history-refused")
+    selected = snapshot("history-selected")
+    feed.enqueue_manual(refused, owner_id="rel-a")
+    live_key = feed.enqueue(selected, generation=0)
+    selected_key = feed.enqueue_manual(selected, owner_id="rel-b")
+    first = feed.next_job(manual_only=True)
+    assert first.session_id == refused.session_id
+    assert feed.fail_manual(first, "manual_import_conflict")
+    assert feed.manual_status(refused.session_id)["status"] == "failed"
+    assert not feed.manual_status(refused.session_id)["retryable"]
+    selected_job = feed.next_job(manual_only=True)
+    assert selected_job.idempotency_key == selected_key
+    assert selected_job.lease_id is None
+    assert feed.rebind_manual(selected_job, lease_id="history-lease", fence_epoch=None)
+    rebound = feed.next_job(manual_only=True)
+    assert rebound.lease_id == "history-lease" and rebound.idempotency_key == selected_key
+    assert feed.acknowledge(rebound, RECEIPT)
+    assert feed.next_job(selected.session_id).idempotency_key == live_key
+    assert feed.manual_status(selected.session_id)["receipt"] == RECEIPT
+    assert not feed.has_pending_manual()
+    assert feed.enqueue_manual(selected, owner_id="rel-b") == selected_key
+    with pytest.raises(SourceOutboxError, match="manual_import_conflict"):
+        feed.enqueue_manual(selected, owner_id="rel-a")

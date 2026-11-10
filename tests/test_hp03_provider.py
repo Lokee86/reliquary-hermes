@@ -36,7 +36,20 @@ def _settled(provider, expected):
 
 @pytest.fixture
 def pinned_provider(monkeypatch, pinned_checkout, tmp_path):
-    monkeypatch.syspath_prepend(str(pinned_checkout))
+    return _provider_for_checkout(monkeypatch, pinned_checkout, tmp_path)
+
+
+@pytest.fixture
+def history_provider(monkeypatch, history_checkout, tmp_path):
+    provider = _provider_for_checkout(monkeypatch, history_checkout, tmp_path)
+    from hermes_state import SessionDB
+
+    assert SessionDB.HISTORY_EXPORT_VERSION == 1
+    return provider
+
+
+def _provider_for_checkout(monkeypatch, checkout, tmp_path):
+    monkeypatch.syspath_prepend(str(checkout))
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))

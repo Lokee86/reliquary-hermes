@@ -99,6 +99,7 @@ import json
 import os
 from pathlib import Path
 import sys
+from time import monotonic, sleep
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -106,6 +107,7 @@ from gateway.runtime_bootstrap import TicketStore
 from gateway.session_authorities import SessionAuthorities
 from hermes_cli import plugins, profiles, projects_db, web_server as web
 from hermes_cli.dashboard_auth.native_http import HEADER
+from hermes_state import SessionDB
 
 fixture = json.load(sys.stdin)
 native_mutations = fixture["native_mutations"]
@@ -135,6 +137,19 @@ def writer(name):
 
 setup_api = "/api/plugins/reliquary-hermes/setup-v1"
 dashboard = "/api/plugins/reliquary-hermes/dashboard-v1"
+sources_api = "/api/plugins/reliquary-hermes/sources-v1"
+history_supported = getattr(SessionDB, "HISTORY_EXPORT_VERSION", None) == 1
+history_rows = {}
+history_secret = "opaque-hu08-test-only-71de8a"
+if history_supported:
+    for name, selected in homes.items():
+        with SessionDB(selected / "state.db") as db:
+            session_id = "history-" + name
+            db.create_session(session_id, source="cli", profile_name=name)
+            db.set_session_title(session_id, "Synthetic saved conversation")
+            db.append_message(session_id, "user", "Saved synthetic preference " + history_secret)
+            db.append_message(session_id, "assistant", "Authorization: Bearer " + history_secret)
+            history_rows[name] = db.get_messages(session_id)
 auth = {web._SESSION_HEADER_NAME: web._SESSION_TOKEN}
 same_origin = {**auth, "Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
 cross_origin = {**auth, "Origin": "http://other.test", "Sec-Fetch-Site": "cross-site"}
@@ -165,6 +180,7 @@ with ExitStack() as stack:
                                  json={"desktop_native_mutations": True})
         assert reply(spoofed)["desktop_native_mutations"] is False
         assert client.post(setup_api + "/apply", params=params, json=candidate).status_code == 401
+        assert client.get(sources_api + "/sessions", params=params).status_code == 401
         for headers in (auth, cross_origin, {**auth, "hosted_native_http_authenticated": "true"}):
             assert client.post(setup_api + "/apply", headers=headers, params=params, json=candidate).status_code == 403
         assert client.post(setup_api + "/apply", headers={**grant(profile), "Origin": "http://testserver"},
@@ -325,6 +341,49 @@ with ExitStack() as stack:
         unlinked = reply(client.post(dashboard, headers=writer(profile), params=params, json=unlink))
         assert unlinked["status"] == "ok" and not unlinked["result"]["committed"]["active"], unlinked
 
+        history_page = client.get(sources_api + "/sessions", headers=grant(profile),
+                                  params={**params, "q": "Synthetic saved"})
+        history = reply(history_page)
+        assert history_secret not in history_page.text
+        assert history["available"] is history_supported
+        if history_supported:
+            session_id = "history-" + profile
+            [session] = history["sessions"]
+            assert session["session_id"] == session_id and session["status"] == "available"
+            expected_owners = {fixture["owners"][profile]["main"]}
+            if profile == "secondary":
+                expected_owners.add(fixture["owners"][profile]["project"])
+            assert {row["owner_id"] for row in history["destinations"]} == expected_owners
+            destination = fixture["owners"][profile]["project" if profile == "secondary" else "main"]
+            request = {"session_ids": [session_id], "owner_id": destination, "confirm": True}
+            assert client.post(sources_api + "/import", headers=cross_origin, params=params,
+                               json=request).status_code == 403
+            assert client.post(sources_api + "/import", headers=same_origin, params=params,
+                               json={**request, "confirm": False}).status_code == 400
+            assert client.post(sources_api + "/import", headers=same_origin, params=params,
+                               json={**request, "owner_id": fixture["owners"][profile]["phy"]}).status_code == 403
+            foreign = reply(client.post(sources_api + "/import", headers=same_origin, params=params,
+                                        json={**request, "session_ids": ["history-" + other]}))
+            assert foreign["sessions"][0]["status"] == "unavailable"
+            check = {"session_ids": [session_id]}
+            untouched = reply(client.post(sources_api + "/status", headers=grant(profile), params=params, json=check))
+            assert untouched["sessions"][0]["status"] == "available"
+            def submit():
+                headers = writer(profile) if profile == "secondary" else same_origin
+                return reply(client.post(sources_api + "/import", headers=headers, params=params, json=request))
+            result = submit()
+            assert result["sessions"][0]["status"] in {"queued", "staged", "processing", "complete"}, result
+            deadline = monotonic() + 20
+            while monotonic() < deadline:
+                result = reply(client.post(sources_api + "/status", headers=grant(profile), params=params, json=check))
+                if result["sessions"][0]["status"] in {"staged", "processing", "complete"}:
+                    break
+                sleep(0.1)
+            assert result["sessions"][0]["status"] in {"staged", "processing", "complete"}, result
+            assert submit()["sessions"][0]["status"] == "already_imported"
+            with SessionDB(selected / "state.db", read_only=True) as db:
+                assert db.get_messages(session_id) == history_rows[profile]
+
     workers = {manager.home_path: manager._plugin_host_instance for manager in plugins._known_plugin_managers()
                if getattr(manager, "_plugin_host_instance", None) is not None}
     assert set(homes.values()) <= workers.keys(), workers
@@ -333,7 +392,7 @@ with ExitStack() as stack:
 """
     env = {key: value for key, value in os.environ.items() if key.upper() in {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR"}}
     env.update(HERMES_HOME=str(launch), HERMES_KANBAN_HOME=str(tmp_path / "kanban"),
-               USERPROFILE=str(tmp_path), APPDATA=str(tmp_path), LOCALAPPDATA=str(tmp_path),
+               USERPROFILE=str(tmp_path), APPDATA=str(tmp_path), LOCALAPPDATA=str(tmp_path / "local-app-data"),
                TEMP=str(tmp_path), TMP=str(tmp_path), TMPDIR=str(tmp_path), PYTHONDONTWRITEBYTECODE="1",
                HERMES_DISABLE_LAZY_INSTALLS="1", HERMES_ENABLE_PROJECT_PLUGINS="0", PYTHONPATH=str(checkout))
     try:

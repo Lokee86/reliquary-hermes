@@ -2,12 +2,9 @@
 
 import importlib
 import json
-import os
 from pathlib import Path
 from time import monotonic, sleep, time
 from types import SimpleNamespace
-
-import pytest
 
 from reliquary_hermes.outbox import SourceOutbox
 from reliquary_hermes.settings import read_settings
@@ -42,14 +39,8 @@ def _persist_turn(db, session_id, content):
     return durable
 
 
-@pytest.fixture
-def hermes_checkout(request):
-    installed = os.environ.get("HU08_HERMES_INSTALLED_CHECKOUT")
-    return Path(installed).resolve(strict=True) if installed else request.getfixturevalue("pinned_checkout")
-
-
 def test_hu08_installed_automatic_capture_is_new_root_only(
-        tmp_path, binaries, hermes_checkout, monkeypatch, setup_hosts):
+        tmp_path, binaries, history_checkout, monkeypatch, setup_hosts):
     """Old resume/branch/compression continuation stay silent; a fresh root is durable."""
     binary, cli = binaries
     home = tmp_path / "isolated-hermes-profile"
@@ -59,11 +50,11 @@ def test_hu08_installed_automatic_capture_is_new_root_only(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
 
-    monkeypatch.syspath_prepend(str(hermes_checkout))
+    monkeypatch.syspath_prepend(str(history_checkout))
     from agent import memory_manager
     from agent.memory_manager import MemoryManager
 
-    assert Path(memory_manager.__file__).is_relative_to(hermes_checkout)
+    assert Path(memory_manager.__file__).is_relative_to(history_checkout)
     provider_module = importlib.import_module("reliquary_hermes.provider")
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     from hermes_state import SessionDB
@@ -112,6 +103,17 @@ def test_hu08_installed_automatic_capture_is_new_root_only(
                               profile_name="default")
             rotated_rows = compression_rows + _persist_turn(db, rotated,
                                                             "Synthetic compression continuation.")
+            restored = "hu08-synthetic-portable-restore"
+            restored_result = db.import_sessions([{"id": restored, "source": "cli",
+                                                  "messages": [{"role": "user", "content": "Restored synthetic history."}]}])
+            assert restored_result["imported"] == 1
+            # Resume can backfill the profile, but cannot create new-conversation evidence.
+            db.create_session(restored, source="cli", profile_name="default")
+            restored_rows = db.get_messages(restored) + _persist_turn(db, restored, "New turn on restored history.")
+            restored_meta = db.get_session(restored)
+            assert restored_meta["started_at"] > cutoff
+            assert restored_meta.get("provenance_created_at") is None
+            assert restored_meta["provenance_restored"] == 1
             fresh = "hu08-synthetic-new-root"
             assert db.get_session(branch)["started_at"] > cutoff
             assert db.get_session(rotated)["started_at"] > cutoff
@@ -149,6 +151,11 @@ def test_hu08_installed_automatic_capture_is_new_root_only(
                 assert provider.sync_status == "source_capture_historical"
                 assert outbox.cursor(session_id) is None
                 assert outbox.next_job(session_id) is None
+
+            switch(restored)
+            sync(restored, restored_rows)
+            assert provider.sync_status == "source_capture_session_unavailable"
+            assert outbox.cursor(restored) is None and outbox.next_job(restored) is None
 
             # A job persisted by the old policy retains its original identity.
             previous = capture_snapshot(settings.profile_id, old, old_rows[:2])

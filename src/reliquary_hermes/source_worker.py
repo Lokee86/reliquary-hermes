@@ -2,6 +2,7 @@
 
 from collections import deque
 from threading import Event, Lock
+from time import monotonic
 
 from agent.memory_provider import spawn_context_thread
 
@@ -13,7 +14,9 @@ from .validation import ContractError
 class SourceWorker:
     def __init__(self, settings, client, *, manual_only=False):
         self._settings = settings
-        self._manual_only = bool(manual_only)
+        self._manual_only = manual_only
+        self._processing = set()
+        self._last_heartbeat = 0
         self._client = client
         self._lock = Lock()
         self._wake = Event()
@@ -36,6 +39,10 @@ class SourceWorker:
     def status(self):
         with self._lock:
             return self._status
+
+    @property
+    def running(self):
+        return self._thread.is_alive()
 
     def set_scope(self, session_id, *, capture_allowed):
         with self._lock:
@@ -158,34 +165,17 @@ class SourceWorker:
                     return
             if not outbox.is_current(job):
                 continue
+            if job.manual_owner_id is not None:
+                self._deliver_manual(outbox, job)
+                continue
             try:
                 receipt = self._client.deliver_source_job(job)
             except HostUnavailable as error:
-                if job.manual_owner_id is not None and str(error) in {
-                        "source_reconciliation_required", "runtime_lease_stale"}:
-                    try:
-                        lease_id, reconciliation = self._client.add_runtime_scope(job.session_id)
-                        if outbox.rebind_manual(job, lease_id=lease_id,
-                                                fence_epoch=reconciliation.get(job.session_id)):
-                            continue
-                    except (HostUnavailable, SourceOutboxError, ContractError):
-                        pass
-                if job.lease_id is not None and job.fence_epoch is not None and str(error) in {
+                if job.lease_id is not None and str(error) in {
                         "source_revision_unreconciled", "source_fence_epoch_stale",
                         "source_terminal", "runtime_lease_stale"}:
                     outbox.discard_candidate(job)
                     self._report(job.session_id, "source_reconciliation_required")
-                    continue
-                if job.manual_owner_id is not None:
-                    retryable = str(error) in {
-                        "source_import_pending", "source_reconciliation_required", "host_unavailable",
-                        "host_timeout", "host_connection_refused", "runtime_lease_stale",
-                        "source_provenance_unavailable",
-                    }
-                    try:
-                        outbox.fail_manual(job, str(error), retryable=retryable)
-                    except (SourceOutboxError, ContractError):
-                        pass
                     continue
                 self._report(job.session_id, str(error))
                 return
@@ -200,7 +190,67 @@ class SourceWorker:
                     "terminal": "source_terminal",
                 }[job.kind])
 
+    def _deliver_manual(self, outbox, job):
+        client = self._client
+        try:
+            if client.runtime_lease_id is None:
+                client.connect_dashboard(None)
+            if not client.runtime_has_scope(job.session_id) or job.lease_id != client.runtime_lease_id:
+                lease, scopes = client.add_runtime_scope(job.session_id)
+                outbox.rebind_manual(job, lease_id=lease, fence_epoch=scopes.get(job.session_id))
+                return
+            receipt = client.deliver_source_job(job)
+        except HostUnavailable as error:
+            code = str(error)
+            if code in {"runtime_lease_stale", "source_reconciliation_required", "source_fence_epoch_stale"}:
+                try:
+                    lease, scopes = client.add_runtime_scope(job.session_id)
+                    if (job.lease_id, job.fence_epoch) != (lease, scopes.get(job.session_id)):
+                        outbox.rebind_manual(job, lease_id=lease, fence_epoch=scopes.get(job.session_id))
+                        return
+                except HostUnavailable:
+                    pass
+            if code in {"host_unavailable", "host_connection_refused"}:
+                self._detach_manual()
+            outbox.fail_manual(job, code)
+            return
+        if outbox.acknowledge(job, receipt):
+            self._processing.add(job.session_id)
+
+    def _detach_manual(self):
+        try:
+            self._client.detach_runtime()
+        except (HostUnavailable, OSError, ContractError):
+            pass
+
+    def _manual_work_remains(self, outbox):
+        # Keep the historical source lease while Root is actively processing.
+        for session_id in tuple(self._processing):
+            try:
+                state = self._client.read_source_status(session_id)["state"]
+            except HostUnavailable:
+                state = "unavailable"
+            if state != "processing":
+                self._processing.discard(session_id)
+        if not self._processing and not outbox.has_pending_manual():
+            return False
+        now = monotonic()
+        if self._client.runtime_lease_id is not None and now - self._last_heartbeat >= 12:
+            try:
+                self._client.heartbeat_runtime()
+                self._last_heartbeat = now
+            except HostUnavailable:
+                self._detach_manual()
+        return True
+
     def _run(self):
+        try:
+            self._run_loop()
+        finally:
+            if self._manual_only:
+                self._detach_manual()
+
+    def _run_loop(self):
         outbox = None
         while True:
             self._wake.clear()
@@ -222,6 +272,8 @@ class SourceWorker:
                 self._persist(outbox)
                 if not stopped:
                     self._deliver(outbox)
+                if self._manual_only and not self._manual_work_remains(outbox):
+                    return
             except (OSError, SourceOutboxError, ContractError):
                 self._report(session, "source_outbox_unavailable")
             if stopped:

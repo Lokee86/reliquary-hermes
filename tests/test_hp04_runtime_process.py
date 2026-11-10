@@ -22,7 +22,7 @@ from reliquary_hermes.source_capture import capture_snapshot
 from reliquary_hermes.validation import canonical
 from test_host_client import TOKEN
 from test_hp03_host import binaries, config, install_setup_host, owner, stop
-from test_hp03_provider import pinned_provider
+from test_hp03_provider import history_provider
 from test_hp04_host import TEXT, _cli, _loopback_model, _processing_config, _turn, _when_ready
 
 
@@ -114,8 +114,8 @@ def _enroll_and_create_session(home):
         db.create_session(SESSION, source="cli", profile_name="default")
 
 
-def test_pinned_provider_clean_drain_exits_and_restart_preserves_route(
-        tmp_path, binaries, pinned_provider):
+def test_history_provider_clean_drain_exits_and_restart_preserves_route(
+        tmp_path, binaries, history_provider):
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
     binary, cli = binaries
@@ -130,7 +130,7 @@ def test_pinned_provider_clean_drain_exits_and_restart_preserves_route(
     with ExitStack() as cleanup:
         cleanup.callback(reset_hermes_home_override, scope)
         _enroll_and_create_session(tmp_path)
-        first = pinned_provider.ReliquaryMemoryProvider()
+        first = history_provider.ReliquaryMemoryProvider()
         first.initialize(SESSION, hermes_home=str(tmp_path))
         _wait_until(lambda: first.lifecycle_status == "attached")
         first_binding = first.binding
@@ -151,7 +151,7 @@ def test_pinned_provider_clean_drain_exits_and_restart_preserves_route(
         assert ((cursor is not None and cursor.last_message_uid == "accepted") or
                 (pending is not None and pending.kind == "snapshot"))
 
-        second = pinned_provider.ReliquaryMemoryProvider()
+        second = history_provider.ReliquaryMemoryProvider()
         second.initialize(SESSION, hermes_home=str(tmp_path))
         _wait_until(lambda: second.lifecycle_status == "attached")
         assert second.binding == first_binding
@@ -263,7 +263,7 @@ def test_host_restart_during_reconciliation_advances_fence_epoch(tmp_path, binar
 
 
 def test_ungraceful_runtime_exit_fences_scope_and_reconnects(
-        tmp_path, binaries, pinned_provider, pinned_checkout, monkeypatch):
+        tmp_path, binaries, history_provider, history_checkout, monkeypatch):
     binary, cli = binaries
     with ExitStack() as cleanup:
         processing_url = cleanup.enter_context(_loopback_model())
@@ -300,7 +300,7 @@ assert p.lifecycle_status == 'attached'
 sleep(120)
 """
         env = os.environ.copy()
-        env["PYTHONPATH"] = os.pathsep.join((str(repo_src), str(pinned_checkout),
+        env["PYTHONPATH"] = os.pathsep.join((str(repo_src), str(history_checkout),
                                              env.get("PYTHONPATH", "")))
         child = subprocess.Popen([sys.executable, "-B", "-c", script], env=env,
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -385,7 +385,7 @@ sleep(120)
         from hermes_cli.memory_setup import _post_setup_hook
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
-        provider = pinned_provider.ReliquaryMemoryProvider()
+        provider = history_provider.ReliquaryMemoryProvider()
         install_setup_host(state.parent, binary)
         prompts = iter(("", "", "", ""))
         monkeypatch.setattr("builtins.input", lambda _: next(prompts))

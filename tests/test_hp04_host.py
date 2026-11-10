@@ -19,7 +19,7 @@ from reliquary_hermes.source_capture import capture_snapshot
 from reliquary_hermes.validation import canonical, decode
 from test_host_client import TOKEN
 from test_hp03_host import binaries, config, install_setup_host, owner, setup_hosts, stop
-from test_hp03_provider import pinned_provider
+from test_hp03_provider import history_provider
 
 
 SESSION = "session-a"
@@ -307,8 +307,8 @@ def test_hp04_processed_append_tombstones_both_exact_source_turns(tmp_path, bina
     assert (info["rel_turn_count"], info["memory_count"]) == (2, 2)
 
 
-def test_hp04_pinned_provider_delivers_and_fences_late_same_session_callback(
-        tmp_path, binaries, pinned_provider, monkeypatch, setup_hosts):
+def test_hp04_trusted_provider_delivers_and_fences_late_same_session_callback(
+        tmp_path, binaries, history_provider, monkeypatch, setup_hosts):
     from hermes_cli.memory_setup import _post_setup_hook
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     from hermes_state import SessionDB
@@ -321,7 +321,7 @@ def test_hp04_pinned_provider_delivers_and_fences_late_same_session_callback(
     rel, phy = tmp_path / "provider.rel", tmp_path / "provider.phy"
     owner(cli, "rel", rel, "unspecified")
     owner(cli, "phy", phy)
-    provider = pinned_provider.ReliquaryMemoryProvider()
+    provider = history_provider.ReliquaryMemoryProvider()
     install_setup_host(home, binary)
     prompts = iter((str(rel), str(phy), "", ""))
     monkeypatch.setattr("builtins.input", lambda _: next(prompts))

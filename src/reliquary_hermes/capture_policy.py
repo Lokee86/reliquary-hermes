@@ -1,5 +1,6 @@
 """Admit new automatic captures using the active Hermes profile's session metadata."""
 
+from contextlib import contextmanager
 import json
 from math import isfinite
 from sqlite3 import Error as SessionStoreError
@@ -38,27 +39,54 @@ def capture_cutoff(home, *, enroll=False):
         raise ContractError(_SETUP_REQUIRED) from None
 
 
-def capture_eligibility(home, session_id, cutoff):
-    """Check one exact session row without reading any transcript content."""
+def history_supported():
+    """Check the installed host capability without opening a session store."""
     try:
-        from hermes_constants import profile_name_for_home
         from hermes_state import SessionDB
 
-        owner = profile_name_for_home(home)
-        path = home / "state.db"
-        if not owner or not S_ISREG(path.lstat().st_mode) or path.resolve(strict=True) != path:
-            return _SESSION_UNAVAILABLE
-        with SessionDB(path, read_only=True) as db:
+        version = getattr(SessionDB, "HISTORY_EXPORT_VERSION", None)
+        return type(version) is int and version == 1 and callable(
+            getattr(SessionDB, "export_history", None))
+    except ImportError:
+        return False
+
+
+@contextmanager
+def open_session_store(home):
+    """Open only the canonical, regular session store of the bound Hermes home."""
+    from hermes_constants import profile_name_for_home
+    from hermes_state import SessionDB
+
+    owner = profile_name_for_home(home)
+    path = home / "state.db"
+    require(bool(owner) and S_ISREG(path.lstat().st_mode) and path.resolve(strict=True) == path,
+            _SESSION_UNAVAILABLE)
+    with SessionDB(path, read_only=True) as db:
+        yield owner, db
+
+
+def capture_eligibility(home, session_id, cutoff):
+    """Check one exact session row without reading any transcript content."""
+    if not history_supported():
+        return _SESSION_UNAVAILABLE
+    try:
+        with open_session_store(home) as (owner, db):
             row = db.get_session(session_id)
         if row is None or row["id"] != session_id or row["profile_name"] != owner:
             return _SESSION_UNAVAILABLE
-        if row["hidden"] or row["archived"] or row["source"] in {"import", "subagent", "recovered"}:
+        if (row["hidden"] or row["archived"] or row.get("provenance_restored")
+                or row["source"] in {"import", "subagent", "recovered"}):
             return _SESSION_UNAVAILABLE
 
         started_at = row["started_at"]
         if type(started_at) not in (int, float) or not isfinite(started_at) or not 0 < started_at <= time():
             return _SESSION_UNAVAILABLE
         if started_at <= cutoff:
+            return _HISTORICAL
+        original = row.get("provenance_created_at")
+        if type(original) not in (int, float) or not 0 < original <= started_at:
+            return _SESSION_UNAVAILABLE
+        if original <= cutoff or row.get("provenance_root_session_id") != session_id:
             return _HISTORICAL
 
         # A Hermes reset explicitly starts a new conversation. Other parent links

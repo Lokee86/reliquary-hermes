@@ -362,13 +362,17 @@ A stock Hermes build shows the project inventory and saved project paths read-on
 
 Use the stock Web and Desktop smoke fixtures to check General and PHY selection, creation through Web, the project capability notice, and saved paths on reopen. Use an isolated profile with a preaccepted dedicated session to verify that stock provider startup and restart bind fresh sessions to General while preserving the signed dedicated route, owner configuration, and topology.
 
-## HU08 automatic capture
+## HU08 selective import and automatic capture
 
-Run the pinned Python suite with the HP03 process binaries. `tests/test_capture_policy.py` checks cutoff persistence, invalid records, exact profile and session metadata, strict creation time, and fail-closed copied lineage. `tests/test_hu08_capture.py` creates synthetic history in an isolated Hermes profile and verifies an old conversation resumed after setup, its copied branch, a compression continuation, and a fresh root through Hermes' real memory manager, persisted IDs and timestamps, redaction and the signed host. The fresh root must reach a durable outbox receipt.
+Run the pinned stock suite with the HP03 process binaries. Stock retains recall and the configured dashboard while new automatic capture and manual import require trusted native creation and history-export capability. Verify the capture, portable restore, and explicit import on the isolated installed Hermes checkout with the HU08 contract applied.
 
-To run the same probe on an installed Hermes backend, set `HU08_HERMES_INSTALLED_CHECKOUT` to the local checkout and run `python -B -m pytest -q --basetemp .pytest_tmp tests/test_hu08_capture.py` in a fresh process with the same binaries. The probe verifies that the manager is loaded from the selected checkout. It uses a separate synthetic profile and does not open the active installation profile.
+Set `HU08_HERMES_INSTALLED_CHECKOUT` to that checkout and `HU05_HERMES_HOSTED_CHECKOUT` to the same path for the installed gateway probe. In a fresh Python process with the same binaries, run:
 
-The manual-import acceptance is blocked on the supported provider-equivalent history export described in the [host audit](host-audit.md). The Web and Desktop dashboard suites remain regression checks for the existing surfaces.
+```powershell
+python -B -m pytest -q --basetemp .pytest_tmp tests/test_capture_policy.py tests/test_hu08_capture.py tests/test_hu08_manual_processing.py tests/test_hp04_host.py tests/test_hp04_runtime_process.py tests/test_hosted_desktop_api.py
+```
+
+The probes use synthetic profiles and deterministic local processing. They cover native creation evidence, portable restore with synthesized creation time, old resumes, trusted message identity, privacy scrubbing, authorized General and dedicated RELs, Web and Desktop-native confirmation, duplicate import, and processing while an unrelated Hermes session is active. Run the dashboard build, shared Web and Desktop tests, TypeScript check and locked offline Rust host suite as above.
 
 ## Related docs
 

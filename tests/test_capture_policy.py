@@ -41,8 +41,9 @@ def _enroll(home, monkeypatch, cutoff=100.0):
 
 
 @pytest.fixture(autouse=True)
-def isolated_home(pinned_checkout, tmp_path, monkeypatch):
-    monkeypatch.syspath_prepend(str(pinned_checkout))
+def isolated_home(request, tmp_path, monkeypatch):
+    fixture = "history_checkout" if os.environ.get("HU08_HERMES_INSTALLED_CHECKOUT") else "pinned_checkout"
+    monkeypatch.syspath_prepend(str(request.getfixturevalue(fixture)))
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
 
 
@@ -73,10 +74,10 @@ def test_missing_or_corrupt_enrollment_fails_closed(tmp_path, payload):
         capture_cutoff(home)
 
 
-def test_fresh_root_and_strict_cutoff_use_real_started_at(tmp_path, pinned_checkout, monkeypatch):
+def test_fresh_root_and_strict_cutoff_use_real_started_at(tmp_path, history_checkout, monkeypatch):
     home = _home(tmp_path)
     cutoff = _enroll(home, monkeypatch)
-    db = _db(home, pinned_checkout, monkeypatch, (100.0, 100.001))
+    db = _db(home, history_checkout, monkeypatch, (100.0, 100.001))
     try:
         db.create_session("equal", source="cli")
         db.create_session("fresh", source="cli")
@@ -89,10 +90,10 @@ def test_fresh_root_and_strict_cutoff_use_real_started_at(tmp_path, pinned_check
 
 
 def test_new_reset_root_is_eligible_but_old_branch_and_compression_child_are_not(
-        tmp_path, pinned_checkout, monkeypatch):
+        tmp_path, history_checkout, monkeypatch):
     home = _home(tmp_path)
     cutoff = _enroll(home, monkeypatch)
-    db = _db(home, pinned_checkout, monkeypatch, (99.0, 100.001, 120.0, 130.0))
+    db = _db(home, history_checkout, monkeypatch, (99.0, 100.001, 120.0, 130.0))
     try:
         db.create_session("old-root", source="cli")  # 99, pre-cutoff
         db.create_session("fresh-reset", source="cli", model_config={"_reset_from": "old-root"},
@@ -109,12 +110,12 @@ def test_new_reset_root_is_eligible_but_old_branch_and_compression_child_are_not
 
 
 def test_archive_hidden_foreign_profile_and_missing_rows_are_unavailable(
-        tmp_path, pinned_checkout, monkeypatch):
+        tmp_path, history_checkout, monkeypatch):
     home = _home(tmp_path)
     other = tmp_path / ".hermes" / "profiles" / "owner-b"
     other.mkdir(parents=True)
     cutoff = _enroll(home, monkeypatch)
-    db = _db(home, pinned_checkout, monkeypatch, (101.0, 102.0, 103.0))
+    db = _db(home, history_checkout, monkeypatch, (101.0, 102.0, 103.0))
     try:
         db.create_session("archived", source="cli")
         db.set_session_archived("archived", True)
