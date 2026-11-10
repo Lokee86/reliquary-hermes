@@ -1,0 +1,573 @@
+diff --git a/crates/reliquary-application/src/management_workflow/inspection.rs b/crates/reliquary-application/src/management_workflow/inspection.rs
+index 67bdf666..3b5a9718 100644
+--- a/crates/reliquary-application/src/management_workflow/inspection.rs
++++ b/crates/reliquary-application/src/management_workflow/inspection.rs
+@@ -11,6 +11,8 @@ mod archive;
+ mod association;
+ #[path = "inspection_graph.rs"]
+ mod graph;
++#[path = "inspection_graph_projection.rs"]
++mod graph_projection;
+ pub use association::{
+     MemoryAssociationAction, MemoryAssociationReceipt, MemoryAssociationRequest,
+     change_memory_association,
+@@ -25,6 +27,9 @@ mod provenance;
+ mod semantic;
+ pub use archive::{ImportedSourceReference, SourceAvailability, SourceTurn};
+ pub use graph::{MemoryGraphEdge, MemoryGraphNode, MemoryGraphPage, MemoryGraphQuery};
++pub use graph_projection::{
++    SemanticGraphProjectionItem, memory_matches_filter, visit_semantic_graph_projection,
++};
+ pub use memory_list::{
+     MemoryCanonicalStatus, MemoryListEntry, MemoryListFilters, MemoryListLifecycle,
+ };
+@@ -209,7 +214,7 @@ pub fn inspect(
+     Ok(page.page)
+ }
+ 
+-pub(super) fn inspection_cut(read: &ManagementRead<'_>) -> InspectionCut {
++pub fn inspection_cut(read: &ManagementRead<'_>) -> InspectionCut {
+     let (memory, perception, relationship, graph) = read.versions();
+     InspectionCut {
+         owner_id: read.owner_id,
+diff --git a/crates/reliquary-application/src/management_workflow/inspection_graph_projection.rs b/crates/reliquary-application/src/management_workflow/inspection_graph_projection.rs
+new file mode 100644
+index 00000000..ee7363c5
+--- /dev/null
++++ b/crates/reliquary-application/src/management_workflow/inspection_graph_projection.rs
+@@ -0,0 +1,152 @@
++//! Read-only streaming projection for prepared graph renderers.
++
++use super::{
++    InspectionCut, ManagementError, ManagementRead, MemoryId, MemoryListFilters, inspection_cut,
++    memory_list::{matching_memory, validate_filters},
++};
++use reliquary_owner_session::{
++    SemanticGraphCommunity,
++    model::{NodeRef, Relation},
++};
++use std::collections::{HashMap, HashSet};
++use std::ops::ControlFlow;
++
++const MEMORY_BATCH: usize = 128;
++const GRAPH_TITLE_BYTES: usize = 256;
++
++/// Read-only renderer metadata at one accepted inspection cut. Memory bodies
++/// stay in Root even when a query matches their content.
++pub enum SemanticGraphProjectionItem {
++    Community(SemanticGraphCommunity),
++    Memory {
++        id: MemoryId,
++        title: Option<String>,
++        community_id: Option<[u8; 32]>,
++    },
++    Relation(Relation),
++}
++
++pub fn memory_matches_filter(
++    read: ManagementRead<'_>,
++    expected_cut: InspectionCut,
++    filters: &MemoryListFilters,
++    id: MemoryId,
++) -> Result<bool, ManagementError> {
++    let cut = inspection_cut(&read);
++    if cut != expected_cut {
++        return Err(ManagementError::Stale);
++    }
++    validate_filters(filters)?;
++    let communities = read
++        .community()
++        .filter(|snapshot| snapshot.graph_version == cut.graph);
++    if filters.community_id.is_some() && communities.is_none() {
++        return Err(ManagementError::Unsupported);
++    }
++    if read.memory_revision_records(id, cut.memory).is_none() {
++        return Ok(false);
++    }
++    let community_id = communities.and_then(|snapshot| {
++        snapshot
++            .communities
++            .iter()
++            .find(|community| community.members.binary_search(&id.0).is_ok())
++            .map(|community| community.id.0)
++    });
++    Ok(matching_memory(
++        &read,
++        id,
++        cut.memory,
++        filters,
++        &filters.query.trim().to_lowercase(),
++        community_id,
++    )?
++    .is_some())
++}
++
++pub fn visit_semantic_graph_projection(
++    read: ManagementRead<'_>,
++    expected_cut: InspectionCut,
++    filters: &MemoryListFilters,
++    mut visit: impl FnMut(SemanticGraphProjectionItem) -> ControlFlow<()>,
++) -> Result<(), ManagementError> {
++    let cut = inspection_cut(&read);
++    if cut != expected_cut {
++        return Err(ManagementError::Stale);
++    }
++    validate_filters(filters)?;
++    let needle = filters.query.trim().to_lowercase();
++    let communities = read
++        .community()
++        .filter(|snapshot| snapshot.graph_version == cut.graph);
++    if filters.community_id.is_some() && communities.is_none() {
++        return Err(ManagementError::Unsupported);
++    }
++
++    let mut membership = HashMap::new();
++    for community in communities
++        .into_iter()
++        .flat_map(|snapshot| &snapshot.communities)
++    {
++        if filters
++            .community_id
++            .is_some_and(|expected| expected != community.id.0)
++        {
++            continue;
++        }
++        if visit(SemanticGraphProjectionItem::Community(
++            SemanticGraphCommunity {
++                id: community.id,
++                name: read.community_name(community.id).map(str::to_owned),
++                member_count: community.members.len(),
++            },
++        ))
++        .is_break()
++        {
++            return Ok(());
++        }
++        for id in &community.members {
++            membership.entry(*id).or_insert(community.id.0);
++        }
++    }
++
++    let mut after = None;
++    let mut eligible = HashSet::new();
++    loop {
++        let ids = read.memory_ids(after, MEMORY_BATCH);
++        if ids.is_empty() {
++            break;
++        }
++        after = ids.last().copied();
++        for id in ids {
++            let community_id = membership.get(&id.0).copied();
++            if let Some(memory) =
++                matching_memory(&read, id, cut.memory, filters, &needle, community_id)?
++            {
++                if visit(SemanticGraphProjectionItem::Memory {
++                    id,
++                    title: memory
++                        .body
++                        .map(|body| super::memory_list::bounded(&body.title, GRAPH_TITLE_BYTES)),
++                    community_id,
++                })
++                .is_break()
++                {
++                    return Ok(());
++                }
++                eligible.insert(id.0);
++            }
++        }
++    }
++    for relation in read.active_relations() {
++        if let (NodeRef::Memory(source), NodeRef::Memory(target)) =
++            (relation.source, relation.target)
++            && eligible.contains(&source)
++            && eligible.contains(&target)
++            && visit(SemanticGraphProjectionItem::Relation(*relation)).is_break()
++        {
++            break;
++        }
++    }
++    Ok(())
++}
+diff --git a/crates/reliquary-application/src/management_workflow/inspection_memory_list.rs b/crates/reliquary-application/src/management_workflow/inspection_memory_list.rs
+index 1a19f5d5..aec03b02 100644
+--- a/crates/reliquary-application/src/management_workflow/inspection_memory_list.rs
++++ b/crates/reliquary-application/src/management_workflow/inspection_memory_list.rs
+@@ -2,7 +2,7 @@
+ 
+ use super::*;
+ use crate::management_workflow::hex;
+-use reliquary_owner_session::model::NodeRef;
++use reliquary_owner_session::model::{MemoryBody, MemoryRecord, NodeRef};
+ 
+ const MAX_QUERY_BYTES: usize = 4096;
+ const MAX_FILTER_BYTES: usize = 128;
+@@ -58,14 +58,7 @@ pub(super) fn inspect(
+     filters: &MemoryListFilters,
+     page: &mut PageBuilder,
+ ) -> Result<(), ManagementError> {
+-    if filters.query.len() > MAX_QUERY_BYTES
+-        || [filters.category.as_deref(), filters.memory_type.as_deref()]
+-            .into_iter()
+-            .flatten()
+-            .any(|value| value.trim().is_empty() || value.len() > MAX_FILTER_BYTES)
+-    {
+-        return Err(ManagementError::InvalidInput("Memory list filters"));
+-    }
++    validate_filters(filters)?;
+     let needle = filters.query.trim().to_lowercase();
+     let cut = page.page.cut;
+     let communities = read
+@@ -109,6 +102,18 @@ pub(super) fn inspect(
+     Ok(())
+ }
+ 
++pub(super) fn validate_filters(filters: &MemoryListFilters) -> Result<(), ManagementError> {
++    if filters.query.len() > MAX_QUERY_BYTES
++        || [filters.category.as_deref(), filters.memory_type.as_deref()]
++            .into_iter()
++            .flatten()
++            .any(|value| value.trim().is_empty() || value.len() > MAX_FILTER_BYTES)
++    {
++        return Err(ManagementError::InvalidInput("Memory list filters"));
++    }
++    Ok(())
++}
++
+ fn project(
+     read: &ManagementRead<'_>,
+     id: MemoryId,
+@@ -117,6 +122,46 @@ fn project(
+     needle: &str,
+     community_id: Option<[u8; 32]>,
+ ) -> Result<Option<MemoryListEntry>, ManagementError> {
++    let Some(MatchingMemory {
++        record,
++        body,
++        lifecycle,
++        revision,
++    }) = matching_memory(read, id, cut, filters, needle, community_id)?
++    else {
++        return Ok(None);
++    };
++    Ok(Some(MemoryListEntry {
++        id: hex(&id.0),
++        revision,
++        body_id: (lifecycle != MemoryListLifecycle::Tombstoned).then(|| hex(&record.body_id.0)),
++        title: body.map(|body| bounded(&body.title, MAX_TITLE_BYTES)),
++        excerpt: body.map_or_else(String::new, |body| {
++            bounded(&body.content, MAX_EXCERPT_BYTES)
++        }),
++        category: record.category.clone(),
++        memory_type: record.memory_type.clone(),
++        lifecycle,
++        canonical_status: canonical_status(read, id, lifecycle),
++        community_id: community_id.map(|id| hex(&id)),
++    }))
++}
++
++pub(super) struct MatchingMemory<'a> {
++    record: &'a MemoryRecord,
++    pub(super) body: Option<&'a MemoryBody>,
++    lifecycle: MemoryListLifecycle,
++    revision: u64,
++}
++
++pub(super) fn matching_memory<'a>(
++    read: &'a ManagementRead<'_>,
++    id: MemoryId,
++    cut: u64,
++    filters: &MemoryListFilters,
++    needle: &str,
++    community_id: Option<[u8; 32]>,
++) -> Result<Option<MatchingMemory<'a>>, ManagementError> {
+     if filters
+         .community_id
+         .is_some_and(|expected| Some(expected) != community_id)
+@@ -162,23 +207,15 @@ fn project(
+     {
+         return Ok(None);
+     }
+-    Ok(Some(MemoryListEntry {
+-        id: hex(&id.0),
++    Ok(Some(MatchingMemory {
++        record,
++        body,
+         revision: tombstone.map_or(record.revision, |entry| entry.revision),
+-        body_id: tombstone.is_none().then(|| hex(&record.body_id.0)),
+-        title: body.map(|body| bounded(&body.title, MAX_TITLE_BYTES)),
+-        excerpt: body.map_or_else(String::new, |body| {
+-            bounded(&body.content, MAX_EXCERPT_BYTES)
+-        }),
+-        category: record.category.clone(),
+-        memory_type: record.memory_type.clone(),
+         lifecycle,
+-        canonical_status: canonical_status(read, id, lifecycle),
+-        community_id: community_id.map(|id| hex(&id)),
+     }))
+ }
+ 
+-fn bounded(value: &str, bytes: usize) -> String {
++pub(super) fn bounded(value: &str, bytes: usize) -> String {
+     value[..value.floor_char_boundary(bytes)].to_owned()
+ }
+ 
+diff --git a/crates/reliquary-owner-session/src/session/management_inspection.rs b/crates/reliquary-owner-session/src/session/management_inspection.rs
+index 4c1b4fdf..b91e4074 100644
+--- a/crates/reliquary-owner-session/src/session/management_inspection.rs
++++ b/crates/reliquary-owner-session/src/session/management_inspection.rs
+@@ -154,6 +154,10 @@ impl ManagementRead<'_> {
+         self.common.graph.incident_relations(node)
+     }
+ 
++    pub fn active_relations(&self) -> impl Iterator<Item = &Relation> {
++        self.common.graph.active_relations()
++    }
++
+     pub fn relation(
+         &self,
+         source: NodeRef,
+diff --git a/crates/reliquary-runtime-gateway/src/instance_inspection.rs b/crates/reliquary-runtime-gateway/src/instance_inspection.rs
+index 7d9481a8..ac5854db 100644
+--- a/crates/reliquary-runtime-gateway/src/instance_inspection.rs
++++ b/crates/reliquary-runtime-gateway/src/instance_inspection.rs
+@@ -1,7 +1,9 @@
+ use super::*;
+ use reliquary_application::inspection::{
+-    InspectionCursor, InspectionItem, InspectionPage, InspectionQuery, MountedOwnerInfo,
+-    SourceAvailability, finish_provenance, inspect, mounted_owner_info, resolve_provenance,
++    InspectionCursor, InspectionCut, InspectionItem, InspectionPage, InspectionQuery,
++    MemoryListFilters, MountedOwnerInfo, SemanticGraphProjectionItem, SourceAvailability,
++    finish_provenance, inspect, inspection_cut, memory_matches_filter, mounted_owner_info,
++    resolve_provenance, visit_semantic_graph_projection,
+ };
+ use reliquary_owner_session::{
+     CommunityId, ManagementRead, MemoryId, SemanticGraphCommunityMemberPage,
+@@ -10,6 +12,48 @@ use reliquary_owner_session::{
+ };
+ 
+ impl Instance {
++    pub fn semantic_graph_inspection_cut(
++        &self,
++        owner: OwnerId,
++        phy: bool,
++    ) -> Result<InspectionCut, GatewayError> {
++        let cut = self.with_management_read(owner, phy, |read| inspection_cut(&read))?;
++        self.ensure_credential_active()?;
++        Ok(cut)
++    }
++
++    pub fn memory_matches_filter(
++        &self,
++        owner: OwnerId,
++        phy: bool,
++        expected_cut: InspectionCut,
++        filters: &MemoryListFilters,
++        id: MemoryId,
++    ) -> Result<bool, GatewayError> {
++        let matches = self
++            .with_management_read(owner, phy, |read| {
++                memory_matches_filter(read, expected_cut, filters, id)
++            })?
++            .map_err(management_error)?;
++        self.ensure_credential_active()?;
++        Ok(matches)
++    }
++
++    pub fn visit_semantic_graph_projection(
++        &self,
++        owner: OwnerId,
++        phy: bool,
++        expected_cut: InspectionCut,
++        filters: &MemoryListFilters,
++        visit: impl FnMut(SemanticGraphProjectionItem) -> std::ops::ControlFlow<()>,
++    ) -> Result<(), GatewayError> {
++        self.with_management_read(owner, phy, |read| {
++            visit_semantic_graph_projection(read, expected_cut, filters, visit)
++        })?
++        .map_err(management_error)?;
++        self.ensure_credential_active()
++    }
++
+     pub fn inspect_management(
+         &self,
+         owner: OwnerId,
+diff --git a/src/management.rs b/src/management.rs
+index 40fb9f3e..29b075f9 100644
+--- a/src/management.rs
++++ b/src/management.rs
+@@ -14,7 +14,7 @@ pub use reliquary_application::inspection::{
+     MemoryRetirementRequest, MemoryTextField, RelationKind, RelationOrigin, Relationship,
+     RelationshipEntityRef, RelationshipMemoryRef, RelationshipParticipant,
+     RelationshipParticipantEvidence, RelationshipRetirementRequest, RelationshipTombstone,
+-    SourceAvailability, SourceCoordinate, SourceTurn,
++    SemanticGraphProjectionItem, SourceAvailability, SourceCoordinate, SourceTurn,
+ };
+ pub use reliquary_application::inspection::{
+     MemoryAssociationAction, MemoryAssociationReceipt, MemoryAssociationRequest,
+@@ -35,6 +35,71 @@ pub use reliquary_owner_session::{
+     SemanticGraphCut, SemanticGraphMemory, SemanticGraphMemoryPage, SemanticGraphRelationPage,
+ };
+ impl Instance {
++    /// Read the current graph and inspection cut without visiting a Memory.
++    pub fn semantic_graph_inspection_cut(
++        &self,
++        owner: OwnerId,
++        kind: OwnerKind,
++    ) -> Result<InspectionCut, ProductError> {
++        match kind {
++            OwnerKind::Rel => self.require_rel_read(owner)?,
++            OwnerKind::Phylactery => self.require_phy_read(owner)?,
++        }
++        self.inner
++            .semantic_graph_inspection_cut(owner.into(), kind == OwnerKind::Phylactery)
++            .map_err(Into::into)
++    }
++
++    /// Test one Memory against the same filters used by the list at this cut.
++    pub fn memory_matches_filter(
++        &self,
++        owner: OwnerId,
++        kind: OwnerKind,
++        expected_cut: InspectionCut,
++        filters: &MemoryListFilters,
++        id: MemoryId,
++    ) -> Result<bool, ProductError> {
++        match kind {
++            OwnerKind::Rel => self.require_rel_read(owner)?,
++            OwnerKind::Phylactery => self.require_phy_read(owner)?,
++        }
++        self.inner
++            .memory_matches_filter(
++                owner.into(),
++                kind == OwnerKind::Phylactery,
++                expected_cut,
++                filters,
++                id,
++            )
++            .map_err(Into::into)
++    }
++
++    /// Visit filtered renderer metadata and induced relationships at one exact
++    /// owner cut. Returning `ControlFlow::Break` stops the read at the caller's
++    /// budget. The visitor must not reenter this owner while the read is active.
++    pub fn visit_semantic_graph_projection(
++        &self,
++        owner: OwnerId,
++        kind: OwnerKind,
++        expected_cut: InspectionCut,
++        filters: &MemoryListFilters,
++        visit: impl FnMut(SemanticGraphProjectionItem) -> std::ops::ControlFlow<()>,
++    ) -> Result<(), ProductError> {
++        match kind {
++            OwnerKind::Rel => self.require_rel_read(owner)?,
++            OwnerKind::Phylactery => self.require_phy_read(owner)?,
++        }
++        self.inner
++            .visit_semantic_graph_projection(
++                owner.into(),
++                kind == OwnerKind::Phylactery,
++                expected_cut,
++                filters,
++                visit,
++            )
++            .map_err(Into::into)
++    }
++
+     /// Read one bounded page from an exact-cut semantic graph source.
+     pub fn semantic_graph_memory_page(
+         &self,
+diff --git a/tests/oc06_inspection.rs b/tests/oc06_inspection.rs
+index 6b806cfd..2b365f15 100644
+--- a/tests/oc06_inspection.rs
++++ b/tests/oc06_inspection.rs
+@@ -497,7 +497,9 @@ fn hp02_memory_summaries_filter_and_page_without_returning_bodies() {
+ #[test]
+ fn hp02_memory_graph_expands_active_neighbors_at_one_cut() {
+     use reliquary_graph::{NodeRef, RelationChange};
+-    use reliquary_memory::{MemoryGraphQuery, RelationKind, RelationOrigin};
++    use reliquary_memory::{
++        MemoryGraphQuery, RelationKind, RelationOrigin, SemanticGraphProjectionItem,
++    };
+     use reliquary_owner_session::{DreamMemoryCut, DreamRelationCut, GraphAdmission, RelWriter};
+ 
+     let dir = TestDirectory::create();
+@@ -632,6 +634,79 @@ fn hp02_memory_graph_expands_active_neighbors_at_one_cut() {
+     }
+     assert_eq!(semantic_relations.len(), 2);
+ 
++    let render_cut = instance
++        .semantic_graph_inspection_cut(owner, OwnerKind::Rel)
++        .unwrap();
++    assert_eq!(render_cut, one.cut);
++    let filters = MemoryListFilters {
++        query: " FIRST ".to_owned(),
++        category: Some("fact".into()),
++        memory_type: Some("note".into()),
++        lifecycle: Some(MemoryListLifecycle::Active),
++        ..Default::default()
++    };
++    let list = instance
++        .inspect_owner(
++            owner,
++            OwnerKind::Rel,
++            &InspectionQuery::MemorySummaries(filters.clone()),
++            None,
++            10,
++        )
++        .unwrap();
++    let mut selected = Vec::new();
++    instance
++        .visit_semantic_graph_projection(owner, OwnerKind::Rel, render_cut, &filters, |item| {
++            match item {
++                SemanticGraphProjectionItem::Memory { id, title, .. } => selected.push((id, title)),
++                SemanticGraphProjectionItem::Relation(_) => {
++                    panic!("excluded endpoints must suppress edges")
++                }
++                SemanticGraphProjectionItem::Community(_) => {}
++            }
++            std::ops::ControlFlow::Continue(())
++        })
++        .unwrap();
++    let [InspectionItem::MemoryListEntry(entry)] = list.items.as_slice() else {
++        panic!("exactly one Memory matches the list filter");
++    };
++    assert_eq!(
++        selected,
++        vec![(MemoryId(id(&entry.id)), entry.title.clone())]
++    );
++    assert!(
++        instance
++            .memory_matches_filter(owner, OwnerKind::Rel, render_cut, &filters, first.id)
++            .unwrap()
++    );
++    assert!(
++        !instance
++            .memory_matches_filter(owner, OwnerKind::Rel, render_cut, &filters, second.id)
++            .unwrap()
++    );
++    let mut stale = render_cut;
++    stale.memory += 1;
++    let error = instance
++        .visit_semantic_graph_projection(owner, OwnerKind::Rel, stale, &filters, |_| {
++            panic!("stale cut must fail before the visitor")
++        })
++        .unwrap_err();
++    assert_eq!(error.kind(), ProductErrorKind::Stale);
++    let mut visited = 0;
++    instance
++        .visit_semantic_graph_projection(
++            owner,
++            OwnerKind::Rel,
++            render_cut,
++            &MemoryListFilters::default(),
++            |_| {
++                visited += 1;
++                std::ops::ControlFlow::Break(())
++            },
++        )
++        .unwrap();
++    assert_eq!(visited, 1);
++
+     let expansion = MemoryGraphQuery {
+         depth: 2,
+         expected_cut: Some(one.cut),

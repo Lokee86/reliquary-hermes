@@ -5,6 +5,14 @@
 **Type:** source-backed functionality audit, not an implementation specification
 **Scope:** Warlock's graph visualization and Knowledge interaction, plus the current Hermes port. No product files or datasets modified.
 
+## Purpose
+
+Identify which exploration behaviors were lost when Warlock moved to prepared render generations and which scaling mechanisms Hermes inherited.
+
+## Overview
+
+The comparison covers two frozen Warlock revisions and the Hermes renderer before the rich graph integration.
+
 ## Comparison revisions and checkouts
 
 | Comparison | Revision | Isolated path |
@@ -99,3 +107,12 @@ Scalable `cf41c66`:
 Hermes:
 - `dashboard/src/graph/render/*`; `dashboard/src/knowledge/{KnowledgePanel,KnowledgeGraph,GraphSelectionInspector}.tsx`
 - `host/src/{graph_render_hierarchy,graph_render_source}.rs`
+
+## Related docs
+
+- [Rich graph integration specification](warlock-rich-scalable-graph-spec-2026-11-10.md)
+- [Hermes hosted verification](verification.md)
+
+## Notes
+
+The feature matrix records source inspection at the revisions listed above. Current implementation and hosted evidence are tracked separately.

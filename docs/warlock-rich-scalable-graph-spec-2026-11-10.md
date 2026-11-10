@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-10
 
-**Status:** Ready for implementation; no renderer changes made by this specification.
+**Status:** Implementation and acceptance evidence are tracked in the verification guide.
 
 **Owner:** Reliquary Hermes plugin's existing graph rendering subsystem, with reusable design/contract anchored in Warlock.
 
@@ -15,6 +15,14 @@
 **Authoritative comparison:** [Original versus scalable feature audit](warlock-graph-original-vs-scalable-audit-2026-11-10.md).
 
 **Scope:** Graph renderer, its source projection, and integrated Knowledge UI behavior in Hermes Web/Desktop. Not a general-purpose rewrite of the already functioning provider or UI.
+
+## Purpose
+
+Restore the original Warlock exploration behavior on the prepared-generation renderer shared by Hermes Web and Desktop.
+
+## Overview
+
+Root supplies authorized Memory eligibility and relationships at an exact cut. The Rust host prepares weighted positions, territory descriptors, bounded inspection and binary chunks. Graph and List share the same filters, selected Memory and inspector.
 
 ## 1. Problem statement
 
@@ -51,7 +59,7 @@ Shared Hermes Web/Desktop React Knowledge UI
 - Rust `host/src/graph_render_contract.rs`, `graph_render_manifest.rs`: the sole render manifest/territory DTO; binary chunk schemas stay unchanged unless independently justified.
 - Rust `host/src/graph_render_edge_projection*.rs`: compact weighted adjacency, aggregate topology and generation-local incident edge indexing for bounded selection.
 - React `dashboard/src/graph/render/{GraphRenderScene,RenderTerritories,BoundedPicker,RenderEdgeChunk,RenderNodeChunk,RenderLabels,client,types}.tsx/ts`: existing rendering client and surface, enriched rather than duplicated.
-- React `dashboard/src/knowledge/{KnowledgePanel,KnowledgeGraph,GraphSelectionInspector,KnowledgeInspector}.tsx`: unified selected Memory and filter scope, using existing authenticated Knowledge client.
+- React `dashboard/src/knowledge/{KnowledgePanel,KnowledgeGraph,KnowledgeInspector}.tsx` owns the shared selected Memory and filter scope through the authenticated Knowledge client.
 
 **No duplicate graph path**, no Tauri dependency in Hermes, no new renderer process, no fallback to the old `GraphData` pipeline, and no independent frontend force simulation.
 
@@ -162,3 +170,12 @@ These stages are **bounded construction and verification checkpoints in one fina
 - Original: `Warlock-graph-original-review-2026-11-10/src/features/graph/{scene,model}/` and `src/features/workspace/{KnowledgePanel,KnowledgeGraph}.tsx`
 - Scalable: `Warlock-graph-scalable-review-2026-11-10/src/features/graph/render/`, `src-tauri/src/graph_render*.rs`, `docs/GRAPH_RENDER_ARCHITECTURE.md`
 - Hermes: `host/src/graph_render*.rs`, `dashboard/src/graph/render/*`, `dashboard/src/knowledge/*`, `dashboard/tests/`, `tests/test_graph_render_api.py`
+
+## Related docs
+
+- [Web and Desktop render API contract](ui-contract.md)
+- [Verification and acceptance evidence](verification.md)
+
+## Notes
+
+Historical renderer measurements use different datasets and build configurations. Compare candidate and baseline using the same synthetic graph and build profile.

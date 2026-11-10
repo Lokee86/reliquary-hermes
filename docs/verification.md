@@ -398,6 +398,14 @@ Peak process working set across both tiers was 1.35 GiB. The largest node and ed
 
 The Warlock September 28 baseline assembled whole-graph JavaScript objects and uploaded their geometry. The Hermes measurements cover Rust projection and binary packing. GPU timings and million-node transport throughput in Hermes are unmeasured. The live Web and Desktop checks used the copied 13-node REL and 4-node PHY.
 
+## Rich Warlock graph verification
+
+The rich renderer requires Reliquary Root at `fa574eec` with the [filtered semantic graph projection patch](../patches/reliquary-fa574eec-filtered-graph-projection.patch) applied. The checkout layout stays the same. The Hermes host resolves `../../Reliquary` from its Cargo manifest. The patch adds authorized, exact-cut reads and reuses the List predicate for title or body search, community, lifecycle, category and Memory type.
+
+Run the existing Rust, Python and dashboard suites from the integration checkout. Run the Root test `hp02_memory_graph_expands_active_neighbors_at_one_cut` in `oc06_inspection` to check List parity, induced relationships, early stop and stale cuts. The Web and Electron probes use independent copies of the November 8 REL and PHY. The active-only graph should show 11 REL Memories and four PHY Memories. Turning on Show non-active memories should show 13 REL Memories. Record the input and browsed file hashes separately for each host.
+
+The paired renderer benchmark uses the baseline at `8136458` and the candidate under the same release profile and graph generator. For the 100k-node/1M-edge and 1M-node/10M-edge tiers, the release gate allows up to 2.5 times the baseline preparation time and twice its peak working set. The million-node preparation must also fit the 30-second host response window before host and transport overhead. Report a dense moderate tier separately. Hosted timings must record browser heap, frame timing and p95 hover and selected-neighborhood response time. Record the sample count and build for every reported timing.
+
 ## Related docs
 
 - [HU09 native file-dialog specification](hu09-native-file-dialogs-onboarding-spec-2026-11-09.md)

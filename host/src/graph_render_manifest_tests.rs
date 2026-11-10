@@ -1,16 +1,75 @@
 use crate::graph_render::GraphRenderService;
 use crate::graph_render_contract::{
     GRAPH_RENDER_MANIFEST_SCHEMA_VERSION, GraphRenderEdgeLod, GraphRenderHierarchyKind,
+    GraphRenderTerritoryKind,
 };
 use crate::graph_render_edge_chunk::GraphRenderEdgeChunk;
 use crate::graph_render_error::GraphRenderError;
 use crate::graph_render_identity::{GraphRenderNodeKey, GraphRenderNodeTarget};
 use crate::graph_render_node_chunk::GraphRenderNodeChunk;
 use crate::graph_render_source::{
-    GraphRenderNodeSource, GraphRenderRelationSource, GraphRenderSource,
+    GraphRenderCommunitySource, GraphRenderNodeSource, GraphRenderRelationSource, GraphRenderSource,
 };
 use crate::graph_render_source_style::style_for_relation;
 use reliquary_memory::{RelationKind, RelationOrigin};
+
+#[test]
+fn territory_metadata_distinguishes_communities_and_encloses_positioned_nodes() {
+    let mut service = GraphRenderService::default();
+    let summary = service
+        .prepare(GraphRenderSource::new(
+            "owner",
+            Some(1),
+            memories(3),
+            vec![relation(1, 2)],
+            vec![
+                GraphRenderCommunitySource::new([1; 32], vec![memory_id(1), memory_id(2)])
+                    .with_name(Some("Accepted name".to_owned())),
+                GraphRenderCommunitySource::new([2; 32], vec![]),
+            ],
+        ))
+        .unwrap();
+    let generation = summary.generation_id;
+    let manifest = service.manifest(generation).unwrap();
+    let territories = manifest
+        .hierarchy
+        .iter()
+        .filter_map(|node| node.territory.as_ref())
+        .collect::<Vec<_>>();
+    assert_eq!(territories.len(), 2);
+    assert_eq!(territories[0].kind, GraphRenderTerritoryKind::Community);
+    assert_eq!(territories[0].label, "Accepted name");
+    assert_eq!(territories[0].community_id, Some("01".repeat(32)));
+    assert_eq!(territories[1].kind, GraphRenderTerritoryKind::Unassigned);
+    assert_eq!(territories[1].label, "Unassigned");
+    assert!(territories[1].community_id.is_none());
+    assert_ne!(territories[0].color, territories[1].color);
+    let positions = &service.layout(generation).unwrap().positions;
+    for (index, position) in positions.iter().enumerate() {
+        let territory = territories[usize::from(index == 2)];
+        let squared: f32 = (0..3)
+            .map(|axis| (position[axis] - territory.center[axis]).powi(2))
+            .sum();
+        assert!(squared.sqrt() < territory.radius);
+    }
+    let empty = service
+        .prepare(GraphRenderSource::new(
+            "owner",
+            None,
+            vec![],
+            vec![],
+            vec![],
+        ))
+        .unwrap();
+    assert!(
+        service
+            .manifest(empty.generation_id)
+            .unwrap()
+            .hierarchy
+            .iter()
+            .all(|node| node.territory.is_none())
+    );
+}
 
 #[test]
 fn prepared_generation_owns_manifest_and_encoded_leaf_payloads() {
