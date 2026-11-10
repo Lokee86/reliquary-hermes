@@ -147,23 +147,35 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
 
   return (
     <aside className="knowledge-inspector" aria-label="Memory inspector">
-      <div className="knowledge-inspector-title-row"><div><div className="eyebrow">MEMORY</div><h2>{memory.title || (detail.tombstone ? "Retired Memory" : "Untitled memory")}</h2>
-        {error && <p className="knowledge-inline-error" role="alert">{error}</p>}</div>
-        {canEdit && <Button type="button" onClick={() => setEditing((value) => !value)}>{editing ? "Cancel" : "Edit"}</Button>}
+      <div className="knowledge-inspector-title-row">
+        <div>
+          <div className="eyebrow">MEMORY</div>
+          <h2>{memory.title || (detail.tombstone ? "Retired Memory" : "Untitled memory")}</h2>
+          {error && <p className="knowledge-inline-error" role="alert">{error}</p>}
+        </div>
+        {canEdit && <Button type="button" onClick={() => setEditing((value) => !value)}>
+          {editing ? "Cancel" : "Edit"}
+        </Button>}
       </div>
-      {editing ? <div className="knowledge-edit-memory">
-        <Input aria-label="Replacement title" value={title} maxLength={128} disabled={busy} onChange={(event) => setTitle(event.currentTarget.value)} />
-        <Textarea aria-label="Replacement body" value={body} maxLength={32768} rows={7} disabled={busy}
-          onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setBody(event.currentTarget.value)} />
-        <Button type="button" disabled={busy || !title.trim() || !body.trim()} onClick={() => void save()}>{busy ? "Saving…" : "Save replacement"}</Button>
-        <p className="knowledge-muted">Replacement preserves the original Memory and its provenance. Active relationships can block retirement of the original.</p>
-      </div> : <p className="knowledge-memory-body">{content}</p>}
+      {editing ? (
+        <div className="knowledge-edit-memory">
+          <Input aria-label="Replacement title" value={title} maxLength={128} disabled={busy}
+            onChange={(event) => setTitle(event.currentTarget.value)} />
+          <Textarea aria-label="Replacement body" value={body} maxLength={32768} rows={7} disabled={busy}
+            onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setBody(event.currentTarget.value)} />
+          <Button type="button" disabled={busy || !title.trim() || !body.trim()} onClick={() => void save()}>
+            {busy ? "Saving…" : "Save replacement"}
+          </Button>
+          <p className="knowledge-muted">Replacement preserves the original Memory and its provenance. Active relationships can block retirement of the original.</p>
+        </div>
+      ) : <p className="knowledge-memory-body">{content}</p>}
 
       <dl className="knowledge-details">
-        <div><dt>Lifecycle</dt><dd>{memory.lifecycle}</dd></div>
+        <div><dt>State</dt><dd>{memory.lifecycle}{memory.canonical_status !== "unknown" ? ` · ${memory.canonical_status}` : ""}</dd></div>
         <div><dt>Type</dt><dd>{memory.category} · {memory.memory_type}</dd></div>
         <div><dt>Revision</dt><dd>{detail.body.revision}{revision ? " · historical" : " · current"}</dd></div>
         <div><dt>Community</dt><dd>{memory.community_id ? communityLabel(community ?? memory.community_id) : "—"}</dd></div>
+        {detail.superseded_by && <div><dt>Superseded by</dt><dd>{shortId(detail.superseded_by)}</dd></div>}
         <div><dt>Memory ID</dt><dd>{memory.memory_id}</dd></div>
       </dl>
 

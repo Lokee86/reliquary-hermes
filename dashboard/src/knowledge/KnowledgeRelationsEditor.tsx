@@ -18,6 +18,7 @@ export function KnowledgeRelationsEditor({ client, scope, memory, controls, bloc
   const [nodes, setNodes] = useState<GraphNode[]>([]);
   const [edges, setEdges] = useState<GraphEdge[]>([]);
   const [targetId, setTargetId] = useState("");
+  const [direction, setDirection] = useState<"outgoing" | "incoming">("outgoing");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [truncated, setTruncated] = useState(false);
@@ -60,7 +61,6 @@ export function KnowledgeRelationsEditor({ client, scope, memory, controls, bloc
 
   const byId = useMemo(() => new Map(nodes.filter((node) => node.memory_id).map((node) => [node.memory_id!, node])), [nodes]);
   const related = edges.filter((edge) => edge.source_id === memory.memory_id || edge.target_id === memory.memory_id);
-  const userAssociations = related.filter((edge) => edge.kind === "user_association" && edge.origin === "user");
   const options = nodes.filter((node) => node.memory_id && node.memory_id !== memory.memory_id)
     .map((node) => ({ value: node.memory_id!, label: node.label || shortId(node.memory_id!) }));
 
@@ -68,18 +68,18 @@ export function KnowledgeRelationsEditor({ client, scope, memory, controls, bloc
     if (!canEdit || busy || !target.memory_id) return;
     const sourceNode = byId.get(memory.memory_id);
     const targetNode = byId.get(target.memory_id);
-    const fromNode = edge ? byId.get(edge.source_id) : sourceNode;
-    const toNode = edge ? byId.get(edge.target_id) : targetNode;
+    const linking = edge === null;
+    const fromNode = edge ? byId.get(edge.source_id) : direction === "outgoing" ? sourceNode : targetNode;
+    const toNode = edge ? byId.get(edge.target_id) : direction === "outgoing" ? targetNode : sourceNode;
     if (!sourceNode || !targetNode || !fromNode || !toNode
       || sourceNode.cut !== scope.owner.cut || targetNode.cut !== scope.owner.cut
       || fromNode.cut !== scope.owner.cut || toNode.cut !== scope.owner.cut) {
       onError("The graph cut changed. Refresh owner data before editing relationships."); return;
     }
-    const linking = edge === null;
     setBusy(true);
     const result = await client.write(scope, "ui.relation_change", {
-      source_id: linking ? sourceNode.memory_id! : edge.source_id,
-      target_id: linking ? targetNode.memory_id! : edge.target_id,
+      source_id: linking ? fromNode.memory_id! : edge.source_id,
+      target_id: linking ? toNode.memory_id! : edge.target_id,
       source_revision: fromNode.revision,
       target_revision: toNode.revision,
       action: linking ? "link" : "unlink",
@@ -102,7 +102,13 @@ export function KnowledgeRelationsEditor({ client, scope, memory, controls, bloc
           const other = byId.get(otherId);
           const editable = canEdit && edge.kind === "user_association" && edge.origin === "user";
           return <div className="knowledge-relation-editor" key={edge.edge_id}>
-            <div><strong>{outgoing ? "→" : "←"} {other?.label || shortId(otherId)}</strong><span>{edge.origin} · {edge.kind.replaceAll("_", " ")} · {edge.active ? "active" : "inactive"}</span></div>
+            <div>
+              <strong>{outgoing ? "→" : "←"} {other?.label || shortId(otherId)}</strong>
+              <span>{edge.origin} · {edge.kind.replaceAll("_", " ")} · {edge.active ? "active" : "inactive"}</span>
+            </div>
+            <Select label="Relationship type" value={edge.kind} options={[
+              { value: edge.kind, label: edge.kind.replaceAll("_", " ") },
+            ]} disabled onValueChange={() => undefined} />
             {editable && edge.active && <Button type="button" disabled={busy} onClick={() => void change(edge, other ?? {
               node_id: otherId, kind: "memory", memory_id: otherId, community_id: null, label: otherId,
               origin: "memory", revision: memory.revision, cut: scope.owner.cut,
@@ -110,11 +116,16 @@ export function KnowledgeRelationsEditor({ client, scope, memory, controls, bloc
           </div>;
         })}
       {canEdit && <div className="knowledge-add-relation">
+        <Select label="Relationship direction" value={direction} options={[
+          { value: "outgoing", label: "This memory → target" },
+          { value: "incoming", label: "Target → this memory" },
+        ]} disabled={busy} onValueChange={(value) => setDirection(value as "outgoing" | "incoming")} />
         <Select label="Link to Memory" value={targetId} options={options} disabled={busy || options.length === 0}
           onValueChange={setTargetId} />
         <Button type="button" disabled={busy || !targetId} onClick={() => {
           const target = byId.get(targetId);
-          if (target) void change(null, target);
+          if (!target) return;
+          void change(null, target);
         }}>Link Memories</Button>
       </div>}
       {!scope.owner.capabilities.graph && <p className="knowledge-muted">The authorized graph capability is required to inspect relationship endpoints.</p>}
