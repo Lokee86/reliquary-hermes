@@ -72,6 +72,18 @@ pub(super) fn prepare(
         {
             return Err(DashboardError::conflict("owner_cut_changed"));
         }
+        if request.operation == "ui.memory_retire" {
+            let id = super::memory::required_id(&request.arguments, "memory_id")?;
+            let accepted_successor =
+                super::retirement::successor(instance, owner, OwnerKind::Rel, id, current)?;
+            if intent
+                .retirement
+                .as_ref()
+                .is_none_or(|evidence| evidence.successor_id != accepted_successor.0)
+            {
+                return Err(DashboardError::conflict("supersession_successor_changed"));
+            }
+        }
         // A prior publish may have returned an error after the atomic rename.
         store::sync_parent(&path).map_err(DashboardError::registry)?;
         return Ok(intent);

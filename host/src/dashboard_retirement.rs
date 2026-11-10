@@ -1,8 +1,8 @@
 //! Same-cut evidence for Root's checked supersession retirement.
 use super::DashboardError;
 use reliquary_memory::{
-    GraphNode, InspectionCut, InspectionItem, InspectionQuery, Instance, MemoryId, OwnerId,
-    OwnerKind, RelationKind,
+    GraphEdge, GraphNode, InspectionCut, InspectionItem, InspectionQuery, Instance, MemoryId,
+    OwnerId, OwnerKind, RelationKind,
 };
 
 pub(super) fn successor(
@@ -31,16 +31,10 @@ pub(super) fn successor(
                     "unexpected_neighbor_projection",
                 ));
             };
-            if let (
-                true,
-                RelationKind::Supersedes,
-                GraphNode::Memory(source),
-                GraphNode::Memory(target),
-            ) = (edge.active, edge.kind, edge.source, edge.target)
+            if let Some(source) = successor_edge(&edge, original)?
+                && successor.replace(source).is_some()
             {
-                if target == original.0 && successor.replace(MemoryId(source)).is_some() {
-                    return Err(DashboardError::conflict("supersession_successor_ambiguous"));
-                }
+                return Err(DashboardError::conflict("supersession_successor_ambiguous"));
             }
         }
         if page.truncated {
@@ -53,4 +47,81 @@ pub(super) fn successor(
         }
     }
     Err(DashboardError::unavailable("supersession_edges_truncated"))
+}
+
+fn successor_edge(
+    edge: &GraphEdge,
+    original: MemoryId,
+) -> Result<Option<MemoryId>, DashboardError> {
+    if !edge.active {
+        return Ok(None);
+    }
+    if edge.kind == RelationKind::Supersedes
+        && edge.target == GraphNode::Memory(original.0)
+        && let GraphNode::Memory(source) = edge.source
+    {
+        return Ok(Some(MemoryId(source)));
+    }
+    Err(DashboardError::conflict(
+        "retirement_blocked_active_relations",
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reliquary_memory::{GraphDirection, RelationOrigin};
+
+    fn edge(kind: RelationKind, source: GraphNode, target: GraphNode) -> GraphEdge {
+        GraphEdge {
+            source,
+            target,
+            kind,
+            origin: RelationOrigin::User,
+            direction: Some(GraphDirection::Incoming),
+            active: true,
+            graph_version: 1,
+        }
+    }
+
+    #[test]
+    fn accepts_only_the_expected_successor_edge_for_retirement() {
+        let original = MemoryId([1; 32]);
+        let successor = MemoryId([2; 32]);
+        let expected = edge(
+            RelationKind::Supersedes,
+            GraphNode::Memory(successor.0),
+            GraphNode::Memory(original.0),
+        );
+        assert!(matches!(
+            successor_edge(&expected, original),
+            Ok(Some(actual)) if actual == successor
+        ));
+
+        let association = edge(
+            RelationKind::Topical,
+            GraphNode::Memory(successor.0),
+            GraphNode::Memory(original.0),
+        );
+        assert_eq!(
+            successor_edge(&association, original).unwrap_err().code,
+            "retirement_blocked_active_relations",
+        );
+
+        let entity_reference = edge(
+            RelationKind::EntityAssociation,
+            GraphNode::Entity([3; 32]),
+            GraphNode::Memory(original.0),
+        );
+        assert_eq!(
+            successor_edge(&entity_reference, original)
+                .unwrap_err()
+                .code,
+            "retirement_blocked_active_relations",
+        );
+
+        let mut inactive = association;
+        inactive.active = false;
+        assert!(matches!(successor_edge(&inactive, original), Ok(None)));
+    }
 }
