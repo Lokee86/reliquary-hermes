@@ -1,98 +1,74 @@
-# HU09 — Native file dialogs for Reliquary setup
+# HU09 — Finish native file dialogs in Hermes Web
 
 **Date:** 2026-11-09
-**Status:** Approved UX target; implementation pending
-**Scope:** Reliquary Web/ Desktop setup UI and the narrow local Hermes dialog admission seam. No changes to REL/PHY storage or source ingestion.
+**Status:** Desktop accepted; local Web native dialogs missing
+**Scope:** Finish the existing HU09 UI requirement. No new phase, memory subsystem, or authorization framework.
 
 ## Purpose
 
-The installed Web dashboard currently presents **Select REL / Create REL / Select PHY / Create PHY** but, when clicked, substitutes a custom Hermes-host directory listing headed "Permitted folders". It exposes an unnecessary navigation policy and then duplicates both owner paths under "Advanced". This is not how ordinary Windows users select or create files. The user explicitly requires **standard Windows Open File and Save As dialogs**.
+The user asked for four ordinary Windows file dialogs in Reliquary setup:
 
-The Desktop plugin already has native `ctx.os.pickOpenPath` and `ctx.os.pickSavePath`; the shared Web surface passes no picker callbacks, triggering `HostFilePicker`. The browser's own `<input type=file>` cannot provide a trustworthy absolute host path and would upload a copy rather than select an existing native container. Do not fake this with HTML file inputs.
+| Button | Required interaction |
+|---|---|
+| Select REL | Windows **Open File**, filtered to `*.rel` |
+| Create REL | Windows **Save As**, default `*.rel`, then existing Create confirmation |
+| Select PHY | Windows **Open File**, filtered to `*.phy` |
+| Create PHY | Windows **Save As**, default `*.phy`, then existing Create confirmation |
+
+The packaged Hermes Desktop plugin already does this via `ctx.os.pickOpenPath` and `ctx.os.pickSavePath`. Commit `daa07c6` removed the confusing Web “Permitted folders” navigator and provided an explicit **Enter path manually** fallback. It **did not make the four Web buttons work**. This specification finishes that missing behavior; do not redesign the form again.
 
 ## Overview
 
-Keep the existing profile-scoped `setup.create`, `setup.validate`, and `setup.apply` authority and the existing native Desktop pickers. Supply a **trusted local native-dialog capability** to the Web dashboard and simplify the shared onboarding surface. Retain an explicit manual-path fallback for remote, service-only, or headless deployments, where a native dialog genuinely cannot run. Do not retain the custom "permitted folders" browser as the primary UX.
+**Target:** Clicking any of these buttons in the installed, local Windows **Hermes Web dashboard** opens the actual Windows common file dialog in the current user's interactive desktop. Select returns the existing absolute host path. Save As selects a proposed path and the existing backend creates the container only after separate confirmation.
 
-## Target architecture
+The Web page cannot obtain a usable absolute host path from a normal HTML file input or `showOpenFilePicker`. Therefore the only new capability, if Hermes does not already expose one, is a **small local-interactive OS dialog invocation seam**. A browser upload, directory-listing UI, and generic file-access API are not substitutes.
 
-`Onboarding Select/Create click → surface-specific local dialog capability → native Windows Open File / Save As → selected host path → existing setup validation / explicit create-confirmation → existing owner bindings`
+## Target architecture and ownership
 
-- **Desktop:** continue using the SDK `ctx.os.pickOpenPath/pickSavePath`. Check that the returned path is scoped to the active profile and backend activation epoch.
-- **Local Web:** implement a *narrow* Windows native picker broker, in a supported Hermes local/interactive host context. A setup-only request initiated by an authenticated local user interaction selects `open_rel`, `open_phy`, `open_config`, `save_rel` or `save_phy`. The broker invokes the real OS dialog **on the same machine and interactive user desktop as the Hermes host** and returns a single selected absolute path or a distinct cancelled/unavailable result. Prefer an existing supported Hermes local-dialog facility; otherwise add the smallest narrowly scoped plugin-host helper. Do not create a generic command-execution, arbitrary filesystem read/write, or local-file-upload API.
-- **Shared form:** receive `pickOpenPath` and `pickSavePath` from either surface. Selection updates the relevant pending owner path; creation first obtains a Save As destination, then requires the current explicit owner-creation confirmation before calling existing `setup.create`. The picker never writes a REL/PHY and does not itself connect a profile.
-- **Unusable native context:** show **"Native file dialogs unavailable for this connection"** with an explicit, clearly labeled **Enter path manually** option. The manual form submits to the same validated setup path; no silent fallback to a confusing directory tree. A remote browser cannot simply select its own local file and expect the host to use the same filesystem path.
-- The normal form remains one General REL section, one active PHY section, then **Review and connect**. Move project management behind a secondary/optional section until initial REL/PHY binding is complete, to avoid distracting missing-feature notices on first run. Show the optional config path as read-only detected context with a **Change configuration** action; do not confuse this with the required owner selection.
+`Web setup button → Hermes authenticated local-interactive dialog capability → OS Open/Save dialog → selected path or cancellation → existing setup.create/validate/apply`
 
-### Exact UI behavior
+- **UI:** `dashboard/src/live.js` supplies the supported picker callback; `dashboard/src/surface.js` and `dashboard/src/onboarding.js` already accept `pickOpenPath`/`pickSavePath`. Reuse those callbacks, including their cancel and confirmation behavior. Do not add another setup form.
+- **Host capability:** First inspect the installed Hermes Web SDK, gateway, plugin-admission path and existing Desktop dialog implementation. Reuse a supported Hermes local-user/desktop bridge if available. Otherwise implement **only the minimum supported dialog invocation boundary**. Its allowed inputs are the five fixed modes `open_rel`, `open_phy`, `open_config`, `save_rel`, `save_phy`; its output is `selected absolute path`, `cancelled` or `unavailable`. No arbitrary command, file contents, directory enumeration, configurable starting path or filesystem write.
+- **Authority:** Keep existing Hermes active-profile authentication, current backend/profile lifetime checks, setup mutation admission, and `setup.create`/`setup.validate`/`setup.apply`. Do not invent a second credential store, one-use permit protocol, path receipt, lease, generalized IPC or file-management service merely because they were listed as possibilities in the earlier HU09 proposal. Introduce additional proof **only when a concrete verified gap makes it necessary**, and document that gap before expanding scope.
+- **Locality:** The dialog must run in an actually interactive Windows user session and be invocable only by an authenticated local user action. Same-origin alone does not prove locality; an HTTP socket peer can be a proxy. If Hermes cannot establish the local interactive caller with its existing trusted facilities, **stop that bridge implementation and report the exact missing Hermes host contract**. Do not replace it with an unsafe loopback assumption, PowerShell command endpoint, remote dialog trigger or simulated native dialog.
+- **Existing file operations:** `Select` never creates, copies, uploads or changes a REL/PHY. `Create` never overwrites an existing owner; it uses the existing explicit confirmation and checked creation. The dialog-returned path is a candidate, not ownership authority.
+- **Unsupported environments:** Remote/headless/worker-without-desktop Web keeps **Enter path manually** as an explicit fallback and clearly states that native dialogs are unavailable. The four buttons must not falsely appear operational. Do not resurrect the “Permitted folders” navigator.
+- **Desktop:** Do not replace or reimplement its working SDK dialogs. Only touch Desktop code if required to maintain shared callback parity.
 
-| Button | Local Windows behavior | Post-selection |
-|---|---|---|
-| Select REL | Standard **Open File**, filter `*.rel` | Show selected filename/path; `Validate` / `Review and connect` use it |
-| Create REL | Standard **Save As**, suggested `*.rel` | Show proposed path; require **Create REL** confirmation; create through existing backend with no overwrite |
-| Select PHY | Standard **Open File**, filter `*.phy` | Show selected filename/path |
-| Create PHY | Standard **Save As**, suggested `*.phy` | Show proposed path; require **Create PHY** confirmation; no overwrite |
-| Change configuration | Standard **Open File**, filter `*.cfg` where supported | Update optional config path only |
+## Implementation decisions
 
-An OS cancellation changes nothing, emits no error banner and does not call create, validate or apply. A failed dialog yields one actionable error and an optional manual-path fallback, not an implicit navigation mode. Disabled/busy states prevent duplicate dialog invocations. No redundant duplicate editable REL/PHY fields are visible by default.
-
-## Implementation decisions and security constraints
-
-1. **Do not change the existing REL/PHY file format, Root ownership, user data, enrollment cutoff, provider or memory pipeline.** Existing owner paths remain stable, and the installer must not generate new owner files without explicit confirmation.
-2. **Locality and profile authorization:** bind each broker call to the active Hermes-authenticated profile and the existing same-origin/native-write rules. Admit only interactive local Windows contexts whose user desktop is genuinely available; reject remote/headless, hosted service contexts without interactive dialogs, wrong-profile requests and missing approval. Do not trust `Origin`, forwarded IP headers or caller-provided `profile_id` alone as proof of physical locality. The host/desktop bridge is responsible for validating the interactive local caller; if that cannot be proven, disable the native Web picker rather than weakening the rule.
-3. **Narrow operations:** enumerated dialog kind only; no browser-submitted starting directory, shell executable, arbitrary dialog flags or profile home. No remote filesystem browsing API is needed for the normal flow. The returned selection is treated as a *candidate*, never proof of owner authority.
-4. **Post-dialog checks:** existing `setup.create` must reject existing paths and invalid owner kind, and `setup.validate/apply` must verify owner scope, file type, authorized profile, config and topology. No path-based automatic owner rebinding.
-5. **Cancellation, concurrency and cleanup:** one in-flight dialog per owner/profile/surface; a cancelled or timed-out call has no side effects. Dialog launch errors are typed and do not leak private filesystem listings, credentials, or arbitrary host errors. Close/cancel on navigation where possible; ignore late results after profile/backend switches. No modal dialog from page load, setup status refresh, polling, or unexpected external requests.
-6. **Real Windows dialog:** use the native common file picker UI, including keyboard navigation, filesystem drives and normal Windows folders. The old `setup_paths.py` permitted-root browse policy is not a restriction on this user-driven OS picker; security enforcement remains in final owner validation and host admission. Existing `setup-v1/browse` may remain temporarily for genuinely remote installations, but it must not be the default browser on local Windows and should not be surfaced as "permitted folders".
-7. **Desktop parity:** do not introduce a second Desktop dialog implementation or bypass the existing Hermes SDK; preserve `pickOpenPath/pickSavePath` and profile change fencing.
-8. **Web picker availability:** expose a trustworthy, read-only capability result so the shared Web surface can choose local dialog vs manual-path UX. Do not claim native availability from OS detection alone; verification must show a dialog actually opened in the interactive session.
-9. **Native-dialog feasibility gate:** verify the real Hermes gateway/worker ownership and installed Web route first. If plugin-only code cannot securely start a dialog in the user's interactive Windows session, document the precise missing Hermes local-host broker contract and implement the **smallest upstream surface** rather than a guessed endpoint or untrusted PowerShell/web workaround.
-
-## Targeted file ownership
-
-- `dashboard/src/onboarding.js` — replace implicit `HostFilePicker` fallback with native callback handling and explicit manual mode; simplify the default view.
-- `dashboard/src/live.js` and `dashboard/src/surface.js` — supply Web picker capability and pass it to the shared form (preserve Desktop inputs).
-- `desktop/src/plugin.js` — retain native picker wiring; small parity changes only if necessary.
-- `src/reliquary_hermes/dashboard_api.py` and a small local-dialog adapter if needed — authenticated capability and local dialog request, **not** a new general filesystem service.
-- `src/reliquary_hermes/setup.py` — retain existing validation and confirmed creation authority.
-- `dashboard/tests/dashboard.test.cjs`, `desktop/tests/plugin.test.cjs`, `tests/test_setup_api.py` / `tests/test_hosted_desktop_api.py` — regressions at the existing boundaries.
-- `docs/verification.md` — record supported local and unsupported remote/headless behavior.
+1. Inspect the existing Hermes Web/desktop capability boundary and choose **one minimal integration seam**. Confirm it can actually display a native dialog from the user's running local Web dashboard before modifying unrelated parts.
+2. Wire exactly the required callback and small capability indication into Web; keep the current UI. No new navigation screen or advanced setup page.
+3. Use `*.rel` and `*.phy` filters, normal filesystem navigation and Save As filenames. Cancel is a no-op. Errors are actionable but do not expose internal paths or credentials.
+4. Preserve current profile and backend-switch fencing: delayed results cannot select a path for another profile, and repeated clicks cannot open concurrent dialogs.
+5. Confirmed Save As still calls the existing checked backend creation endpoint; no direct file writes from the dialog helper.
+6. Do **not** change `Reliquary` core, REL/PHY format, configuration, history import, project attribution, enrollment state, or any deployed owner data. Do not request a new upstream PR by default.
 
 ## Migration strategy
 
-Compatibility-preserving UI correction: keep persisted configuration, setup endpoints, and owner bindings untouched. Add the local dialog capability, update the shared setup form, and de-emphasize or remove the old Web host-directory picker only after native behavior and the explicit manual fallback are proven. No broad Hermes changes, duplicate storage adapters or parallel setup pipelines.
+Compatibility-preserving **small Web integration**. Keep `daa07c6` UI and existing Desktop code. The prior HU09 proposal's generalized dialog broker / one-use permits / path receipts are **not approved implementation requirements**. Add the smallest supported trusted native invocation only if necessary. If the installed Hermes build has no trustworthy local-user invocation capability, record that single blocker and stop instead of delivering another UI-only partial solution as “complete”.
 
-## Testing decisions
+## Verification and acceptance
 
-- Web local interactive: each Select action invokes the **actual Windows Open File dialog** with correct extension; each Create invokes **actual Save As**, then an independent creation-confirmation step. Validate path selection and successful connect using *synthetic* REL/PHY test files.
-- Cancel Select/Save As: no path change, no new files, no setup mutations, no alarming error.
-- Wrong extension, non-owner file, existing Save As target, missing drive, invalid path, profile switch, stale dialog response, duplicate clicks, no config, and rejected host preflight fail safely.
-- Remote/headless/worker-without-desktop: no OS modal is launched; present explicit manual-path UI; preserve all existing validation and permission gates. Spoofed same-origin/locality or foreign-profile request must not open the host dialog.
-- Desktop: same selections and create behavior through its SDK; existing native mutation admission and backend-switch checks continue to pass.
-- **Installed acceptance:** launch actual Hermes Web dashboard on the same Windows machine as Hermes. Click all four buttons and observe genuine OS dialogs, not the old permitted-directory tree. Use an isolated Hermes profile and synthetic owner files. Verify production General user data and existing REL/PHY files remain unchanged.
-- Run dashboard Node tests, Desktop tests (with the existing VM-modules setting), relevant Python API/setup tests, TypeScript/build checks, documentation check, and host tests if the broker touches host code.
+- In an isolated Hermes profile on installed Windows Hermes **Web**, clicking Select REL, Select PHY, Create REL and Create PHY opens four genuine OS dialogs with the correct mode and extension. Record direct installed evidence, not only mocked tests.
+- Cancel each dialog: no modified selection, new file or setup operation. Select existing synthetic owners and confirm unchanged bytes. Save As a new synthetic REL/PHY, confirm creation through the existing service and connect it.
+- Existing filename conflict, incorrect type, backend/profile switch and wrong-profile or remote/headless access fail safely. Never trigger an interactive dialog from a remote request.
+- Verify packaged **Desktop** still passes the same four picker behaviors.
+- Run targeted Web/Desktop/ Python setup API tests, build and relevant host tests. Update `docs/verification.md` with the exact tested local context and any unsupported contexts.
+- Reinstall only changed integration artifacts and verify their hashes. Do not overwrite real REL/PHY data or reset enrollment cutoffs.
+
+**Completion is binary:** the installed local Web dashboard really opens all four native dialogs and connects synthetic owners, or HU09's Web dialog requirement remains **blocked/incomplete**. Removal of “Permitted folders”, tests of manual path entry or Desktop-only success does not satisfy that gate.
 
 ## Out of scope
 
-- Importing historical conversations, creating memories, moving REL/PHY data, remapping existing sessions, project attribution upstream PR, editing the Reliquary core configuration schema, and browser file uploads.
-- A generic Hermes file manager, unrestricted remote OS dialog service or new filesystem access permission model.
-
-## Completion gates
-
-1. All four actions open the correct native Windows dialog in *local interactive* Hermes Web and Desktop.
-2. Select does not copy/import/modify the chosen file; Create uses Save As plus explicit non-overwriting confirmation.
-3. "Permitted folders" and duplicate path fields are no longer the default local setup UX; manual path entry is clearly accessible only when needed.
-4. Native picker cannot be triggered from remote/headless or unauthorized requests; profile and lifecycle checks are enforced.
-5. Existing setup validation, owner identity, General fallback, PHY and project data, and all source capture/import policies remain unchanged.
-6. Browser, Desktop, Python and relevant host tests pass, plus real installed Web acceptance with synthetic data. No claim of success from mocks alone.
+New owner formats, file import/upload, remote filesystem UI, generalized file access, a new authorization framework, additional onboarding features, project UI changes, Reliquary core rebuild, upstream PR work unless directly demonstrated as indispensable.
 
 ## Related docs
 
-- [HU05 cross-surface onboarding](hu05-cross-surface-onboarding-desktop-spec-2026-11-08.md)
-- [HU06 Desktop native admission](hu06-stock-hermes-desktop-mutation-compat-spec-2026-11-09.md)
-- [HU07 Hermes-native UI](hu07-hermes-native-presentation-spec-2026-11-09.md)
+- [HU05 onboarding](hu05-cross-surface-onboarding-desktop-spec-2026-11-08.md)
+- [HU06 native admission](hu06-stock-hermes-desktop-mutation-compat-spec-2026-11-09.md)
 - [Verification](verification.md)
 
 ## Notes
 
-This specification supersedes only HU05's Web host-directory-browser UX, not its setup authority or Desktop native picker. A native Web dialog is a host capability, not a standard browser feature. The agent must verify that native modal activation is achievable safely in the installed Hermes environment before claiming completion.
+This targeted correction supersedes the broader design suggestions in HU09's prior text; it does **not** reopen the parts completed by `daa07c6`. The live Web bootstrap currently supplies no native picker callbacks, whereas Desktop already supplies both through the Hermes SDK. The missing capability must be verified at the Hermes host boundary rather than presumed to exist.
