@@ -210,6 +210,7 @@ function CreateMemory({ client, scope, controls, blocked, onSaved }: {
   const [category, setCategory] = useState("fact");
   const [memoryType, setMemoryType] = useState("general");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const { Button, Input, Textarea } = controls;
   const allowed = !blocked && scope.owner.owner_kind === "REL" && scope.owner.capabilities.manage
     && scope.owner.capabilities.memory_create;
@@ -217,13 +218,14 @@ function CreateMemory({ client, scope, controls, blocked, onSaved }: {
   async function create() {
     if (!allowed || busy || !title.trim() || !body.trim() || !category.trim() || !memoryType.trim()) return;
     setBusy(true);
+    setError(null);
     const key = globalThis.crypto?.randomUUID?.() ?? `create-${Date.now()}`;
     const createdAt = String(Math.floor(Date.now() / 1000) * 1_000_000_000);
     const result = await client.write(scope, "ui.memory_create", {
       title: title.trim(), body: body.trim(), category: category.trim(), memory_type: memoryType.trim(), created_at_ns: createdAt,
     }, null, key);
     setBusy(false);
-    if (result.status !== "ok") throw new Error(result.code);
+    if (result.status !== "ok") { setError(result.code); return; }
     setTitle(""); setBody(""); setOpen(false); onSaved();
   }
 
@@ -236,7 +238,8 @@ function CreateMemory({ client, scope, controls, blocked, onSaved }: {
     <Input aria-label="Memory category" placeholder="Category" value={category} disabled={!allowed || busy} onChange={(event) => setCategory(event.currentTarget.value)} />
     <Input aria-label="Memory type" placeholder="Type" value={memoryType} disabled={!allowed || busy} onChange={(event) => setMemoryType(event.currentTarget.value)} />
     <Button type="button" disabled={!allowed || busy || !title.trim() || !body.trim() || !category.trim() || !memoryType.trim()}
-      onClick={() => void create().catch(() => setBusy(false))}>{busy ? "Saving…" : "Create"}</Button>
+      onClick={() => void create().catch((reason: unknown) => { setBusy(false); setError(reason instanceof Error ? reason.message : String(reason)); })}>{busy ? "Saving…" : "Create"}</Button>
+    {error && <p className="knowledge-inline-error" role="alert">{error}</p>}
   </details>;
 }
 
@@ -246,14 +249,18 @@ function RenameCommunity({ community, controls, blocked, allowed, onRename }: {
 }) {
   const [name, setName] = useState(community.name ?? "");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const { Button, Input } = controls;
   useEffect(() => setName(community.name ?? ""), [community.community_id, community.name]);
   return <form className="knowledge-rename-community" onSubmit={(event) => {
     event.preventDefault(); if (!allowed || busy || !name.trim()) return;
-    setBusy(true); void onRename(community, name.trim()).catch(() => undefined).finally(() => setBusy(false));
+    setBusy(true); setError(null);
+    void onRename(community, name.trim()).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
+      .finally(() => setBusy(false));
   }}>
     <Input aria-label="Community name" value={name} disabled={!allowed || busy} onChange={(event) => setName(event.currentTarget.value)} />
     <Button type="submit" disabled={!allowed || busy || !name.trim()}>Rename</Button>
     {!allowed && <span className="knowledge-muted">{blocked ?? "Community rename is not granted."}</span>}
+    {error && <span className="knowledge-inline-error" role="alert">{error}</span>}
   </form>;
 }

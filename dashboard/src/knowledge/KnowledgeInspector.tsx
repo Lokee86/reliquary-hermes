@@ -97,7 +97,8 @@ export function KnowledgeInspector({ client, scope, memory, communities, control
   const community = communities.find((candidate) => candidate.community_id === memory.community_id) ?? null;
   const content = detail.body.content ?? "Memory body is unavailable at this revision.";
   const archived = memory.lifecycle !== "active";
-  const canEdit = writable && !blocked && !archived && scope.owner.capabilities.memory_edit && detail.body.availability === "available";
+  const canEdit = writable && !blocked && !archived && scope.owner.capabilities.memory_edit
+    && detail.body.availability === "available" && detail.body.body_id !== null;
 
   return (
     <aside className="knowledge-inspector" aria-label="Memory inspector">
@@ -131,6 +132,9 @@ export function KnowledgeInspector({ client, scope, memory, communities, control
         </>}
       </section>
 
+      {detail.superseded_by && <RetirementForm client={client} scope={scope} memory={memory}
+        canRetire={writable && !blocked && scope.owner.capabilities.memory_retire && detail.body.availability === "available"}
+        blocked={blocked} controls={controls} onChanged={onChanged} onError={onError} />}
       {!archived && <KnowledgeRelationsEditor client={client} scope={scope} memory={memory} controls={controls} blocked={blocked} onChanged={onChanged} onError={onError} />}
       <section className="knowledge-inspector-section" aria-label="Memory provenance">
         <h3>Provenance</h3>
@@ -142,6 +146,45 @@ export function KnowledgeInspector({ client, scope, memory, communities, control
       {blocked && <p className="knowledge-muted" role="status">{blocked}</p>}
     </aside>
   );
+}
+
+function RetirementForm({ client, scope, memory, canRetire, blocked, controls, onChanged, onError }: {
+  client: KnowledgeClient;
+  scope: KnowledgeScope;
+  memory: MemorySummary;
+  canRetire: boolean;
+  blocked?: string;
+  controls: HostControls;
+  onChanged: () => void;
+  onError: (error: string | null) => void;
+}) {
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const { Button, Checkbox } = controls;
+  if (memory.lifecycle !== "superseded") return null;
+  async function retire() {
+    if (!canRetire || !confirmed || busy) return;
+    setBusy(true);
+    const key = globalThis.crypto?.randomUUID?.() ?? `retire-${Date.now()}`;
+    const result = await client.write(scope, "ui.memory_retire", {
+      memory_id: memory.memory_id,
+      effect: "retire",
+    }, memory.revision, key);
+    setBusy(false);
+    if (result.status !== "ok") { onError(result.code); return; }
+    onChanged();
+  }
+
+  return <section className="knowledge-inspector-section" aria-label="Memory retirement">
+    <h3>Retirement</h3>
+    <p className="knowledge-muted">This superseded Memory can be retired after Hermes verifies its replacement from the current owner cut.</p>
+    {!canRetire && <p className="knowledge-muted" role="status">{blocked ?? "Memory retirement is not granted for this owner."}</p>}
+    <label className="knowledge-check"><Checkbox checked={confirmed} disabled={!canRetire || busy}
+      aria-label="Confirm terminal retirement" onCheckedChange={setConfirmed} />Confirm terminal retirement of this revision</label>
+    <Button type="button" disabled={!canRetire || !confirmed || busy} onClick={() => void retire()}>
+      {busy ? "Retiring…" : "Retire superseded Memory"}
+    </Button>
+  </section>;
 }
 
 function ProvenanceItem({ source }: { source: MemoryDetail["provenance"][number] }) {
