@@ -148,9 +148,9 @@ export function Sources({ host, readOnly, captureStatus }: {
     }
   }
 
-  return <section className="knowledge-panel warlock-workflow" aria-label="Sources">
-    <aside className="knowledge-nav warlock-workflow-nav" aria-label="Sources navigation">
-      <div className="knowledge-heading"><span className="knowledge-nav-label">Sources</span><strong>Conversation imports</strong></div>
+  return <section className="knowledge-panel" aria-label="Sources">
+    <aside className="knowledge-nav" aria-label="Sources navigation">
+      <div className="knowledge-heading"><span className="eyebrow">SOURCES</span><strong>Conversation imports</strong></div>
       {captureStatus && <section className="knowledge-inspector-section">
         <h3>Automatic capture</h3>
         <p className="knowledge-muted">{captureStatus === "enrolled" ? "Automatic capture is enrolled for this profile."
@@ -175,41 +175,42 @@ export function Sources({ host, readOnly, captureStatus }: {
           <Button type="button" disabled={review || busy} onClick={() => setSearch({ ...search })}>Refresh</Button>
         </form>}
       </header>
-      {loading && <p className="knowledge-state" role="status">Loading Hermes conversations…</p>}
-      {error && <p className="knowledge-state error" role="alert">{error}</p>}
-      {!open && <p className="knowledge-state">Open the import workflow to browse available conversations.</p>}
-      {open && page && !page.available && <p role="note" className="knowledge-state">Session import is unavailable on this Hermes build.</p>}
-      {open && page?.available && <>
-        {!page.sessions.length && <p className="knowledge-state">No conversations on this page.</p>}
-        <ul className="knowledge-memory-rows warlock-workflow-rows">{page.sessions.map(row => {
-          const status = statuses[row.session_id] ?? row;
-          return <li key={row.session_id} className="knowledge-memory-row warlock-source-row">
-            {!readOnly && !review && <Checkbox aria-label={"Select " + row.title}
-              checked={selected.includes(row.session_id)} disabled={busy || !canSelect(status)}
-              onCheckedChange={checked => setSelected(current => checked
-                ? current.length < 8 && !current.includes(row.session_id) ? [...current, row.session_id] : current
-                : current.filter(id => id !== row.session_id))} />}
-            <div>
-              <strong>{row.title}</strong>
-              <span>{labels[status.status]} · {row.message_count} messages{row.project_name && " · " + row.project_name}</span>
-              <small className="warlock-source-id">{row.session_id}</small>
-              <span>Created {new Date(row.started_at * 1000).toLocaleString()} · Last activity {new Date(row.last_activity_at * 1000).toLocaleString()}</span>
-              {status.reason && <span>{describeReason(status.reason)}</span>}
-            </div>
-          </li>;
-        })}</ul>
-        <div className="warlock-workflow-actions">
-          <Button disabled={review || search.offset === 0} onClick={() => setSearch({ ...search, offset: Math.max(0, search.offset - 16) })}>Previous page</Button>
-          <Button disabled={review || page.next_offset === null} onClick={() => {
-            if (page.next_offset !== null) setSearch({ ...search, offset: page.next_offset });
-          }}>Next page</Button>
-          {!review && !readOnly && <Button disabled={!destination || !selected.length} onClick={() => setReview(true)}>Review selected ({selected.length})</Button>}
-        </div>
-        {poll > 0 && <p role="status" className="knowledge-muted">Refreshing import status…</p>}
-      </>}
+      <div className="knowledge-memory-rows">
+        {loading && <p className="knowledge-state" role="status">Loading Hermes conversations…</p>}
+        {!open && <p className="knowledge-state">Open the import workflow to browse available conversations.</p>}
+        {open && page && !page.available && <p role="note" className="knowledge-state">Session import is unavailable on this Hermes build.</p>}
+        {open && page?.available && <>
+          {!page.sessions.length && <p className="knowledge-state">No conversations on this page.</p>}
+          <ul className="warlock-source-list">{page.sessions.map(row => {
+            const status = statuses[row.session_id] ?? row;
+            return <li key={row.session_id} className="knowledge-memory-row warlock-source-row">
+              {!readOnly && !review && <Checkbox aria-label={"Select " + row.title}
+                checked={selected.includes(row.session_id)} disabled={busy || !canSelect(status)}
+                onCheckedChange={checked => setSelected(current => checked
+                  ? current.length < 8 && !current.includes(row.session_id) ? [...current, row.session_id] : current
+                  : current.filter(id => id !== row.session_id))} />}
+              <div>
+                <strong>{row.title}</strong>
+                <span>{labels[status.status]} · {row.message_count} messages{row.project_name && " · " + row.project_name}</span>
+                <small className="warlock-source-id">{row.session_id}</small>
+                <span>Created {new Date(row.started_at * 1000).toLocaleString()} · Last activity {new Date(row.last_activity_at * 1000).toLocaleString()}</span>
+                {status.reason && <span>{describeReason(status.reason)}</span>}
+              </div>
+            </li>;
+          })}</ul>
+          <div className="warlock-workflow-actions">
+            <Button disabled={review || search.offset === 0} onClick={() => setSearch({ ...search, offset: Math.max(0, search.offset - 16) })}>Previous page</Button>
+            <Button disabled={review || page.next_offset === null} onClick={() => {
+              if (page.next_offset !== null) setSearch({ ...search, offset: page.next_offset });
+            }}>Next page</Button>
+            {!review && !readOnly && <Button disabled={!destination || !selected.length} onClick={() => setReview(true)}>Review selected ({selected.length})</Button>}
+          </div>
+          {poll > 0 && <p role="status" className="knowledge-muted">Refreshing import status…</p>}
+        </>}
+      </div>
     </main>
-    <aside className="knowledge-inspector warlock-workflow-inspector" aria-label="Import review">
-      <span className="knowledge-nav-label">Import</span>
+    <aside className="knowledge-inspector" aria-label="Import review">
+      <span className="eyebrow">IMPORT</span>
       {open && page?.available && <>
         <label className="warlock-source-destination">Import destination
           <Select label="Import destination" value={destinationId} disabled={!!readOnly || review || busy}

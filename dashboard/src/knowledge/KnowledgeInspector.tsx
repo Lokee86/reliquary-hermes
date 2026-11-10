@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChangeEvent } from "react";
 import type { Community, MemoryDetail, MemorySummary, ReadResults } from "../../types";
 import type { HostControls } from "../host";
 import type { KnowledgeClient, KnowledgeScope } from "./client";
@@ -35,7 +34,7 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  const { Button, Input, Textarea } = controls;
+  const { Button } = controls;
 
   async function loadDetail(id: string, target: string | null, signal: AbortSignal) {
     const next = await client.read(scope, "ui.memory_detail", { memory_id: id, revision: target }, signal);
@@ -131,7 +130,10 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
     }
   }
 
-  if (!memoryId) return <aside className="knowledge-inspector"><div className="knowledge-state">Select a memory.</div></aside>;
+  if (!memoryId) return <aside className="knowledge-inspector" aria-label="Memory inspector">
+    <div className="eyebrow">MEMORY</div>
+    <div className="knowledge-state">Select a memory.</div>
+  </aside>;
   if (!detail || !memory) return <aside className="knowledge-inspector" aria-label="Memory inspector">
     {error ? <p className="knowledge-inline-error" role="alert">{error}</p>
       : <div className="knowledge-state">Loading detail, history, and provenance…</div>}
@@ -153,19 +155,19 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
           <h2>{memory.title || (detail.tombstone ? "Retired Memory" : "Untitled memory")}</h2>
           {error && <p className="knowledge-inline-error" role="alert">{error}</p>}
         </div>
-        {canEdit && <Button type="button" onClick={() => setEditing((value) => !value)}>
+        {canEdit && <button type="button" disabled={busy} onClick={() => setEditing(value => !value)}>
           {editing ? "Cancel" : "Edit"}
-        </Button>}
+        </button>}
       </div>
       {editing ? (
         <div className="knowledge-edit-memory">
-          <Input aria-label="Replacement title" value={title} maxLength={128} disabled={busy}
-            onChange={(event) => setTitle(event.currentTarget.value)} />
-          <Textarea aria-label="Replacement body" value={body} maxLength={32768} rows={7} disabled={busy}
-            onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setBody(event.currentTarget.value)} />
-          <Button type="button" disabled={busy || !title.trim() || !body.trim()} onClick={() => void save()}>
+          <input aria-label="Replacement title" value={title} maxLength={128} disabled={busy}
+            onChange={event => setTitle(event.currentTarget.value)} />
+          <textarea aria-label="Replacement body" value={body} maxLength={32768} rows={7} disabled={busy}
+            onChange={event => setBody(event.currentTarget.value)} />
+          <button type="button" disabled={busy || !title.trim() || !body.trim()} onClick={() => void save()}>
             {busy ? "Saving…" : "Save replacement"}
-          </Button>
+          </button>
           <p className="knowledge-muted">Replacement preserves the original Memory and its provenance. Active relationships can block retirement of the original.</p>
         </div>
       ) : <p className="knowledge-memory-body">{content}</p>}
@@ -178,6 +180,8 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
         {detail.superseded_by && <div><dt>Superseded by</dt><dd>{shortId(detail.superseded_by)}</dd></div>}
         <div><dt>Memory ID</dt><dd>{memory.memory_id}</dd></div>
       </dl>
+
+      {!archived && revision === null && <KnowledgeRelationsEditor client={client} scope={scope} memory={memory} controls={controls} blocked={blocked} onChanged={onChanged} onError={setError} />}
 
       <section className="knowledge-inspector-section" aria-label="Memory history">
         <h3>History</h3>
@@ -197,7 +201,6 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
       {detail.superseded_by && <RetirementForm client={client} scope={scope} memory={memory}
         canRetire={revision === null && writable && !blocked && scope.owner.capabilities.memory_retire && detail.body.availability === "available"}
         blocked={blocked} controls={controls} onChanged={onChanged} onError={setError} />}
-      {!archived && revision === null && <KnowledgeRelationsEditor client={client} scope={scope} memory={memory} controls={controls} blocked={blocked} onChanged={onChanged} onError={setError} />}
       <section className="knowledge-inspector-section" aria-label="Memory provenance">
         <h3>Provenance</h3>
         {detail.tombstone ? <p className="knowledge-muted">Provenance is unavailable after terminal retirement.</p>

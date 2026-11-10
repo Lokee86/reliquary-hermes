@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { GraphEdge, GraphNode, MemorySummary } from "../../types";
 import type { HostControls } from "../host";
 import type { KnowledgeClient, KnowledgeScope } from "./client";
-import { shortId } from "./knowledgeUi";
+import { relationLabel, shortId } from "./knowledgeUi";
 
 interface Props {
   client: KnowledgeClient;
@@ -104,15 +104,13 @@ export function KnowledgeRelationsEditor({ client, scope, memory, controls, bloc
           return <div className="knowledge-relation-editor" key={edge.edge_id}>
             <div>
               <strong>{outgoing ? "→" : "←"} {other?.label || shortId(otherId)}</strong>
-              <span>{edge.origin} · {edge.kind.replaceAll("_", " ")} · {edge.active ? "active" : "inactive"}</span>
+              <span>{edge.origin} · {relationLabel(edge.kind)} · {edge.active ? "active" : "inactive"}</span>
             </div>
             <Select label="Relationship type" value={edge.kind} options={[
-              { value: edge.kind, label: edge.kind.replaceAll("_", " ") },
+              { value: edge.kind, label: relationLabel(edge.kind) },
             ]} disabled onValueChange={() => undefined} />
-            {editable && edge.active && <Button type="button" disabled={busy} onClick={() => void change(edge, other ?? {
-              node_id: otherId, kind: "memory", memory_id: otherId, community_id: null, label: otherId,
-              origin: "memory", revision: memory.revision, cut: scope.owner.cut,
-            })}>Remove user association</Button>}
+            {editable && edge.active && other && <Button type="button" disabled={busy}
+              onClick={() => void change(edge, other)}>Remove user association</Button>}
           </div>;
         })}
       {canEdit && <div className="knowledge-add-relation">

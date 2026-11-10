@@ -1,14 +1,12 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { Community, Page } from "../../types";
-import type { HostControls } from "../host";
 import type { KnowledgeClient, KnowledgeScope } from "./client";
 import { communityLabel } from "./knowledgeUi";
 
 interface Props {
   client: KnowledgeClient;
   scope: KnowledgeScope;
-  controls: HostControls;
   scopeControls: ReactNode;
   communities: Page<Community> | null;
   communitiesUnavailable: boolean;
@@ -29,7 +27,7 @@ interface Props {
   onRefresh: () => void;
 }
 
-export function KnowledgeNavigation({ client, scope, controls, scopeControls, communities, communitiesUnavailable,
+export function KnowledgeNavigation({ client, scope, scopeControls, communities, communitiesUnavailable,
   communityCursor, onCommunityPage, selectedCommunity, selectedCommunityId, query, showArchived, listCount, blocked,
   canRename, onQuery, onShowArchived, onCommunity, onRename, onSaved, onRefresh }: Props) {
   const { owner } = scope;
@@ -44,10 +42,10 @@ export function KnowledgeNavigation({ client, scope, controls, scopeControls, co
       <input className="knowledge-search" type="search" aria-label="Search memories" value={query} maxLength={1024}
         placeholder="Search memories" onChange={event => onQuery(event.currentTarget.value)} />
       <CreateMemory client={client} scope={scope} blocked={blocked} onSaved={onSaved} />
-      <div className="knowledge-check">
-        <controls.Checkbox checked={showArchived} aria-label="Show non-active memories" onCheckedChange={onShowArchived} />
-        <span>Show archived</span>
-      </div>
+      <label className="knowledge-check">
+        <input type="checkbox" checked={showArchived} aria-label="Show non-active memories"
+          onChange={event => onShowArchived(event.currentTarget.checked)} />Show archived
+      </label>
       <button type="button" className={!selectedCommunityId ? "active" : ""} aria-pressed={!selectedCommunityId}
         onClick={() => onCommunity(null)}>
         <span>All memories</span>{listCount !== undefined && <small>{listCount}</small>}
@@ -68,7 +66,7 @@ export function KnowledgeNavigation({ client, scope, controls, scopeControls, co
           onClick={() => onCommunityPage(communities?.next_cursor ?? null)}>Next</button>
       </div>}
       {selectedCommunity && <RenameCommunity community={selectedCommunity} blocked={blocked} allowed={canRename} onRename={onRename} />}
-      <button type="button" onClick={onRefresh}>Refresh owners</button>
+      <button type="button" onClick={onRefresh}>Refresh owner data</button>
     </aside>
   );
 }

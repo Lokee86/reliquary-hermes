@@ -199,9 +199,10 @@ export function Setup({ host, status, readOnly, onConnected }: {
     </section>;
   }
 
-  return <section className="knowledge-panel warlock-workflow" aria-label="Reliquary setup">
-    <aside className="knowledge-nav warlock-workflow-nav" aria-label="Setup navigation">
-      <div className="knowledge-heading"><span className="knowledge-nav-label">Setup</span><strong>Connect owners</strong></div>
+  return <section className="knowledge-panel" aria-label="Reliquary setup">
+    <aside className="knowledge-nav" aria-label="Setup navigation">
+      <div className="knowledge-heading"><span className="eyebrow">SETUP</span><strong>Connect owners</strong></div>
+      {readOnly && <p role="note" className="knowledge-muted">{readOnly}</p>}
       <p className="knowledge-muted">{status.runtime_detected ? "Reliquary runtime detected" : "Reliquary runtime unavailable"}</p>
       {!webDialogs && !host.pickOpenPath && <p role="note" className="knowledge-muted">Native file dialogs are unavailable for this connection.</p>}
       <div className="knowledge-inspector-section">
@@ -212,11 +213,11 @@ export function Setup({ host, status, readOnly, onConnected }: {
         onClick={() => setManual(value => !value)}>{manual ? "Hide manual paths" : "Enter path manually"}</Button>
       {status.configured && <p className="knowledge-muted">Existing sessions keep their accepted memory routes.</p>}
     </aside>
-    <main className="knowledge-memory-list warlock-workflow-center" aria-label="Owner files">
+    <main className="knowledge-memory-list warlock-workflow-center warlock-setup-center" aria-label="Owner files">
       <header><div><h2>Connect owners</h2><span>Review the files and routing used by this profile.</span></div></header>
       <form onSubmit={event => { event.preventDefault(); if (canWrite) void validate(true); }}>
         <fieldset disabled={busy || !!confirm}>
-          <div className="knowledge-memory-rows warlock-workflow-rows">
+          <div className="knowledge-memory-rows">
             {pathField({ kind: "REL", label: "General memory", value: main, change: setMain, createKind: "general_rel" }, report?.main_rel)}
             {pathField({ kind: "PHY", label: "Active identity", value: phy, change: setPhy, createKind: "phy" }, report?.active_phy)}
             {pathField({ kind: "config", label: "Reliquary configuration", value: config, change: setConfig }, report?.config)}
@@ -245,8 +246,8 @@ export function Setup({ host, status, readOnly, onConnected }: {
         </fieldset>
       </form>
     </main>
-    <aside className="knowledge-inspector warlock-workflow-inspector" aria-label="Setup review">
-      <span className="knowledge-nav-label">Status</span>
+    <aside className="knowledge-inspector" aria-label="Setup review">
+      <span className="eyebrow">STATUS</span>
       {busy && <p role="status">Working…</p>}
       {error && <p role="alert" className="knowledge-inline-error">{error}</p>}
       {report && <section className="knowledge-inspector-section"><h3>Validation</h3>

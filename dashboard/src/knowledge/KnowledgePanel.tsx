@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { Community, MemorySummary, OwnerBinding, Page } from "../../types";
 import type { HostControls, JsonTransport } from "../host";
@@ -41,6 +41,7 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
   const [communityCursor, setCommunityCursor] = useState<string | null>(null);
   const [communitiesUnavailable, setCommunitiesUnavailable] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const reconcileListSelection = useRef(false);
 
   const writable = !mutationBlocked && owner.owner_kind === "REL" && owner.capabilities.view && owner.capabilities.manage;
 
@@ -54,7 +55,10 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
     void client.read(scope, "ui.memory_list", { cursor, limit: 40, filters }, controller.signal).then(memoryPage => {
       if (controller.signal.aborted) return;
       setMemories(memoryPage);
-      setSelectedMemoryId(current => current ?? memoryPage.items[0]?.memory_id ?? null);
+      const checkPage = reconcileListSelection.current;
+      reconcileListSelection.current = false;
+      setSelectedMemoryId(current => current && (!checkPage || memoryPage.items.some(item => item.memory_id === current))
+        ? current : memoryPage.items[0]?.memory_id ?? null);
     }).catch((reason: unknown) => {
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason));
     });
@@ -83,17 +87,21 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
     () => graphTransportFor(owner, sessionId, graphController.signal),
     [graphTransportFor, owner, sessionId, graphController],
   );
-  const graphSelected = useCallback((resolution: GraphRenderNodeResolution) => setSelectedMemoryId(resolution.memoryId), []);
+  const graphSelected = useCallback((resolution: GraphRenderNodeResolution) => {
+    reconcileListSelection.current = false;
+    setSelectedMemoryId(resolution.memoryId);
+  }, []);
+  const inspectorMemoryId = mode === "list" && !memories && reconcileListSelection.current ? null : selectedMemoryId;
 
   function refresh(memoryId?: string) {
     onOwnerRefresh(memoryId ?? selectedMemoryId ?? undefined, showArchived, mode);
   }
 
   function changePage(nextCursor: string | null) {
+    reconcileListSelection.current = true;
     setCursor(nextCursor);
     setMemories(null);
     setError(null);
-    setSelectedMemoryId(null);
   }
 
   function changeCommunity(id: string | null) {
@@ -119,7 +127,7 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
   return (
     <section className="knowledge-panel" data-view={mode} aria-label="Knowledge">
       <KnowledgeNavigation
-        client={client} scope={scope} controls={controls} scopeControls={scopeControls}
+        client={client} scope={scope} scopeControls={scopeControls}
         communities={communities} communitiesUnavailable={communitiesUnavailable}
         communityCursor={communityCursor} onCommunityPage={changeCommunityPage}
         selectedCommunity={selectedCommunity} selectedCommunityId={selectedCommunityId}
@@ -181,7 +189,7 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
         )}
       </section>
 
-      <KnowledgeInspector key={selectedMemoryId ?? "none"} client={client} scope={scope} memoryId={selectedMemoryId}
+      <KnowledgeInspector key={inspectorMemoryId ?? "none"} client={client} scope={scope} memoryId={inspectorMemoryId}
         communities={communities?.items ?? []} controls={controls} blocked={mutationBlocked} writable={writable}
         onChanged={refresh} onOpenMemory={setSelectedMemoryId} />
     </section>

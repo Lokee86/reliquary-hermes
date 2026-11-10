@@ -84,7 +84,7 @@ export function KnowledgeScope({ host, mutationBlocked }: { host: HostBoundary; 
     </div>
   </details>;
 
-  if (owner) return <KnowledgePanel key={JSON.stringify([owner.owner_id, owner.generation, owner.cut, sessionId])}
+  if (owner) return <KnowledgePanel key={JSON.stringify([owner.owner_id, owner.generation, owner.cut, sessionId, attempt])}
     owner={owner} sessionId={sessionId} transport={host.json} controls={host.controls} scopeControls={scopeControls}
     graphTransportFor={graphTransportFor} mutationBlocked={mutationBlocked} onOwnerRefresh={refresh}
     initialMemoryId={preferred?.ownerId === owner.owner_id ? preferred.memoryId : undefined}
@@ -94,8 +94,8 @@ export function KnowledgeScope({ host, mutationBlocked }: { host: HostBoundary; 
   return <section className="knowledge-panel" aria-label="Knowledge">
     <aside className="knowledge-nav" aria-label="Knowledge navigation">
       <div className="knowledge-heading"><span className="eyebrow">KNOWLEDGE</span></div>
-      {scopeControls}
-      <button type="button" onClick={() => refresh()}>Refresh owners</button>
+      {current && scopeControls}
+      <button type="button" onClick={() => refresh()}>Refresh owner data</button>
     </aside>
     <section className="knowledge-memory-list" aria-label="Memory list">
       <header><strong>Memories</strong></header>

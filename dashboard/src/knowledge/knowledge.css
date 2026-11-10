@@ -75,10 +75,15 @@
 .knowledge-nav > button, .knowledge-memory-row { font: inherit; }
 .knowledge-list-pager { display: flex; flex-wrap: wrap; gap: 4px; margin-block: 8px; }
 .knowledge-list-pager button { border: 1px solid #30293a; border-radius: 6px; background: #111016; color: #a99db6; padding: 5px 8px; font-size: 0.7rem; }
-.knowledge-check > :is(button, input, [role="checkbox"]) { flex: 0 0 1rem; inline-size: 1rem; block-size: 1rem; }
+.knowledge-history-list { display: flex; flex-wrap: wrap; gap: 4px; margin-block: 8px; }
 .knowledge-rename-community > :is(.knowledge-muted, .knowledge-inline-error) { grid-column: 1 / -1; }
 .knowledge-inspector-title-row { flex-wrap: wrap; }
 .knowledge-relation-editor > :is(button, select) { min-width: 0; }
+.knowledge-relation-editor > button { overflow-wrap: anywhere; }
+.knowledge-relation-editor > [role="combobox"], .knowledge-add-relation > [role="combobox"] {
+  width: 100%; min-width: 0; border: 1px solid #30293a; border-radius: 6px;
+  background: #0b0a0f; color: #e6dfed; padding: 7px 8px;
+}
 .knowledge-memory-body { overflow-wrap: anywhere; }
 .knowledge-panel[data-view="graph"] > .knowledge-memory-list { overflow: auto; }
 
