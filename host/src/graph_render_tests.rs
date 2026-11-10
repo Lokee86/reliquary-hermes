@@ -74,6 +74,23 @@ fn graph_render_replaces_only_the_prior_generation_for_the_same_owner() {
 }
 
 #[test]
+fn clearing_bounded_generation_cache_preserves_monotonic_render_ids() {
+    let mut service = GraphRenderService::default();
+    let first = service
+        .prepare(source("rel-owner", 1, vec![memory_id(1)]))
+        .unwrap();
+    service.clear();
+    let second = service
+        .prepare(source("rel-owner", 2, vec![memory_id(2)]))
+        .unwrap();
+    assert!(second.generation_id > first.generation_id);
+    assert_eq!(
+        service.resolve_node(first.generation_id, RenderNodeId::new(0)),
+        Err(GraphRenderError::GenerationUnavailable(first.generation_id)),
+    );
+}
+
+#[test]
 fn hierarchy_validation_failure_does_not_replace_live_generation() {
     let mut service = GraphRenderService::default();
     let live = service
