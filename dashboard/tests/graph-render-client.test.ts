@@ -9,7 +9,7 @@ const generationId = "7";
 const bounds = { min: [-100,-100,-100] as const, max: [100,100,100] as const };
 const leafBounds = { min: [-10,-10,-10] as const, max: [10,10,10] as const };
 const manifest: GraphRenderManifest = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   generationId,
   ownerId: "owner",
   sourceCommunityGeneration: "3",
@@ -18,11 +18,14 @@ const manifest: GraphRenderManifest = {
   globalBounds: bounds,
   hierarchy: [
     { id:0,parentId:null,kind:"graph",bounds,nodeCount:2,chunkId:null },
-    { id:1,parentId:0,kind:"leaf",bounds:leafBounds,nodeCount:2,chunkId:0 },
+    { id:1,parentId:0,kind:"territory",bounds:leafBounds,nodeCount:2,chunkId:null,
+      territory: { kind: "unassigned", communityId: null, label: "Unassigned",
+        color: [0.5,0.5,0.5], center: [0,0,0], radius: 10 } },
+    { id:2,parentId:1,kind:"leaf",bounds:leafBounds,nodeCount:2,chunkId:0 },
   ],
   nodeChunks: [{
     chunkId:0,
-    parentHierarchyId:1,
+    parentHierarchyId:2,
     bounds:leafBounds,
     nodeCount:2,
     byteLen:80,
@@ -41,6 +44,8 @@ const manifest: GraphRenderManifest = {
 let nodeFetches = 0;
 let edgeFetches = 0;
 let resolves = 0;
+let inspections = 0;
+const memoryId = "a".repeat(64);
 const transport: GraphRenderTransport = {
   async prepare() { return manifest; },
   async nodeChunk(_generationId, chunkId) {
@@ -52,7 +57,24 @@ const transport: GraphRenderTransport = {
     resolves += 1;
     return { memoryId: `m-${renderId}` };
   },
+  async inspectNode() {
+    inspections += 1;
+    return { memoryId, title: "Selected Memory", position: [1, 2, 3] };
+  },
+  async locateMemory(_generationId, id) {
+    return id === memoryId ? { renderId: 0, position: [1, 2, 3] } : null;
+  },
+  async neighborhood() {
+    return { totalCount: 1, truncated: false, edges: [{
+      sourceRenderId: 0, targetRenderId: 1, sourcePosition: [1, 2, 3], targetPosition: [4, 5, 6],
+      style: { packedColor: 0x38bdf8ff, relationKind: "References" }, directed: true, weight: 1.35,
+    }] };
+  },
 };
+
+await assert.rejects(GraphRenderClient.prepare("owner", {
+  ...transport, async prepare() { return { ...manifest, schemaVersion: 2 }; },
+}), /unsupported graph render manifest version/);
 
 await assert.rejects(
   GraphRenderClient.prepare("owner", {
@@ -76,6 +98,14 @@ await assert.rejects(
 );
 
 const client = await GraphRenderClient.prepare("owner", transport);
+assert.equal((await client.inspectNode(0)).title, "Selected Memory");
+assert.equal((await client.inspectNode(0)).memoryId, memoryId);
+assert.equal(inspections, 1);
+await assert.rejects(client.inspectNode(0, AbortSignal.abort()), { name: "AbortError" });
+assert.deepEqual(await client.locateMemory(memoryId), { renderId: 0, position: [1, 2, 3] });
+assert.equal(await client.locateMemory("b".repeat(64)), null);
+assert.equal((await client.neighborhood(0)).edges[0].targetRenderId, 1);
+await assert.rejects(client.neighborhood(2), /invalid graph incident relationships/);
 const overview = client.planViewport({ center:[0,0,0], radius:100 });
 assert.equal(overview.lod, "detail");
 assert.equal(overview.nodeChunks.length, 1);

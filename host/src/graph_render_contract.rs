@@ -1,6 +1,7 @@
 use serde::Serialize;
 
-pub(crate) const GRAPH_RENDER_MANIFEST_SCHEMA_VERSION: u16 = 2;
+pub(crate) const GRAPH_RENDER_MANIFEST_SCHEMA_VERSION: u16 = 3;
+pub(crate) type GraphRenderVec3 = [f32; 3];
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,6 +34,26 @@ pub struct GraphRenderHierarchyDescriptor {
     pub(crate) bounds: GraphRenderBounds,
     pub(crate) node_count: u32,
     pub(crate) chunk_id: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) territory: Option<GraphRenderTerritory>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum GraphRenderTerritoryKind {
+    Community,
+    Unassigned,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GraphRenderTerritory {
+    pub(crate) kind: GraphRenderTerritoryKind,
+    pub(crate) community_id: Option<String>,
+    pub(crate) label: String,
+    pub(crate) color: [f32; 3],
+    pub(crate) center: [f32; 3],
+    pub(crate) radius: f32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
