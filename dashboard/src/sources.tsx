@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { HostBoundary } from "./host";
 import type { SetupStatus } from "../types";
+import "./warlock-workflows.css";
 
 const sourcesPath = "/sources-v1/";
 const labels = {
@@ -147,39 +148,42 @@ export function Sources({ host, readOnly, captureStatus }: {
     }
   }
 
-  return <section className="rly-section rly-sources" aria-label="Sources">
-    <h2>Sources</h2>
-    {captureStatus && <p role="note">{captureStatus === "enrolled" ? "Automatic capture is enrolled for this profile."
-      : captureStatus === "setup_required" ? "Connect Reliquary in Setup to enroll this profile for automatic capture."
-      : "Automatic capture is unavailable on this Hermes build."}</p>}
-    <p>Choose which existing Hermes conversations to import into an authorized REL.</p>
-    {!open ? <Button onClick={() => setOpen(true)}>Import Existing Sessions</Button> : <>
-      <div className="rly-actions">
-        <h3>Import Existing Sessions</h3>
-        <Button disabled={busy} onClick={() => { setOpen(false); setReview(false); }}>Close</Button>
-      </div>
-      <form className="rly-actions" onSubmit={event => {
-        event.preventDefault(); if (!review && !busy) setSearch({ q: query.trim(), offset: 0 });
-      }}>
-        <label className="rly-field">Search conversations
-          <Input value={query} maxLength={128} disabled={review || busy} onChange={event => setQuery(event.currentTarget.value)} />
-        </label>
-        <Button type="submit" disabled={review || busy}>Search</Button>
-        <Button type="button" disabled={review || busy} onClick={() => setSearch({ ...search })}>Refresh</Button>
-      </form>
-      {loading && <p role="status">Loading Hermes conversations…</p>}
-      {error && <p role="alert">{error}</p>}
-      {page && !page.available && <p role="note">Session import is unavailable on this Hermes build.</p>}
-      {page?.available && <>
-        <label className="rly-field">Import destination
-          <Select label="Import destination" value={destinationId} disabled={!!readOnly || review || busy}
-            onValueChange={setDestinationId} options={[{ value: "", label: "Choose an authorized REL" },
-              ...page.destinations.map(row => ({ value: row.owner_id, label: row.label }))]} />
-        </label>
-        {!page.sessions.length && <p>No conversations on this page.</p>}
-        <ul className="rly-import-list">{page.sessions.map(row => {
+  return <section className="knowledge-panel warlock-workflow" aria-label="Sources">
+    <aside className="knowledge-nav warlock-workflow-nav" aria-label="Sources navigation">
+      <div className="knowledge-heading"><span className="knowledge-nav-label">Sources</span><strong>Conversation imports</strong></div>
+      {captureStatus && <section className="knowledge-inspector-section">
+        <h3>Automatic capture</h3>
+        <p className="knowledge-muted">{captureStatus === "enrolled" ? "Automatic capture is enrolled for this profile."
+          : captureStatus === "setup_required" ? "Connect Reliquary in Setup to enroll this profile for automatic capture."
+          : "Automatic capture is unavailable on this Hermes build."}</p>
+      </section>}
+      <p className="knowledge-muted">Choose existing Hermes conversations and explicitly import them into an authorized REL.</p>
+      {!open ? <Button onClick={() => setOpen(true)}>Import Existing Sessions</Button>
+        : <Button disabled={busy} onClick={() => { setOpen(false); setReview(false); }}>Close import</Button>}
+      {readOnly && <p role="note" className="knowledge-muted">{readOnly}</p>}
+    </aside>
+    <main className="knowledge-memory-list warlock-workflow-center" aria-label="Hermes conversations">
+      <header>
+        <div><h2>Import Existing Sessions</h2><span>Browse and review conversations before import.</span></div>
+        {open && <form className="warlock-source-search" onSubmit={event => {
+          event.preventDefault(); if (!review && !busy) setSearch({ q: query.trim(), offset: 0 });
+        }}>
+          <label className="knowledge-search-label">Search conversations
+            <Input value={query} maxLength={128} disabled={review || busy} onChange={event => setQuery(event.currentTarget.value)} />
+          </label>
+          <Button type="submit" disabled={review || busy}>Search</Button>
+          <Button type="button" disabled={review || busy} onClick={() => setSearch({ ...search })}>Refresh</Button>
+        </form>}
+      </header>
+      {loading && <p className="knowledge-state" role="status">Loading Hermes conversations…</p>}
+      {error && <p className="knowledge-state error" role="alert">{error}</p>}
+      {!open && <p className="knowledge-state">Open the import workflow to browse available conversations.</p>}
+      {open && page && !page.available && <p role="note" className="knowledge-state">Session import is unavailable on this Hermes build.</p>}
+      {open && page?.available && <>
+        {!page.sessions.length && <p className="knowledge-state">No conversations on this page.</p>}
+        <ul className="knowledge-memory-rows warlock-workflow-rows">{page.sessions.map(row => {
           const status = statuses[row.session_id] ?? row;
-          return <li key={row.session_id} className="rly-import-row">
+          return <li key={row.session_id} className="knowledge-memory-row warlock-source-row">
             {!readOnly && !review && <Checkbox aria-label={"Select " + row.title}
               checked={selected.includes(row.session_id)} disabled={busy || !canSelect(status)}
               onCheckedChange={checked => setSelected(current => checked
@@ -187,31 +191,48 @@ export function Sources({ host, readOnly, captureStatus }: {
                 : current.filter(id => id !== row.session_id))} />}
             <div>
               <strong>{row.title}</strong>
-              <p>{labels[status.status]} · {row.message_count} messages{row.project_name && " · " + row.project_name}</p>
-              <p className="rly-path">{row.session_id}</p>
-              <p>Created {new Date(row.started_at * 1000).toLocaleString()} · Last activity {new Date(row.last_activity_at * 1000).toLocaleString()}</p>
-              {status.reason && <p>{describeReason(status.reason)}</p>}
+              <span>{labels[status.status]} · {row.message_count} messages{row.project_name && " · " + row.project_name}</span>
+              <small className="warlock-source-id">{row.session_id}</small>
+              <span>Created {new Date(row.started_at * 1000).toLocaleString()} · Last activity {new Date(row.last_activity_at * 1000).toLocaleString()}</span>
+              {status.reason && <span>{describeReason(status.reason)}</span>}
             </div>
           </li>;
         })}</ul>
-        <div className="rly-actions">
+        <div className="warlock-workflow-actions">
           <Button disabled={review || search.offset === 0} onClick={() => setSearch({ ...search, offset: Math.max(0, search.offset - 16) })}>Previous page</Button>
           <Button disabled={review || page.next_offset === null} onClick={() => {
             if (page.next_offset !== null) setSearch({ ...search, offset: page.next_offset });
           }}>Next page</Button>
           {!review && !readOnly && <Button disabled={!destination || !selected.length} onClick={() => setReview(true)}>Review selected ({selected.length})</Button>}
         </div>
-        {review && destination && <section className="rly-confirm" aria-label="Review import">
+        {poll > 0 && <p role="status" className="knowledge-muted">Refreshing import status…</p>}
+      </>}
+    </main>
+    <aside className="knowledge-inspector warlock-workflow-inspector" aria-label="Import review">
+      <span className="knowledge-nav-label">Import</span>
+      {open && page?.available && <>
+        <label className="warlock-source-destination">Import destination
+          <Select label="Import destination" value={destinationId} disabled={!!readOnly || review || busy}
+            onValueChange={setDestinationId} options={[{ value: "", label: "Choose an authorized REL" },
+              ...page.destinations.map(row => ({ value: row.owner_id, label: row.label }))]} />
+        </label>
+        <section className="knowledge-inspector-section">
+          <h3>Selection</h3><p>{selected.length} of 8 conversations selected</p>
+          {destination && <p className="knowledge-provenance">Destination: {destination.label}</p>}
+        </section>
+        {review && destination && <section className="knowledge-inspector-section" aria-label="Review import">
           <h3>Review import</h3>
           <p>Import {selected.length} selected {selected.length === 1 ? "conversation" : "conversations"} into {destination.label}?</p>
-          <ul>{page.sessions.filter(row => selected.includes(row.session_id)).map(row => <li key={row.session_id}>{row.title}</li>)}</ul>
-          <div className="rly-actions">
+          <ul className="warlock-source-review-list">{page.sessions.filter(row => selected.includes(row.session_id)).map(row => <li key={row.session_id}>{row.title}</li>)}</ul>
+          <div className="warlock-workflow-actions">
             <Button disabled={busy} onClick={() => void submit()}>{busy ? "Importing…" : "Import selected"}</Button>
             <Button disabled={busy} onClick={() => setReview(false)}>Cancel</Button>
           </div>
         </section>}
-        {poll > 0 && <p role="status">Refreshing import status…</p>}
       </>}
-    </>}
+      {error && <p role="alert" className="knowledge-inline-error">{error}</p>}
+      {busy && <p role="status">Importing selected conversations…</p>}
+      {!open && <p className="knowledge-muted">Select conversations to review an authorized import.</p>}
+    </aside>
   </section>;
 }

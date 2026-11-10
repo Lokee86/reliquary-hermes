@@ -1,0 +1,35 @@
+/* Setup and Sources reuse the Warlock three panel workbench and list language. */
+.warlock-workflow {
+  height: 100%;
+  min-height: 70vh;
+  align-items: stretch;
+  align-content: stretch;
+}
+.warlock-workflow-nav, .warlock-workflow-inspector { min-height: 70vh; overflow-y: auto; }
+.warlock-workflow-center { min-height: 70vh; grid-template-rows: auto minmax(0, 1fr); }
+.warlock-workflow-center form { display: flex; min-height: 0; flex-direction: column; }
+.warlock-workflow-center fieldset { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; border: 0; padding: 0; margin: 0; }
+.warlock-workflow-rows { min-height: 0; overflow: auto; align-content: start; }
+.warlock-setup-row { display: block; }
+.warlock-setup-row > div { min-width: 0; display: grid; gap: .45rem; }
+.warlock-setup-row strong { overflow-wrap: anywhere; }
+.warlock-setup-path { display: grid; gap: .35rem; }
+.warlock-setup-path input { min-width: 0; width: 100%; }
+.warlock-workflow-path, .warlock-workflow-paths { overflow-wrap: anywhere; }
+.warlock-workflow-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; margin-block: .6rem; }
+.warlock-projects { margin: .5rem; }
+.warlock-source-search { display: flex; flex-wrap: wrap; align-items: end; gap: .45rem; min-width: min(100%, 20rem); }
+.warlock-source-search .knowledge-search-label { flex: 1 1 12rem; }
+.warlock-source-row { list-style: none; }
+.warlock-source-row > div { gap: .35rem; }
+.warlock-source-row .warlock-source-id { overflow-wrap: anywhere; white-space: normal; }
+.warlock-source-destination { display: grid; gap: .4rem; }
+.warlock-source-review-list { overflow-wrap: anywhere; }
+@container (max-width: 50rem) {
+  .warlock-workflow { grid-template-columns: minmax(8.5rem, 10rem) minmax(0, 1fr); }
+  .warlock-workflow-inspector { grid-column: 1 / -1; border-left: 0; border-top: 1px solid #211e28; }
+}
+@container (max-width: 34rem) {
+  .warlock-workflow { grid-template-columns: minmax(0, 1fr); }
+  .warlock-workflow-nav { border-right: 0; border-bottom: 1px solid #211e28; }
+}

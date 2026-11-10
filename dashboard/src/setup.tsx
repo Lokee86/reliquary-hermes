@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { SetupCandidate, SetupCreateKind, SetupDialogMode, SetupDialogResult, SetupPicker,
   SetupProjectInventory, SetupReport, SetupStatus } from "../types";
 import type { HostBoundary, JsonTransport } from "./host";
+import "./warlock-workflows.css";
 
 const setupPath = "/setup-v1/";
 const errorMessages: Record<string, string> = {
@@ -174,84 +175,105 @@ export function Setup({ host, status, readOnly, onConnected }: {
   }
 
   function pathField(target: Target, check?: SetupReport["main_rel"] | SetupReport["config"]) {
-    return <section className="rly-setup-card" aria-label={target.label}>
-      <h3>{target.label}</h3>
-      {manual ? <label className="rly-field">{target.label} path
-        <Input value={target.value} onChange={event => change(target.change, event.currentTarget.value)}
-          autoComplete="off" maxLength={4096} />
-      </label> : <p className="rly-path">{target.value || "No file selected"}</p>}
-      <div className="rly-actions">
-        <Button type="button" disabled={!webDialogs && !host.pickOpenPath} onClick={() => void pick(target, false)}>Select {target.kind}</Button>
-        {target.createKind && canWrite && <>
-          <Button type="button" disabled={!webDialogs && !host.pickSavePath} onClick={() => void pick(target, true)}>Create {target.kind}</Button>
-          {manual && <Button type="button" disabled={!validLocalPath(target.value.trim())}
-            onClick={() => setConfirm({ mode: "create", target, path: target.value.trim() })}>Create at this path</Button>}
-        </>}
-        {target.projectId && target.value && canWrite &&
-          <Button type="button" onClick={() => change(target.change, "")}>Use General</Button>}
+    return <section className="knowledge-memory-row warlock-setup-row" aria-label={target.label}>
+      <div>
+        <strong>{target.label}</strong>
+        {manual ? <label className="warlock-setup-path">{target.label} path
+          <Input value={target.value} onChange={event => change(target.change, event.currentTarget.value)}
+            autoComplete="off" maxLength={4096} />
+        </label> : <p className="knowledge-provenance warlock-workflow-path">{target.value || "No file selected"}</p>}
+        <div className="warlock-workflow-actions">
+          <Button type="button" disabled={!webDialogs && !host.pickOpenPath} onClick={() => void pick(target, false)}>Select {target.kind}</Button>
+          {target.createKind && canWrite && <>
+            <Button type="button" disabled={!webDialogs && !host.pickSavePath} onClick={() => void pick(target, true)}>Create {target.kind}</Button>
+            {manual && <Button type="button" disabled={!validLocalPath(target.value.trim())}
+              onClick={() => setConfirm({ mode: "create", target, path: target.value.trim() })}>Create at this path</Button>}
+          </>}
+          {target.projectId && target.value && canWrite &&
+            <Button type="button" onClick={() => change(target.change, "")}>Use General</Button>}
+        </div>
+        {check && <p role="status">{check.accepted && check.opened ? "Accepted" : check.accepted ? "No file selected" : "Rejected"}
+          {"kind" in check && check.kind && " · " + check.kind.toUpperCase()}
+          {check.error && " · " + check.error.replaceAll("_", " ")}</p>}
       </div>
-      {check && <p role="status">{check.accepted && check.opened ? "Accepted" : check.accepted ? "No file selected" : "Rejected"}
-        {"kind" in check && check.kind && " · " + check.kind.toUpperCase()}
-        {check.error && " · " + check.error.replaceAll("_", " ")}</p>}
     </section>;
   }
 
-  return <section className="rly-setup rly-section" aria-label="Reliquary setup">
-    <h2>Connect owners</h2>
-    <p>{status.runtime_detected ? "Reliquary runtime detected" : "Reliquary runtime unavailable"}</p>
-    {!webDialogs && !host.pickOpenPath && <p role="note">Native file dialogs are unavailable for this connection.</p>}
-    <form onSubmit={event => { event.preventDefault(); if (canWrite) void validate(true); }}>
-      <fieldset disabled={busy || !!confirm}>
-        <Button type="button" aria-expanded={manual} onClick={() => setManual(value => !value)}>
-          {manual ? "Hide manual paths" : "Enter path manually"}
-        </Button>
-        {pathField({ kind: "REL", label: "General memory", value: main, change: setMain, createKind: "general_rel" }, report?.main_rel)}
-        {pathField({ kind: "PHY", label: "Active identity", value: phy, change: setPhy, createKind: "phy" }, report?.active_phy)}
-        {pathField({ kind: "config", label: "Reliquary configuration", value: config, change: setConfig }, report?.config)}
-        {status.configured && <details className="rly-setup-card">
-          <summary>Project memories</summary>
-          <p>Create or manage projects in Hermes, then refresh this list.</p>
-          <Button type="button" onClick={() => {
-            setInventory(null); setInventoryError(false); setReloadProjects(value => value + 1);
-          }}>Refresh projects</Button>
-          {inventoryError && <p role="alert">Could not load Hermes projects.</p>}
-          {!inventory && !inventoryError && <p role="status">Loading Hermes projects…</p>}
-          {inventory && !inventory.routing_available && <p role="note">New project conversations use General memory on this Hermes build.</p>}
-          {inventory?.projects.map(project => inventory.routing_available
-            ? <div key={project.id}>{pathField({
-              kind: "REL", label: project.name, value: projects[project.id] ?? "", projectId: project.id, createKind: "project_rel",
-              change: value => setProjects(previous => ({ ...previous, [project.id]: value })),
-            }, report?.projects[project.id])}</div>
-            : <p key={project.id}>{project.name}{projects[project.id] && " · " + projects[project.id]}</p>)}
-          {inventory?.projects.length === 0 && <p>This profile has no active Hermes projects.</p>}
-        </details>}
-        {canWrite && <div className="rly-actions">
-          <Button type="button" onClick={() => void validate(false)}>Validate</Button>
-          <Button type="submit" disabled={status.configured && !inventory && !inventoryError}>Review and connect</Button>
-        </div>}
-      </fieldset>
-    </form>
-    {confirm && <section className="rly-confirm" aria-label={confirm.mode === "create" ? "Confirm owner creation" : "Review connection"}>
-      <h3>{confirm.mode === "create" ? "Confirm owner creation" : "Review connection"}</h3>
-      {confirm.mode === "create" ? <p className="rly-path">Create a new owner at {confirm.path}</p> : <>
-        <p className="rly-path">{confirm.candidate.main_rel}</p><p className="rly-path">{confirm.candidate.active_phy}</p>
-        {inventoryError && <p role="note">Hermes project routes could not be checked.</p>}
-        {status.configured && <p>Existing sessions keep their accepted memory routes.</p>}
-      </>}
-      <div className="rly-actions">
-        <Button type="button" disabled={busy} onClick={() => void commit()}>
-          {confirm.mode === "create" ? "Create " + confirm.target.kind : "Connect Reliquary"}
-        </Button>
-        <Button type="button" disabled={busy} onClick={() => setConfirm(null)}>Cancel</Button>
+  return <section className="knowledge-panel warlock-workflow" aria-label="Reliquary setup">
+    <aside className="knowledge-nav warlock-workflow-nav" aria-label="Setup navigation">
+      <div className="knowledge-heading"><span className="knowledge-nav-label">Setup</span><strong>Connect owners</strong></div>
+      <p className="knowledge-muted">{status.runtime_detected ? "Reliquary runtime detected" : "Reliquary runtime unavailable"}</p>
+      {!webDialogs && !host.pickOpenPath && <p role="note" className="knowledge-muted">Native file dialogs are unavailable for this connection.</p>}
+      <div className="knowledge-inspector-section">
+        <h3>Owner paths</h3>
+        <p className="knowledge-muted">Choose the General REL, active PHY, and configuration used by this Hermes profile.</p>
       </div>
-    </section>}
-    {created.length > 0 && <div role="status"><p>Created owner files remain on disk if connection fails.</p>
-      <ul className="rly-path">{created.map(path => <li key={path}>{path}</li>)}</ul></div>}
-    {busy && <p role="status">Working…</p>}
-    {error && <p role="alert">{error}</p>}
-    {report && <p role={report.valid ? "status" : "alert"}>{report.valid ? "Validation passed."
-      : report.topology_error === "owner_topology_changed"
-        ? "Keep the accepted General REL, PHY, and dedicated owners when adding project RELs."
-        : "Validation failed. Check the rejected files."}</p>}
+      <Button type="button" aria-expanded={manual} disabled={busy || !!confirm}
+        onClick={() => setManual(value => !value)}>{manual ? "Hide manual paths" : "Enter path manually"}</Button>
+      {status.configured && <p className="knowledge-muted">Existing sessions keep their accepted memory routes.</p>}
+    </aside>
+    <main className="knowledge-memory-list warlock-workflow-center" aria-label="Owner files">
+      <header><div><h2>Connect owners</h2><span>Review the files and routing used by this profile.</span></div></header>
+      <form onSubmit={event => { event.preventDefault(); if (canWrite) void validate(true); }}>
+        <fieldset disabled={busy || !!confirm}>
+          <div className="knowledge-memory-rows warlock-workflow-rows">
+            {pathField({ kind: "REL", label: "General memory", value: main, change: setMain, createKind: "general_rel" }, report?.main_rel)}
+            {pathField({ kind: "PHY", label: "Active identity", value: phy, change: setPhy, createKind: "phy" }, report?.active_phy)}
+            {pathField({ kind: "config", label: "Reliquary configuration", value: config, change: setConfig }, report?.config)}
+            {status.configured && <details className="knowledge-create warlock-projects">
+              <summary>Project memories</summary>
+              <p>Create or manage projects in Hermes, then refresh this list.</p>
+              <Button type="button" onClick={() => {
+                setInventory(null); setInventoryError(false); setReloadProjects(value => value + 1);
+              }}>Refresh projects</Button>
+              {inventoryError && <p role="alert">Could not load Hermes projects.</p>}
+              {!inventory && !inventoryError && <p role="status">Loading Hermes projects…</p>}
+              {inventory && !inventory.routing_available && <p role="note">New project conversations use General memory on this Hermes build.</p>}
+              {inventory?.projects.map(project => inventory.routing_available
+                ? <div key={project.id}>{pathField({
+                  kind: "REL", label: project.name, value: projects[project.id] ?? "", projectId: project.id, createKind: "project_rel",
+                  change: value => setProjects(previous => ({ ...previous, [project.id]: value })),
+                }, report?.projects[project.id])}</div>
+                : <p key={project.id}>{project.name}{projects[project.id] && " · " + projects[project.id]}</p>)}
+              {inventory?.projects.length === 0 && <p>This profile has no active Hermes projects.</p>}
+            </details>}
+          </div>
+          {canWrite && <div className="warlock-workflow-actions">
+            <Button type="button" onClick={() => void validate(false)}>Validate</Button>
+            <Button type="submit" disabled={status.configured && !inventory && !inventoryError}>Review and connect</Button>
+          </div>}
+        </fieldset>
+      </form>
+    </main>
+    <aside className="knowledge-inspector warlock-workflow-inspector" aria-label="Setup review">
+      <span className="knowledge-nav-label">Status</span>
+      {busy && <p role="status">Working…</p>}
+      {error && <p role="alert" className="knowledge-inline-error">{error}</p>}
+      {report && <section className="knowledge-inspector-section"><h3>Validation</h3>
+        <p role={report.valid ? "status" : "alert"}>{report.valid ? "Validation passed."
+          : report.topology_error === "owner_topology_changed"
+            ? "Keep the accepted General REL, PHY, and dedicated owners when adding project RELs."
+            : "Validation failed. Check the rejected files."}</p>
+      </section>}
+      {confirm && <section className="knowledge-inspector-section" aria-label={confirm.mode === "create" ? "Confirm owner creation" : "Review connection"}>
+        <h3>{confirm.mode === "create" ? "Confirm owner creation" : "Review connection"}</h3>
+        {confirm.mode === "create" ? <p className="knowledge-provenance warlock-workflow-path">Create a new owner at <span>{confirm.path}</span></p> : <>
+          <p className="knowledge-provenance warlock-workflow-path">{confirm.candidate.main_rel}</p><p className="knowledge-provenance warlock-workflow-path">{confirm.candidate.active_phy}</p>
+          {inventoryError && <p role="note">Hermes project routes could not be checked.</p>}
+          {status.configured && <p>Existing sessions keep their accepted memory routes.</p>}
+        </>}
+        <div className="warlock-workflow-actions">
+          <Button type="button" disabled={busy} onClick={() => void commit()}>
+            {confirm.mode === "create" ? "Create " + confirm.target.kind : "Connect Reliquary"}
+          </Button>
+          <Button type="button" disabled={busy} onClick={() => setConfirm(null)}>Cancel</Button>
+        </div>
+      </section>}
+      {created.length > 0 && <section className="knowledge-inspector-section" role="status">
+        <h3>Created files</h3><p>Created owner files remain on disk if connection fails.</p>
+        <ul className="knowledge-provenance warlock-workflow-paths">{created.map(path => <li key={path}>{path}</li>)}</ul>
+      </section>}
+      {!confirm && !report && !error && !created.length && <p className="knowledge-muted">Choose owner files, then validate or review the connection.</p>}
+    </aside>
   </section>;
 }
