@@ -1,13 +1,15 @@
 //! One profile-scoped local service and its owner registry.
 use crate::{
+    graph_render_host::GraphRenderHost,
     registry::{OwnerConfig, Registry, RegistryError},
     retrieval::RetrievalService,
     runtime::{HEARTBEAT_SECONDS, ReconciliationScope, RuntimeRegistry},
     service_http::{
-        ATTACH, DASHBOARD_READ, DASHBOARD_TOPOLOGY, FORBIDDEN, HttpError, HttpRequest,
-        HttpResponse, INVALID, MAX_WIRE_BYTES, RETRIEVAL_PREPARE, RETRIEVAL_TOOL, RUNTIME_ATTACH,
-        RUNTIME_DETACH, RUNTIME_HEARTBEAT, RUNTIME_SCOPE, SOURCE, SOURCE_STATUS, TransportKey,
-        UNAVAILABLE, hex, read_request, write_response,
+        ATTACH, DASHBOARD_READ, DASHBOARD_TOPOLOGY, FORBIDDEN, GRAPH_RENDER_EDGE_CHUNK,
+        GRAPH_RENDER_NODE_CHUNK, GRAPH_RENDER_PREPARE, GRAPH_RENDER_RESOLVE, HttpError,
+        HttpRequest, HttpResponse, INVALID, MAX_WIRE_BYTES, RETRIEVAL_PREPARE, RETRIEVAL_TOOL,
+        RUNTIME_ATTACH, RUNTIME_DETACH, RUNTIME_HEARTBEAT, RUNTIME_SCOPE, SOURCE, SOURCE_STATUS,
+        TransportKey, UNAVAILABLE, hex, read_request, write_response,
     },
     service_protocol::{
         AttachRequest, Discovery, HERMES_REVISION, Operation, PROTOCOL_VERSION, ProviderRequest,
@@ -58,6 +60,7 @@ struct Service {
     key: TransportKey,
     sources: Mutex<SourceService>,
     retrieval: Mutex<RetrievalService>,
+    graph_render: Mutex<GraphRenderHost>,
     retrieval_waiter: Mutex<()>,
     runtimes: Mutex<RuntimeRegistry>,
     closing: AtomicBool,
@@ -103,6 +106,10 @@ impl Service {
                 &request.body,
             ),
             DASHBOARD_TOPOLOGY => self.dashboard_topology(&request.body),
+            GRAPH_RENDER_PREPARE => self.graph_render(GRAPH_RENDER_PREPARE, &request.body),
+            GRAPH_RENDER_NODE_CHUNK => self.graph_render(GRAPH_RENDER_NODE_CHUNK, &request.body),
+            GRAPH_RENDER_EDGE_CHUNK => self.graph_render(GRAPH_RENDER_EDGE_CHUNK, &request.body),
+            GRAPH_RENDER_RESOLVE => self.graph_render(GRAPH_RENDER_RESOLVE, &request.body),
             RETRIEVAL_PREPARE => self.prepare_retrieval(&request.body),
             RUNTIME_ATTACH => self.runtime_attach(&request.body),
             RUNTIME_HEARTBEAT => self.runtime_heartbeat(&request.body),
@@ -111,6 +118,22 @@ impl Service {
             RETRIEVAL_TOOL => self.request(&request.body, accepted_at, true),
             _ => self.request(&request.body, accepted_at, false),
         }
+    }
+
+    fn graph_render(&self, path: &str, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
+        let operation = match path {
+            GRAPH_RENDER_PREPARE => "prepare",
+            GRAPH_RENDER_NODE_CHUNK => "node-chunk",
+            GRAPH_RENDER_EDGE_CHUNK => "edge-chunk",
+            GRAPH_RENDER_RESOLVE => "resolve",
+            _ => return Err(INVALID),
+        };
+        self.graph_render.lock().map_err(|_| UNAVAILABLE)?.handle(
+            operation,
+            &self.instance,
+            &self.registry,
+            bytes,
+        )
     }
 
     fn runtime_attach(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
@@ -687,6 +710,7 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
         registry: Mutex::new(registry),
         sources: Mutex::new(sources),
         retrieval: Mutex::new(RetrievalService::open(state_dir)?),
+        graph_render: Mutex::new(GraphRenderHost::default()),
         retrieval_waiter: Mutex::new(()),
         runtimes: Mutex::new(runtimes),
         closing: AtomicBool::new(false),

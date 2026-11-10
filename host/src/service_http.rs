@@ -8,6 +8,8 @@ use std::{
 };
 
 pub(crate) const MAX_WIRE_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_GRAPH_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const MAX_GRAPH_CHUNK_BYTES: usize = 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 8 * 1024;
 const READ_DEADLINE: Duration = Duration::from_secs(4);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -20,6 +22,10 @@ pub(crate) const SOURCE: &str = "/v1/source";
 pub(crate) const SOURCE_STATUS: &str = "/v1/source/status";
 pub(crate) const DASHBOARD_READ: &str = "/v1/dashboard/read";
 pub(crate) const DASHBOARD_TOPOLOGY: &str = "/v1/dashboard/topology";
+pub(crate) const GRAPH_RENDER_PREPARE: &str = "/v1/graph-render/prepare";
+pub(crate) const GRAPH_RENDER_NODE_CHUNK: &str = "/v1/graph-render/node-chunk";
+pub(crate) const GRAPH_RENDER_EDGE_CHUNK: &str = "/v1/graph-render/edge-chunk";
+pub(crate) const GRAPH_RENDER_RESOLVE: &str = "/v1/graph-render/resolve";
 pub(crate) const RUNTIME_ATTACH: &str = "/v1/runtime/attach";
 pub(crate) const RUNTIME_HEARTBEAT: &str = "/v1/runtime/heartbeat";
 pub(crate) const RUNTIME_DETACH: &str = "/v1/runtime/detach";
@@ -137,7 +143,10 @@ impl HttpError {
     pub(crate) fn into_response(self) -> HttpResponse {
         HttpResponse {
             status: self.status,
-            body: json!({"code": self.code, "retryable": self.retryable}),
+            body: ResponseBody::Json {
+                value: json!({"code": self.code, "retryable": self.retryable}),
+                limit: MAX_WIRE_BYTES,
+            },
         }
     }
 }
@@ -151,12 +160,40 @@ const TOO_LARGE: HttpError = HttpError::new(413, "wire_limit", false);
 
 pub(crate) struct HttpResponse {
     pub(crate) status: u16,
-    pub(crate) body: Value,
+    pub(crate) body: ResponseBody,
+}
+
+pub(crate) enum ResponseBody {
+    Json { value: Value, limit: usize },
+    Binary(Vec<u8>),
 }
 
 impl HttpResponse {
     pub(crate) fn ok(body: Value) -> Self {
-        Self { status: 200, body }
+        Self {
+            status: 200,
+            body: ResponseBody::Json {
+                value: body,
+                limit: MAX_WIRE_BYTES,
+            },
+        }
+    }
+
+    pub(crate) fn graph_manifest(body: Value) -> Self {
+        Self {
+            status: 200,
+            body: ResponseBody::Json {
+                value: body,
+                limit: MAX_GRAPH_MANIFEST_BYTES,
+            },
+        }
+    }
+
+    pub(crate) fn binary(body: Vec<u8>) -> Self {
+        Self {
+            status: 200,
+            body: ResponseBody::Binary(body),
+        }
     }
 }
 
@@ -220,6 +257,10 @@ fn parse_headers(bytes: &[u8], expected_host: &str) -> Result<RequestHeaders, Ht
         Some(SOURCE_STATUS) => SOURCE_STATUS,
         Some(DASHBOARD_READ) => DASHBOARD_READ,
         Some(DASHBOARD_TOPOLOGY) => DASHBOARD_TOPOLOGY,
+        Some(GRAPH_RENDER_PREPARE) => GRAPH_RENDER_PREPARE,
+        Some(GRAPH_RENDER_NODE_CHUNK) => GRAPH_RENDER_NODE_CHUNK,
+        Some(GRAPH_RENDER_EDGE_CHUNK) => GRAPH_RENDER_EDGE_CHUNK,
+        Some(GRAPH_RENDER_RESOLVE) => GRAPH_RENDER_RESOLVE,
         Some(RUNTIME_ATTACH) => RUNTIME_ATTACH,
         Some(RUNTIME_HEARTBEAT) => RUNTIME_HEARTBEAT,
         Some(RUNTIME_DETACH) => RUNTIME_DETACH,
@@ -330,8 +371,15 @@ pub(crate) fn write_response(
     proof: Option<(&TransportKey, &[u8; 32])>,
 ) -> io::Result<()> {
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
-    let body = serde_json::to_vec(&response.body).map_err(io::Error::other)?;
-    if body.len() > MAX_WIRE_BYTES {
+    let (body, content_type, limit) = match response.body {
+        ResponseBody::Json { value, limit } => (
+            serde_json::to_vec(&value).map_err(io::Error::other)?,
+            "application/json",
+            limit,
+        ),
+        ResponseBody::Binary(body) => (body, "application/octet-stream", MAX_GRAPH_CHUNK_BYTES),
+    };
+    if body.len() > limit {
         return Err(io::Error::other("wire_limit"));
     }
     let status = response.status;
@@ -347,7 +395,7 @@ pub(crate) fn write_response(
     };
     write!(
         stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n",
         body.len()
     )?;
     if let Some((key, nonce)) = proof {
