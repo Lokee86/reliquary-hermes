@@ -103,10 +103,51 @@ try {
     .or(page.getByRole("link", { name: "Reliquary", exact: true }));
   await nav.first().click({ timeout: 240000 });
   await exerciseKnowledge(page, fixture, "desktop");
+  await exerciseGraphSelection(page, fixture);
 } catch (error) {
   const page = app.windows()[0];
   if (page) await page.screenshot({ path: join(scratch, "failed-desktop.png"), timeout: 10000 }).catch(() => {});
   throw error;
 } finally {
   await app.close();
+}
+
+async function exerciseGraphSelection(page, fixture) {
+  const app = page.locator(".rly-app");
+  const sections = app.getByRole("navigation", { name: "Reliquary sections" });
+  await sections.getByRole("button", { name: "Knowledge", exact: true }).click();
+  await app.getByRole("button", { name: "Graph", exact: true }).click();
+  const graph = app.locator(".knowledge-graph-wrap");
+  await graph.locator('[data-graph-ready="true"]').waitFor({ timeout: 40000 });
+  if (fixture.community) {
+    const nav = app.getByRole("complementary", { name: "Knowledge navigation" });
+    if (fixture.community.onNextPage) await nav.getByRole("button", { name: "Next community page", exact: true }).click();
+    await nav.getByRole("button").filter({ hasText: fixture.community.renamed ?? fixture.community.name }).first().click();
+    await graph.locator(`[data-graph-node-count="${fixture.community.memberCount}"]`).waitFor({ timeout: 40000 });
+    await graph.locator('[data-graph-ready="true"]').waitFor({ timeout: 40000 });
+  }
+
+  const canvas = graph.locator("canvas");
+  const box = await canvas.boundingBox();
+  assert(box, "Graph canvas has no visible bounds.");
+  const inspector = app.getByRole("complementary", { name: "Memory inspector" });
+  let selected = false;
+  const samples = [0.15, 0.325, 0.5, 0.675, 0.85];
+  for (const fy of samples) {
+    for (const fx of samples) {
+      await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
+      try {
+        await inspector.getByText("Lifecycle", { exact: true }).waitFor({ timeout: 500 });
+        selected = true;
+        break;
+      } catch { /* Try the next visible point location. */ }
+    }
+    if (selected) break;
+  }
+  assert(selected, "Clicking visible graph node locations did not select a Memory.");
+  await app.getByRole("button", { name: "List", exact: true }).click();
+  await app.locator(".knowledge-memory-row[aria-pressed='true']").waitFor({ timeout: 30000 });
+  await app.getByRole("button", { name: "Graph", exact: true }).click();
+  await graph.locator('[data-graph-ready="true"]').waitFor({ timeout: 40000 });
+  await inspector.getByText("Lifecycle", { exact: true }).waitFor({ timeout: 30000 });
 }

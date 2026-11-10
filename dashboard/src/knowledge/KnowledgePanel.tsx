@@ -49,6 +49,7 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
   const [communitiesUnavailable, setCommunitiesUnavailable] = useState(false);
   const [cursor, setCursor] = useState<string | null>(null);
   const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(initialMemoryId ?? null);
+  const [validatedSelection, setValidatedSelection] = useState<{ key: string; eligible: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
@@ -56,6 +57,16 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
   const { Button, Input, Checkbox } = controls;
   const writable = !mutationBlocked && owner.owner_kind === "REL" && owner.capabilities.view && owner.capabilities.manage;
   const communityOwnerKey = `${owner.owner_id}:${owner.generation}:${owner.cut}`;
+  const normalizedQuery = search.trim();
+  const normalizedCategory = category.trim();
+  const normalizedMemoryType = memoryType.trim();
+  const graphFilters = useMemo<GraphRenderFilterScope>(() => ({
+    query: normalizedQuery,
+    category: normalizedCategory || undefined,
+    memoryType: normalizedMemoryType || undefined,
+    communityId: communityId ?? undefined,
+    includeArchived: showArchived,
+  }), [normalizedQuery, normalizedCategory, normalizedMemoryType, communityId, showArchived]);
 
   useEffect(() => {
     if (mode !== "list") return;
@@ -64,11 +75,11 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
     setError(null);
     const filters = {
       ...EMPTY_FILTERS,
-      query: search.trim(),
-      category: category.trim() || null,
-      memory_type: memoryType.trim() || null,
-      lifecycle: showArchived ? null : "active" as const,
-      community_id: communityId,
+      query: graphFilters.query ?? "",
+      category: graphFilters.category ?? null,
+      memory_type: graphFilters.memoryType ?? null,
+      lifecycle: graphFilters.includeArchived ? null : "active" as const,
+      community_id: graphFilters.communityId ?? null,
     };
     void client.read(scope, "ui.memory_list", { cursor, limit: PAGE_SIZE, filters }, controller.signal).then(memoryPage => {
       if (controller.signal.aborted) return;
@@ -78,7 +89,7 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason));
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [client, scope, mode, cursor, search, category, memoryType, showArchived, communityId, reload, owner.capabilities.community]);
+  }, [client, scope, mode, cursor, graphFilters, reload, owner.capabilities.community]);
 
   useEffect(() => {
     if (!owner.capabilities.community) return;
@@ -102,24 +113,24 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
     () => graphTransportFor(owner, sessionId, graphController.signal),
     [graphTransportFor, owner, sessionId, graphController],
   );
-  const graphFilters = useMemo<GraphRenderFilterScope>(() => ({
-    query: search.trim(),
-    category: category.trim() || undefined,
-    memoryType: memoryType.trim() || undefined,
-    communityId: communityId ?? undefined,
-    includeArchived: showArchived,
-  }), [search, category, memoryType, communityId, showArchived]);
+  const selectionKey = JSON.stringify([
+    owner.owner_id, owner.generation, owner.cut, sessionId, selectedMemoryId, graphFilters,
+  ]);
 
   useEffect(() => {
-    if (mode !== "list" || !selectedMemoryId) return;
+    if (!selectedMemoryId) return;
     const controller = new AbortController();
     void graphSelectionEligible(transport, owner, sessionId, selectedMemoryId, graphFilters, controller.signal)
       .then((eligible) => {
-        if (!controller.signal.aborted && !eligible) setSelectedMemoryId((current) => current === selectedMemoryId ? null : current);
+        if (controller.signal.aborted) return;
+        setValidatedSelection({ key: selectionKey, eligible });
+        if (!eligible) setSelectedMemoryId((current) => current === selectedMemoryId ? null : current);
       })
-      .catch(() => { /* Keep inspection available if eligibility could not be refreshed. */ });
+      .catch(() => {
+        if (!controller.signal.aborted) setValidatedSelection({ key: selectionKey, eligible: true });
+      });
     return () => controller.abort();
-  }, [transport, owner, sessionId, selectedMemoryId, graphFilters, mode]);
+  }, [transport, owner, sessionId, selectedMemoryId, graphFilters, selectionKey]);
 
   const refresh = useCallback((memoryId?: string) => {
     setMemories(null);
@@ -158,6 +169,8 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
   }
 
   const graphSelected = useCallback((memoryId: string | null) => setSelectedMemoryId(memoryId), []);
+  const inspectorMemoryId = validatedSelection?.key === selectionKey && validatedSelection.eligible
+    ? selectedMemoryId : null;
 
   return (
     <section className="knowledge-panel" data-view={mode} aria-label="Knowledge">
@@ -241,7 +254,7 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
       </section>
 
       <KnowledgeInspector key={`${owner.owner_id}:${owner.cut}:${selectedMemoryId ?? "none"}`}
-        client={client} scope={scope} memoryId={selectedMemoryId} communities={communityPage?.items ?? []} controls={controls}
+        client={client} scope={scope} memoryId={inspectorMemoryId} communities={communityPage?.items ?? []} controls={controls}
         blocked={mutationBlocked} writable={writable}
         onChanged={refresh} onOpenMemory={setSelectedMemoryId} />
       {mutationBlocked && <div className="knowledge-capability-notice" role="status">{mutationBlocked}</div>}
