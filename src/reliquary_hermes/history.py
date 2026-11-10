@@ -4,7 +4,7 @@ from math import isfinite
 from threading import BoundedSemaphore
 from time import sleep
 
-from .capture_policy import capture_cutoff, history_supported, open_session_store
+from .capture_policy import capture_cutoff, unbounded_history_supported, open_session_store
 from .client import HostClient, HostUnavailable
 from .settings import read_settings, read_token
 from .source_capture import capture_snapshot
@@ -14,7 +14,6 @@ from .validation import ContractError, identifier, integer, obj, require, sequen
 _PAGE_SIZE = 16
 _OFFSET_LIMIT = 10_000
 _SELECTION_LIMIT = 8
-_MESSAGE_LIMIT = 128
 _INTERNAL_SOURCES = frozenset({"cron", "kanban", "oneshot", "recovered", "subagent", "tool"})
 _EMPTY_PAGE = {"available": False, "destinations": [], "sessions": [], "next_offset": None}
 _STATUS = {"available", "queued", "staged", "processing", "complete", "failed", "already_imported", "unavailable"}
@@ -99,7 +98,7 @@ def list_sessions(home, offset, q):
     offset = integer(offset, 0, _OFFSET_LIMIT)
     query = text(q, 512, blank=True).strip()
     require(len(query) <= 128, "history_query_too_long")
-    if not history_supported():
+    if not unbounded_history_supported():
         return _EMPTY_PAGE
     from .manual_delivery import import_status
 
@@ -120,8 +119,6 @@ def list_sessions(home, offset, q):
     for entry in sessions:
         session_id = entry["session_id"]
         entry.update(_status_view(session_id, statuses.get(session_id)))
-        if entry["status"] == "available" and entry["message_count"] > _MESSAGE_LIMIT:
-            entry.update(_view(session_id, "unavailable", "history_too_large"))
     next_offset = offset + _PAGE_SIZE
     return {"available": True, "destinations": destinations, "sessions": sessions,
             "next_offset": next_offset if len(rows) > _PAGE_SIZE and next_offset <= _OFFSET_LIMIT else None}
@@ -133,11 +130,23 @@ def _session_ids(value):
     return ids
 
 
+def _snapshot_windows(profile_id, session_id, messages):
+    """Cover the entire verified history with bounded, one-row-overlap source extensions."""
+    require(type(messages) is list and bool(messages), "history_identity_unavailable")
+    windows = []
+    for index in range(len(messages)):
+        # A new native import epoch carries one fresh turn. The previous turn
+        # is repeated solely to establish exact, signed source continuity.
+        start = max(0, index - 1)
+        windows.append(capture_snapshot(profile_id, session_id, messages[start:index + 1]))
+    return windows
+
+
 def _snapshot(db, owner, profile_id, session_id, cutoff):
-    """Read and normalize the installed host's redacted copy, never browser content."""
+    """Read Hermes's fully redacted, verified export and split only after its privacy pass."""
     row = db.get_session(session_id)
     require(_visible(row, owner, session_id, cutoff), "history_session_unavailable")
-    exported = db.export_history(session_id, profile_id=owner, max_messages=_MESSAGE_LIMIT)
+    exported = db.export_history(session_id, profile_id=owner, max_messages=None)
     require(type(exported) is dict, "history_session_unavailable")
     if exported.get("status") != "ready":
         reason = exported.get("reason")
@@ -146,7 +155,7 @@ def _snapshot(db, owner, profile_id, session_id, cutoff):
                 else "history_session_unavailable")
     require(exported["profile_id"] == owner and exported["session_id"] == session_id
             and exported["started_at"] == row["started_at"], "history_session_unavailable")
-    return capture_snapshot(profile_id, session_id, exported["messages"])
+    return _snapshot_windows(profile_id, session_id, exported["messages"])
 
 
 def queue(home, value):
@@ -164,7 +173,7 @@ def _queue(home, value):
     require(request["confirm"] is True, "history_confirmation_required")
     ids = _session_ids(request["session_ids"])
     owner_id = identifier(request["owner_id"])
-    require(history_supported(), "history_export_unavailable")
+    require(unbounded_history_supported(), "history_export_unavailable")
     settings, client = _client(home)
     require(owner_id in {item["owner_id"] for item in _destinations(client)}, "history_destination_denied")
     cutoff = capture_cutoff(home)
@@ -187,7 +196,7 @@ def status(home, value):
     from .manual_delivery import import_status
 
     ids = _session_ids(obj(value, {"session_ids"})["session_ids"])
-    require(history_supported(), "history_export_unavailable")
+    require(unbounded_history_supported(), "history_export_unavailable")
     settings, client = _client(home)
     cutoff = capture_cutoff(home)
     try:

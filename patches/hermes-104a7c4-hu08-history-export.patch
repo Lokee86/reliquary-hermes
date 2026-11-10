@@ -1,5 +1,5 @@
 diff --git a/hermes_state_common.py b/hermes_state_common.py
-index 47642b7fb7e888ff7812f0ac630c52ef7848c62f..0882547dc7102a7e1b1d3e6baa5fa5368edb4cd0 100644
+index 47642b7fb7e..0882547dc71 100644
 --- a/hermes_state_common.py
 +++ b/hermes_state_common.py
 @@ -483,6 +483,9 @@ CREATE TABLE IF NOT EXISTS sessions (
@@ -13,24 +13,24 @@ index 47642b7fb7e888ff7812f0ac630c52ef7848c62f..0882547dc7102a7e1b1d3e6baa5fa536
      ended_at REAL,
      end_reason TEXT,
 diff --git a/hermes_state_messages.py b/hermes_state_messages.py
-index f7ba486edd4ebb11e31051e0a31f225077afbb9d..2241cbc2c2e2fda94a589939a2159d292d153865 100644
+index f7ba486edd4..e5a1b0ff479 100644
 --- a/hermes_state_messages.py
 +++ b/hermes_state_messages.py
 @@ -46,6 +46,7 @@ _MESSAGE_WRITE_COLUMNS = tuple(
      re.findall(r"\w+", _INSERT_MESSAGE_SQL.split("(", 1)[1].split(")", 1)[0])
  )
  _MESSAGE_SCHEMA_KEYS = frozenset(_MESSAGE_WRITE_COLUMNS) | {"id", "compacted", "display_order"}
-+_HISTORY_EXPORT_MAX_BYTES = 256 * 1024
++
  _BUMP_GENERATION_SQL = """
              INSERT INTO conversation_generations (source, session_key, generation)
              VALUES (?, ?, 1)
-@@ -1435,6 +1436,133 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin,
+@@ -1435,6 +1436,131 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin,
                  rows.reverse()
          return [self._row_to_message_dict(row, warn_context="get_messages", summary_flag=True) for row in rows]
  
-+    HISTORY_EXPORT_VERSION = 1
++    HISTORY_EXPORT_VERSION = 2
 +
-+    def export_history(self, session_id: str, *, profile_id: str, max_messages: int = 128) -> dict[str, Any]:
++    def export_history(self, session_id: str, *, profile_id: str, max_messages: int | None = None) -> dict[str, Any]:
 +        """Return an owner-scoped, bounded, provider-redacted transcript copy for explicit history import.
 +
 +        This read API never changes or resumes the source session. It supports only unambiguous top-level
@@ -43,7 +43,7 @@ index f7ba486edd4ebb11e31051e0a31f225077afbb9d..2241cbc2c2e2fda94a589939a2159d29
 +
 +        if not isinstance(session_id, str) or not session_id.strip():
 +            return unavailable("history_session_unavailable")
-+        if type(max_messages) is not int or not 1 <= max_messages <= 128:
++        if max_messages is not None and (type(max_messages) is not int or max_messages < 1):
 +            return unavailable("history_unsupported")
 +        bound = max_messages
 +        try:
@@ -75,8 +75,8 @@ index f7ba486edd4ebb11e31051e0a31f225077afbb9d..2241cbc2c2e2fda94a589939a2159d29
 +
 +            # Include compacted display rows (the canonical visible history), exclude rewind/inactive rows,
 +            # and ask for one beyond the hard ceiling so truncation is never reported as success.
-+            rows = self.get_messages(session_id, include_compacted=True, limit=bound + 1)
-+            if len(rows) > bound:
++            rows = self.get_messages(session_id, include_compacted=True, limit=None if bound is None else bound + 1)
++            if bound is not None and len(rows) > bound:
 +                return unavailable("history_too_large")
 +            if not rows:
 +                return unavailable("history_identity_unavailable")
@@ -117,13 +117,11 @@ index f7ba486edd4ebb11e31051e0a31f225077afbb9d..2241cbc2c2e2fda94a589939a2159d29
 +                normalized.append(item)
 +
 +            try:
-+                transcript_bytes = len(json.dumps(
++                json.dumps(
 +                    normalized, ensure_ascii=False, allow_nan=False, separators=(",", ":")
-+                ).encode("utf-8"))
++                )
 +            except (TypeError, ValueError, UnicodeError, RecursionError):
 +                return unavailable("history_unsupported")
-+            if transcript_bytes > _HISTORY_EXPORT_MAX_BYTES:
-+                return unavailable("history_too_large")
 +
 +            # Match the installed MemoryManager's whole-transcript provider egress path exactly. If that
 +            # shared redactor cannot run, raw history must never fall through as a successful export.
@@ -159,7 +157,7 @@ index f7ba486edd4ebb11e31051e0a31f225077afbb9d..2241cbc2c2e2fda94a589939a2159d29
          """Tool results containing ``/pull/``: a deliberately loose scan, oldest-first so the caller takes the last."""
          ids = [s for s in session_ids if s]
 diff --git a/hermes_state_portability.py b/hermes_state_portability.py
-index f794ca6c6825da8f3ecf67bb9c00e4cb72bee42a..4318de9fd18a0f3850152a8e18d9725d8c5ae366 100644
+index f794ca6c682..4318de9fd18 100644
 --- a/hermes_state_portability.py
 +++ b/hermes_state_portability.py
 @@ -43,7 +43,7 @@ _IMPORT_MESSAGE_JSON_FIELDS = (
@@ -181,7 +179,7 @@ index f794ca6c6825da8f3ecf67bb9c00e4cb72bee42a..4318de9fd18a0f3850152a8e18d9725d
                             :cache_read_tokens, :cache_write_tokens,
                             :reasoning_tokens, :cwd, :git_branch, :git_repo_root,
 diff --git a/hermes_state_worker_lifecycle.py b/hermes_state_worker_lifecycle.py
-index 6eb85086f7aa98e7b42729a9d259cc85b2596891..c022e0fb607b3e21d5b3407a56827f14a0b7a8c8 100644
+index 6eb85086f7a..c022e0fb607 100644
 --- a/hermes_state_worker_lifecycle.py
 +++ b/hermes_state_worker_lifecycle.py
 @@ -227,15 +227,39 @@ def insert_session_row_in_transaction(
@@ -239,10 +237,10 @@ index 6eb85086f7aa98e7b42729a9d259cc85b2596891..c022e0fb607b3e21d5b3407a56827f14
      if system_prompt_hash is not None:
 diff --git a/tests/hermes_state/test_hu08_history_export.py b/tests/hermes_state/test_hu08_history_export.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..e44a5b4894150139851987464a39ef6571ee477b
+index 00000000000..10d3c5fcac9
 --- /dev/null
 +++ b/tests/hermes_state/test_hu08_history_export.py
-@@ -0,0 +1,238 @@
+@@ -0,0 +1,251 @@
 +import pytest
 +
 +from hermes_state import SessionDB
@@ -294,7 +292,8 @@ index 0000000000000000000000000000000000000000..e44a5b4894150139851987464a39ef65
 +
 +        db.create_session("large", "cli")
 +        db.append_messages_batch("large", [{"role": "user", "content": str(i)} for i in range(129)])
-+        assert db.export_history("large", profile_id="default")["reason"] == "history_too_large"
++        assert len(db.export_history("large", profile_id="default")["messages"]) == 129
++        assert db.export_history("large", profile_id="default", max_messages=128)["reason"] == "history_too_large"
 +    finally:
 +        db.close()
 +
@@ -453,16 +452,28 @@ index 0000000000000000000000000000000000000000..e44a5b4894150139851987464a39ef65
 +        db.close()
 +
 +
-+def test_export_stops_oversized_transcript_before_redaction(tmp_path, monkeypatch):
++def test_long_export_scrubs_whole_history_without_an_arbitrary_byte_limit(tmp_path, monkeypatch):
 +    db = _db(tmp_path, monkeypatch)
-+    monkeypatch.setattr("agent.memory_manager._redact_for_provider", lambda _messages: pytest.fail("redactor must not see oversized input"))
++    observed = []
++
++    def redactor(messages):
++        observed.append(len(messages))
++        return [{**row, "content": "[redacted]"} for row in messages]
++
++    monkeypatch.setattr("agent.memory_manager._redact_for_provider", redactor)
 +    try:
 +        db.create_session("huge", "cli")
 +        db.append_message("huge", "user", "x" * (256 * 1024 + 1))
-+        assert db.export_history("huge", profile_id="default")["reason"] == "history_too_large"
++        exported = db.export_history("huge", profile_id="default")
++        assert exported["status"] == "ready"
++        assert exported["messages"][0]["content"] == "[redacted]"
++
 +        db.create_session("huge-sidecar", "cli")
 +        db.append_message("huge-sidecar", "user", "short visible text", api_content="x" * (256 * 1024 + 1))
-+        assert db.export_history("huge-sidecar", profile_id="default")["reason"] == "history_too_large"
++        exported = db.export_history("huge-sidecar", profile_id="default")
++        assert exported["status"] == "ready"
++        assert exported["messages"][0]["content"] == "[redacted]"
++        assert observed == [1, 1]
 +    finally:
 +        db.close()
 +

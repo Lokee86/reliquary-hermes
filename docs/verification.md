@@ -374,6 +374,8 @@ python -B -m pytest -q --basetemp .pytest_tmp tests/test_capture_policy.py tests
 
 The probes use synthetic profiles and deterministic local processing. They cover native creation evidence, portable restore with synthesized creation time, old resumes, trusted message identity, privacy scrubbing, authorized General and dedicated RELs, Web and Desktop-native confirmation, duplicate import, and processing while an unrelated Hermes session is active. Run the dashboard build, shared Web and Desktop tests, TypeScript check and locked offline Rust host suite as above.
 
+Manual history export v2 removes the whole-conversation message/byte cap while retaining bounded, overlapping source windows and the existing native import/processing boundary. Version 1 remains sufficient for automatic new-session capture but **not** unrestricted manual history import. Verify a 300-message ordered/restartable outbox and the signed-host test that inspects the oldest and newest original Root turns after sequential extensions (`tests/test_hu08_long_history.py`, `tests/test_hu08_manual_processing.py`). Do not claim that compressed or copied-branch lineages are importable until their original source history can be exported and verified. No installed plugin or upstream PR is updated by these local tests.
+
 ## Related docs
 
 - [Documentation policy and ownership](documentation-policy.md)

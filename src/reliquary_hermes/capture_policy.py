@@ -45,8 +45,19 @@ def history_supported():
         from hermes_state import SessionDB
 
         version = getattr(SessionDB, "HISTORY_EXPORT_VERSION", None)
-        return type(version) is int and version == 1 and callable(
+        return type(version) is int and version in {1, 2} and callable(
             getattr(SessionDB, "export_history", None))
+    except ImportError:
+        return False
+
+
+def unbounded_history_supported():
+    """Only the newer Hermes export contract supports complete manual histories."""
+    try:
+        from hermes_state import SessionDB
+
+        return (getattr(SessionDB, "HISTORY_EXPORT_VERSION", None) == 2
+                and callable(getattr(SessionDB, "export_history", None)))
     except ImportError:
         return False
 

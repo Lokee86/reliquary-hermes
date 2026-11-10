@@ -1,14 +1,16 @@
 """Trusted manual import through the real outbox, signed host and Root processing."""
 
+from hashlib import sha256
 from time import monotonic, sleep
 
 import pytest
 
 from reliquary_hermes import history, setup
+from reliquary_hermes.settings import read_settings
 from test_hosted_desktop_api import _release_host
 from test_hp03_host import binaries, install_setup_host, owner, setup_hosts
 from test_hp03_provider import history_provider
-from test_hp04_host import TEXT, _loopback_model, _processing_config
+from test_hp04_host import TEXT, _loopback_model, _processing_config, _turn
 
 
 @pytest.mark.parametrize("live_attached", [False, True], ids=["standalone", "other-session-live"])
@@ -33,8 +35,14 @@ def test_selected_history_reaches_complete(
                 db.create_session(session_id, source="cli", profile_name="default")
                 statement = f"Synthetic fixture rule for {session_id}."
                 db.append_message(session_id, "user", statement)
+                if session_id == old_ids[0] and not live_attached:
+                    # Exercise native source extension across multiple verified epochs.
+                    for index in range(2):
+                        db.append_message(session_id, "assistant" if index % 2 else "user",
+                                          f"Additional verified historical context {index}.")
                 originals[session_id] = db.get_messages(session_id)
-                monkeypatch.setitem(TEXT, originals[session_id][0]["message_uid"], statement)
+                for message in originals[session_id]:
+                    monkeypatch.setitem(TEXT, message["message_uid"], message["content"])
         state = home / "reliquary"
         state.mkdir()
         with _loopback_model() as url:
@@ -60,7 +68,7 @@ def test_selected_history_reaches_complete(
                 assert all(row["status"] in {"queued", "staged", "processing", "complete"}
                            for row in queued["sessions"]), queued
                 check = {"session_ids": old_ids}
-                deadline = monotonic() + 40
+                deadline = monotonic() + 25
                 while monotonic() < deadline:
                     result = history.status(home, check)
                     if all(row["status"] == "complete" for row in result["sessions"]):
@@ -80,10 +88,29 @@ def test_selected_history_reaches_complete(
                 assert changed["sessions"][0]["status"] == "unavailable", changed
             finally:
                 provider.shutdown()
-                if live_attached:
-                    deadline = monotonic() + 4
-                    while (state / "discovery.json").exists() and monotonic() < deadline:
-                        sleep(0.05)
-                _release_host(home)
+                # A manual-only runtime may cleanly detach and stop the host
+                # between the last status receipt and this cleanup check.
+                discovery = state / "discovery.json"
+                deadline = monotonic() + 5
+                while discovery.exists() and monotonic() < deadline:
+                    sleep(0.05)
+                if discovery.exists():
+                    _release_host(home)
+        # Root opens the REL for archive inspection only after the service lease ends.
+        # Oldest and newest original turns must remain inspectable in Root
+        # after the signed source host has advanced through all windows.
+        if not live_attached:
+            profile = read_settings(home).profile_id.encode("ascii")
+            session = old_ids[0]
+            conversation = "hermes-copy:" + sha256(
+                b"reliquary/hermes-copied-conversation/v1\0"
+                + len(profile).to_bytes(8, "little") + profile
+                + session.encode("ascii")
+            ).hexdigest()
+            for source_row in (originals[session][0], originals[session][-1]):
+                observed = _turn(cli, rel, conversation, source_row["message_uid"])
+                assert observed["availability"] == "available"
+                assert observed["imported"]["message_id"] == source_row["message_uid"]
+                assert observed["content"] == source_row["content"]
     finally:
         reset_hermes_home_override(scope)

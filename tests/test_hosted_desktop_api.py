@@ -138,7 +138,7 @@ def writer(name):
 setup_api = "/api/plugins/reliquary-hermes/setup-v1"
 dashboard = "/api/plugins/reliquary-hermes/dashboard-v1"
 sources_api = "/api/plugins/reliquary-hermes/sources-v1"
-history_supported = getattr(SessionDB, "HISTORY_EXPORT_VERSION", None) == 1
+history_supported = getattr(SessionDB, "HISTORY_EXPORT_VERSION", None) == 2
 history_rows = {}
 history_secret = "opaque-hu08-test-only-71de8a"
 if history_supported:

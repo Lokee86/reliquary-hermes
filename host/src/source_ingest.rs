@@ -239,14 +239,8 @@ impl SourceService {
         {
             return Err(HttpError::new(409, "source_owner_conflict", false));
         }
-        if request.operation.is_manual() {
-            if let Some(snapshot) = snapshot.as_ref() {
-                let prior = state.pending.as_ref().or(state.accepted.as_ref());
-                if prior.is_some_and(|head| head.wire_digest != snapshot.digest) {
-                    return Err(HttpError::new(409, "manual_import_conflict", false));
-                }
-            }
-        }
+        // Manual extensions follow the same verified source-head overlap as live snapshots.
+        // Reusing a source ID with changed history fails in submit()'s continuity check.
         if request.operation == SourceAction::Terminal {
             if !state.terminal || request.generation > state.generation {
                 state.generation = state.generation.max(request.generation);
@@ -527,15 +521,16 @@ impl SourceService {
         if expected_owner != owner {
             return Err("unauthorized");
         }
-        // Root's accepted import proves the original digest. An append can
-        // advance the head digest while retaining the original message.
-        if !head
-            .evidence
-            .iter()
-            .any(|row| row.uid == imported.message_id)
+        // Root owns the immutable imported turn. The host's latest source head
+        // is a bounded overlap window, not an index of every older imported turn.
+        // Require the exact imported node and a live signed source head.
+        if imported.format != "hermes-source-copied-snapshot-v1"
+            || imported.message_id != turn.node_id
+            || !matches!(&turn.availability, SourceAvailability::Available)
         {
             return Err("missing");
         }
+        let _ = head;
         Ok(())
     }
 
@@ -615,14 +610,15 @@ impl SourceService {
                         let head = self.accepted_source_head(session, runtimes)?;
                         heads.insert(session.clone(), head);
                     }
-                    let head = heads.get(session).ok_or(PROVENANCE_UNAVAILABLE)?;
-                    if !head
-                        .evidence
-                        .iter()
-                        .any(|row| row.uid == imported.message_id)
+                    // The authenticated Root provenance contains the original
+                    // imported turn even after later append windows advance the
+                    // bounded host head beyond that message.
+                    if imported.message_id != turn.node_id
+                        || !matches!(&turn.availability, SourceAvailability::Available)
                     {
                         return Err(PROVENANCE_UNAVAILABLE);
                     }
+                    let head = heads.get(session).ok_or(PROVENANCE_UNAVAILABLE)?;
                     digests.insert(head.wire_digest.clone());
                 }
             }

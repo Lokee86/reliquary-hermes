@@ -44,7 +44,7 @@ def history_provider(monkeypatch, history_checkout, tmp_path):
     provider = _provider_for_checkout(monkeypatch, history_checkout, tmp_path)
     from hermes_state import SessionDB
 
-    assert SessionDB.HISTORY_EXPORT_VERSION == 1
+    assert SessionDB.HISTORY_EXPORT_VERSION == 2
     return provider
 
 

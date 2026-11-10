@@ -74,6 +74,17 @@ def test_missing_or_corrupt_enrollment_fails_closed(tmp_path, payload):
         capture_cutoff(home)
 
 
+def test_export_v1_keeps_auto_capture_but_requires_v2_for_unbounded_manual(monkeypatch):
+    from hermes_state import SessionDB
+
+    monkeypatch.setattr(SessionDB, "HISTORY_EXPORT_VERSION", 1)
+    assert capture_policy.history_supported()
+    assert not capture_policy.unbounded_history_supported()
+    monkeypatch.setattr(SessionDB, "HISTORY_EXPORT_VERSION", 2)
+    assert capture_policy.history_supported()
+    assert capture_policy.unbounded_history_supported()
+
+
 def test_fresh_root_and_strict_cutoff_use_real_started_at(tmp_path, history_checkout, monkeypatch):
     home = _home(tmp_path)
     cutoff = _enroll(home, monkeypatch)

@@ -51,19 +51,25 @@ def _remote_status(client, session_id, *, reconnect=False):
         return None
 
 
-def queue_imports(settings, client, owner_id: str, snapshots: list[SourceSnapshot]) -> dict[str, dict]:
-    """Durably enqueue server-verified copies without attaching a live session."""
+def queue_imports(settings, client, owner_id: str,
+                  snapshots: list[SourceSnapshot | list[SourceSnapshot]]) -> dict[str, dict]:
+    """Queue complete per-session window sequences under one signed REL destination."""
     owner = identifier(owner_id)
     selected = sequence(snapshots, _MAX_IMPORTS, nonempty=True)
-    require(all(type(item) is SourceSnapshot for item in selected), "invalid_source_snapshot")
-    require(len({item.session_id for item in selected}) == len(selected), "duplicate_manual_import")
+    batches = [item if type(item) is list else [item] for item in selected]
+    require(all(batch and all(type(window) is SourceSnapshot for window in batch)
+                and len({window.session_id for window in batch}) == 1 for batch in batches),
+            "invalid_source_snapshot")
+    require(len({batch[0].session_id for batch in batches}) == len(batches),
+            "duplicate_manual_import")
     outbox = _outbox(settings)
     results = {}
-    for snapshot in selected:
-        session = snapshot.session_id
+    for batch in batches:
+        session = batch[0].session_id
+        last = batch[-1]
         try:
-            require(snapshot.profile_id == settings.profile_id, "source_scope_mismatch")
-            snapshot.require_current()
+            require(all(window.profile_id == settings.profile_id for window in batch),
+                    "source_scope_mismatch")
             prior = outbox.manual_status(session)
             remote = _remote_status(client, session)
             if remote is not None and remote["state"] == "tombstoned":
@@ -72,13 +78,25 @@ def queue_imports(settings, client, owner_id: str, snapshots: list[SourceSnapsho
             if remote is not None and remote["state"] == "unavailable":
                 results[session] = _result(session, "unavailable", "source_status_unavailable")
                 continue
-            accepted = prior if prior and prior["receipt"] is not None else remote
-            if accepted and accepted["receipt"] is not None:
-                same = accepted["owner_id"] == owner and accepted["snapshot_digest"] == snapshot.snapshot_digest
+            if prior is None and remote is not None and remote["receipt"] is not None:
+                same = (remote["owner_id"] == owner and
+                        remote["snapshot_digest"] == last.snapshot_digest)
                 results[session] = (_result(session, "already_imported") if same else
                                     _result(session, "unavailable", "manual_import_conflict"))
                 continue
-            outbox.enqueue_manual(snapshot, owner_id=owner)
+            if prior is not None and (
+                prior["owner_id"] != owner or prior["snapshot_digest"] != last.snapshot_digest
+            ):
+                results[session] = _result(session, "unavailable", "manual_import_conflict")
+                continue
+            if prior is not None and prior["receipt"] is not None:
+                same = (remote is not None and remote["owner_id"] == owner and
+                        remote["snapshot_digest"] == last.snapshot_digest and
+                        remote["receipt"] == prior["receipt"])
+                results[session] = (_result(session, "already_imported") if same else
+                                    _result(session, "unavailable", "source_receipt_mismatch"))
+                continue
+            outbox.enqueue_manual_series(batch, owner_id=owner)
             results[session] = _result(session, "queued")
         except (SourceOutboxError, ContractError) as error:
             code = str(error)

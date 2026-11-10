@@ -238,19 +238,37 @@ class SourceOutbox:
         return key
 
     def enqueue_manual(self, snapshot: SourceSnapshot, *, owner_id: str) -> str:
-        """Persist an explicitly selected, trusted historical snapshot for the host.
+        """Queue one bounded snapshot; retained for existing single-snapshot callers."""
+        return self.enqueue_manual_series([snapshot], owner_id=owner_id)
 
-        The owner is a configured REL selected by the authenticated dashboard API.
-        The signed host independently checks that REL and pins the source route.
+    def enqueue_manual_series(self, snapshots: list[SourceSnapshot], *, owner_id: str) -> str:
+        """Atomically queue the complete ordered history as bounded, overlapping windows.
+
+        Per-snapshot transport bounds remain; conversation length is not capped.
+        An exact repeat is idempotent; an altered history or destination conflicts.
         """
-        require(type(snapshot) is SourceSnapshot, "invalid_source_snapshot")
-        require(snapshot.profile_id == self._scope[0], "source_scope_mismatch")
-        snapshot.require_current()
+        require(type(snapshots) is list and bool(snapshots), "invalid_source_snapshot")
         owner = identifier(owner_id)
-        session = identifier(snapshot.session_id)
+        first = snapshots[0]
+        require(type(first) is SourceSnapshot and first.profile_id == self._scope[0],
+                "source_scope_mismatch")
+        session = identifier(first.session_id)
         generation = self.generation(session)
-        payload, last_uid = _snapshot_payload(snapshot)
-        key = self._key("snapshot", session, generation, snapshot.snapshot_digest, manual_owner_id=owner)
+        prepared = []
+        previous_tail = None
+        for index, snapshot in enumerate(snapshots):
+            require(type(snapshot) is SourceSnapshot and snapshot.profile_id == self._scope[0]
+                    and snapshot.session_id == session, "source_scope_mismatch")
+            snapshot.require_current()
+            payload, last_uid = _snapshot_payload(snapshot)
+            # Each extension repeats exactly the prior final source row and adds at least one row.
+            rows = decode(b'{"messages":' + snapshot.messages_json + b'}')["messages"]
+            if index:
+                require(len(rows) > 1 and rows[0] == previous_tail, "manual_import_sequence_invalid")
+            previous_tail = rows[-1]
+            key = self._key("snapshot", session, generation, snapshot.snapshot_digest,
+                            manual_owner_id=owner)
+            prepared.append((key, payload, snapshot.snapshot_digest, last_uid))
         with self._transaction(write=True) as db:
             current, terminal = self._state(db, session)
             if terminal is not None:
@@ -260,33 +278,31 @@ class SourceOutbox:
             prior = db.execute(
                 """SELECT key, generation, manual_owner_id, snapshot_digest, receipt, manual_error,
                           manual_attempts, manual_retry_at FROM source_jobs
-                   WHERE profile=? AND principal=? AND session=? AND manual_owner_id IS NOT NULL""",
-                (*self._scope, session),
+                   WHERE profile=? AND principal=? AND session=? AND manual_owner_id IS NOT NULL
+                   ORDER BY sequence""", (*self._scope, session),
             ).fetchall()
-            for row in prior:
-                if row["manual_owner_id"] != owner or row["snapshot_digest"] != snapshot.snapshot_digest:
+            if prior:
+                if len(prior) != len(prepared) or any(
+                    row["manual_owner_id"] != owner or row["generation"] != generation
+                    or row["snapshot_digest"] != prepared[i][2]
+                    for i, row in enumerate(prior)
+                ):
                     raise SourceOutboxError("manual_import_conflict")
-                if row["generation"] == generation:
+                for row in prior:
                     if row["receipt"] is None and row["manual_error"] and row["manual_retry_at"] is None:
                         if not _manual_retryable(row):
                             raise SourceOutboxError(row["manual_error"])
                         db.execute("UPDATE source_jobs SET manual_error=NULL WHERE key=?", (row["key"],))
-                    return row["key"]
-            count, size = db.execute(
-                """SELECT COUNT(*), COALESCE(SUM(length(payload)), 0) FROM source_jobs
-                   WHERE profile=? AND principal=? AND receipt IS NULL AND kind='snapshot' AND payload IS NOT NULL""",
-                self._scope,
-            ).fetchone()
-            if count >= _MAX_PENDING + _MAX_CANDIDATES or size + len(payload) > _MAX_PENDING_BYTES:
-                raise SourceOutboxError(BACKPRESSURE)
+                return prior[0]["key"]
             self._ensure_state(db, session)
-            db.execute(
-                """INSERT INTO source_jobs(key, profile, principal, session, generation, kind,
-                   payload, snapshot_digest, last_message_uid, lease_id, fence_epoch, manual_owner_id)
-                   VALUES (?, ?, ?, ?, ?, 'snapshot', ?, ?, ?, NULL, NULL, ?)""",
-                (key, *self._scope, session, generation, payload, snapshot.snapshot_digest, last_uid, owner),
-            )
-        return key
+            for key, payload, digest, last_uid in prepared:
+                db.execute(
+                    """INSERT INTO source_jobs(key, profile, principal, session, generation, kind,
+                       payload, snapshot_digest, last_message_uid, lease_id, fence_epoch, manual_owner_id)
+                       VALUES (?, ?, ?, ?, ?, 'snapshot', ?, ?, ?, NULL, NULL, ?)""",
+                    (key, *self._scope, session, generation, payload, digest, last_uid, owner),
+                )
+        return prepared[0][0]
 
     def rebind_manual(self, job: SourceJob, *, lease_id: str, fence_epoch: int | None) -> bool:
         require(job.manual_owner_id is not None, "not_manual_import")
@@ -307,28 +323,40 @@ class SourceOutbox:
             return db.execute(
                 """SELECT 1 FROM source_jobs WHERE profile=? AND principal=? AND receipt IS NULL
                    AND manual_owner_id IS NOT NULL AND (manual_error IS NULL OR manual_retry_at IS NOT NULL)
+                   AND NOT EXISTS (
+                     SELECT 1 FROM source_jobs predecessor
+                     WHERE predecessor.profile=source_jobs.profile
+                       AND predecessor.principal=source_jobs.principal
+                       AND predecessor.session=source_jobs.session
+                       AND predecessor.manual_owner_id IS NOT NULL
+                       AND predecessor.receipt IS NULL
+                       AND predecessor.sequence < source_jobs.sequence)
                    LIMIT 1""", self._scope,
             ).fetchone() is not None
 
     def manual_status(self, session_id: str) -> dict | None:
-        """Read the latest manual receipt without creating or waking any work."""
+        """Report whole-import progress, never just the first accepted window."""
         session = identifier(session_id)
         with self._transaction() as db:
-            row = db.execute(
+            rows = db.execute(
                 """SELECT generation, key, snapshot_digest, receipt, manual_owner_id,
                           manual_attempts, manual_error, manual_retry_at FROM source_jobs
                    WHERE profile=? AND principal=? AND session=? AND manual_owner_id IS NOT NULL
-                   ORDER BY sequence DESC LIMIT 1""",
-                (*self._scope, session),
-            ).fetchone()
-        if row is None:
+                   ORDER BY sequence""", (*self._scope, session),
+            ).fetchall()
+        if not rows:
             return None
-        failed = row["receipt"] is None and row["manual_error"] is not None and row["manual_retry_at"] is None
-        return {"session_id": session, "generation": row["generation"], "idempotency_key": row["key"],
-                "snapshot_digest": row["snapshot_digest"], "receipt": row["receipt"],
-                "owner_id": row["manual_owner_id"], "reason": row["manual_error"],
-                "retryable": _manual_retryable(row),
-                "status": "staged" if row["receipt"] is not None else "failed" if failed else "queued"}
+        last = rows[-1]
+        failed = next((row for row in rows if row["receipt"] is None and
+                       row["manual_error"] is not None and row["manual_retry_at"] is None), None)
+        complete = all(row["receipt"] is not None for row in rows)
+        return {"session_id": session, "generation": last["generation"], "idempotency_key": last["key"],
+                "snapshot_digest": last["snapshot_digest"],
+                "receipt": last["receipt"] if complete else None,
+                "owner_id": last["manual_owner_id"],
+                "reason": failed["manual_error"] if failed else None,
+                "retryable": _manual_retryable(failed) if failed else False,
+                "status": "failed" if failed else "staged" if complete else "queued"}
 
     def _fence(self, db, session_id, generation, kind, reason=None):
         self._ensure_state(db, session_id)
@@ -385,7 +413,14 @@ class SourceOutbox:
         bindings = self._scope
         if manual_only:
             query += (" AND manual_owner_id IS NOT NULL AND kind='snapshot'"
-                      " AND (manual_error IS NULL OR manual_retry_at<=?)")
+                      " AND (manual_error IS NULL OR manual_retry_at<=?)"
+                      " AND NOT EXISTS (SELECT 1 FROM source_jobs predecessor"
+                      " WHERE predecessor.profile=source_jobs.profile"
+                      " AND predecessor.principal=source_jobs.principal"
+                      " AND predecessor.session=source_jobs.session"
+                      " AND predecessor.manual_owner_id IS NOT NULL"
+                      " AND predecessor.receipt IS NULL"
+                      " AND predecessor.sequence < source_jobs.sequence)")
             bindings = (*bindings, time.time())
         else:
             query += " AND manual_owner_id IS NULL"
@@ -486,14 +521,21 @@ class SourceOutbox:
             row = self._job_receipt(db, job)
             if row is None or row["receipt"] is not None:
                 return False
-            current = db.execute("SELECT manual_attempts FROM source_jobs WHERE key=?", (job.idempotency_key,)).fetchone()
-            attempts = current[0] + 1
+            current = db.execute("SELECT manual_attempts FROM source_jobs WHERE key=?",
+                                 (job.idempotency_key,)).fetchone()
+            # Root must finish processing the preceding source window before accepting
+            # another. Waiting for that is normal progress, not a retry-budget failure.
+            waiting = reason == "source_import_pending"
+            attempts = current[0] if waiting else current[0] + 1
             transient = reason in _MANUAL_TRANSIENT
-            retry_at = time.time() + 2 ** (attempts - 1) if transient and attempts < _MAX_MANUAL_AUTO_ATTEMPTS else None
+            retry_at = (time.time() + 2 if waiting else
+                        time.time() + 2 ** (attempts - 1)
+                        if transient and attempts < _MAX_MANUAL_AUTO_ATTEMPTS else None)
             db.execute(
                 """UPDATE source_jobs SET manual_attempts=?, manual_error=?, manual_retry_at=?,
                    payload=CASE WHEN ? THEN payload ELSE NULL END WHERE key=?""",
-                (attempts, reason, retry_at, transient and attempts < _MAX_MANUAL_ATTEMPTS, job.idempotency_key),
+                (attempts, reason, retry_at, waiting or
+                 (transient and attempts < _MAX_MANUAL_ATTEMPTS), job.idempotency_key),
             )
         return True
 

@@ -138,19 +138,19 @@ def _fixture_reply(request):
     if name == "readiness_probe":
         result = {"ok": True}
     elif name == "insomnia_authority_disposition_ledger":
-        [uid] = shape["turns"]["required"]
         result = {"turns": {uid: [{"disposition": "retain", "authority_kind": "direct", "category": "fact",
                    "type": "project", "lifecycle": "current", "proposition": TEXT[uid],
-                   "authority_source_node_id": "", "grounding_source_node_id": "", "reason": "direct source statement"}]},
-                  "evidence_requests": []}
+                   "authority_source_node_id": "", "grounding_source_node_id": "", "reason": "direct source statement"}]
+                   for uid in shape["turns"]["required"]}, "evidence_requests": []}
     elif name == "insomnia_memory_ownership":
         result = {"ownership": {group: "project" for group in shape["ownership"]["required"]}}
     elif name == "insomnia_memory_wording":
-        uid = shape["candidates"]["items"]["properties"]["source_node_id"]["enum"][0]
+        uids = shape["candidates"]["items"]["properties"]["source_node_id"]["enum"]
         result = {"candidates": [{"authority_kind": "direct", "category": "fact", "memory_type": "project",
                   "temporal_status": "current", "ownership": "project", "title": uid,
                   "content": TEXT[uid], "source_node_id": uid, "source_quote": TEXT[uid],
-                  "authority_source": None, "grounding_source": None, "routing_mentions": []}]}
+                  "authority_source": None, "grounding_source": None, "routing_mentions": []}
+                  for uid in uids]}
     elif name == "dream_pair_classification":
         result = {"relation": "none", "direction": "none", "evidence": []}
     else:
