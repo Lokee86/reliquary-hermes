@@ -2,9 +2,28 @@
   "name": "reliquary-hermes-dashboard",
   "private": true,
   "version": "0.1.0",
+  "type": "module",
   "scripts": {
-    "build": "node scripts/build.cjs",
-    "test": "node scripts/build.cjs --fixture && node --test tests/*.test.cjs",
-    "check": "npm run build && npm test"
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@react-three/drei": "10.7.8",
+    "@react-three/fiber": "9.7.0",
+    "@react-three/postprocessing": "3.1.1",
+    "postprocessing": "6.39.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "three": "0.183.2",
+    "three-stdlib": "2.36.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "@types/three": "0.183.1",
+    "esbuild": "0.28.2",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
   }
 }

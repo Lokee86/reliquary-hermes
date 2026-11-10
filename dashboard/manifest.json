@@ -10,5 +10,5 @@
     "position": "after:skills"
   },
   "entry": "dist/index.js",
-  "css": "dist/style.css"
+  "css": "dist/index.css"
 }

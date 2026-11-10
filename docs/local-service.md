@@ -17,7 +17,7 @@ Each configured profile has a separate local service and credential. Multiple se
 3. Review the setup and connect. Hosts with project attribution show a confirmation when projects will use General memory. Setup derives profile and service identity, validates owners through the Rust host, provisions a random credential in Hermes secret storage, and checks the signed host topology before selecting the provider. Run `hermes memory setup reliquary` for headless setup.
 4. Start a Hermes session to attach the provider. Already attached sessions keep their accepted REL.
 
-For a unified directory installation, build the browser and Desktop assets with `node dashboard/scripts/build.cjs` and `node desktop/scripts/build.cjs`. Install the provider Python files from `src/reliquary_hermes/` at the root of the existing `plugins/reliquary` package with its native manifest and host pin. Place the rebuilt host in `host/`, the dashboard manifest, Python router and `dist/` in `dashboard/`, and the generated Desktop entry at `desktop/plugin.js`. The dashboard uses the `reliquary-hermes` plugin namespace. Enable that dashboard contribution in the profile and enable Reliquary in Desktop's Capabilities → Plugins.
+For a unified directory installation, run `npm --prefix dashboard ci` and `npm --prefix dashboard run build` to build both assets. Install the provider Python files from `src/reliquary_hermes/` at the root of the existing `plugins/reliquary` package with its native manifest and host pin. Place the rebuilt host in `host/`, the dashboard manifest, Python router and `dist/` in `dashboard/`, and the generated Desktop entry at `desktop/plugin.js`. The dashboard uses the `reliquary-hermes` plugin namespace. Enable that dashboard contribution in the profile and enable Reliquary in Desktop's Capabilities → Plugins.
 
 With `plugins.isolation: host`, Desktop enables setup and writes when Hermes carries verified native HTTP admission to the active profile's worker. On stock builds without that capability, the Desktop pane shows setup status and supports browsing configured owners. Open the Reliquary web dashboard to connect owners or manage writes. The same plugin enables Desktop setup and writes automatically on a compatible Hermes build. [Stock and fixed Hermes verification](verification.md#hu06-stock-and-fixed-hermes-acceptance)
 
@@ -36,6 +36,8 @@ Paths are absolute. Configuration is scoped to the `hermes_home` that the pinned
 ```
 
 `provider.json` stores the absolute `binary` path. Hermes stores `RELIQUARY_HERMES_TOKEN` in the active profile's private secret scope. Both JSON configuration files contain only nonsecret settings. The client starts the binary as `reliquary-hermes-host --state-dir <absolute-directory>` with a bounded JSON token bootstrap over standard input. The child inherits only the OS variables needed for startup and uses the state directory for its temporary files.
+
+The graph uses the authenticated Web SDK byte transport. For Desktop graph support, build Hermes Desktop with the [bounded plugin REST byte bridge](../patches/hermes-45882968-plugin-rest-bytes.patch) on an isolated checkout at `458829681db8761e50b8242aa034d23ae9bcdcd5`. The SDK forwards bounded `application/octet-stream` bytes over its existing profile-aware REST and Electron IPC path. On a stock Desktop build, List and the inspector remain available and Graph explains the required host capability.
 
 ## Lifecycle and recovery
 

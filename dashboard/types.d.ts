@@ -318,41 +318,6 @@ export interface CommunityViewProps {
   onNextMembers(cursor: string): void;
 }
 
-export interface HostReact {
-  createElement(type: string | HostControl, props?: Record<string, unknown> | null, ...children: unknown[]): unknown;
-  createElement<P>(type: (props: P) => unknown, props: P & { key?: string }, ...children: unknown[]): unknown;
-}
-
-type HostControl = (props: Record<string, unknown>) => unknown;
-
-export interface HostSelectProps {
-  label: string;
-  value: string;
-  options: { value: string; label: string }[];
-  onValueChange(value: string): void;
-  disabled?: boolean;
-}
-
-interface HostComponents {
-  Button: HostControl;
-  Input: HostControl;
-  Checkbox: HostControl;
-  Select(props: HostSelectProps): unknown;
-  Textarea: HostControl | "textarea";
-}
-
-export interface HermesDashboardSDK {
-  sdkVersion: string;
-  React: HostReact;
-  components: Pick<HostComponents, "Button" | "Input" | "Checkbox"> & { Select: HostControl; SelectOption: HostControl };
-  authedFetch(url: string, init?: RequestInit): Promise<Response>;
-  hooks: {
-    useState<T>(initial: T | (() => T)): [T, (next: T | ((current: T) => T)) => void];
-    useEffect(effect: () => void | (() => void), dependencies: readonly unknown[]): void;
-    useRef<T>(initial: T): { current: T };
-  };
-}
-
 export interface SetupCandidate {
   main_rel: string;
   active_phy: string;
@@ -363,6 +328,7 @@ export interface SetupCandidate {
 export interface SetupStatus {
   configured: boolean;
   runtime_detected: boolean;
+  capture_status?: "unavailable" | "enrolled" | "setup_required";
   desktop_native_mutations: boolean;
   local_dialogs_available: boolean;
   config_path: string | null;
@@ -429,72 +395,3 @@ export interface SetupClient {
 
 export type SetupPicker = (kind: "REL" | "PHY" | "config", signal?: AbortSignal) =>
   Promise<string | null | SetupDialogResult>;
-
-export interface CreateReliquarySurface {
-  (options: {
-    React: HostReact;
-    hooks?: HermesDashboardSDK["hooks"];
-    components: HostComponents;
-    authedFetch: HermesDashboardSDK["authedFetch"];
-    pickOpenPath?: SetupPicker;
-    pickSavePath?: SetupPicker;
-    webDialogPicker?: boolean;
-    mutationBlockReason?(status: SetupStatus): string | undefined;
-    surfaceLabel: string;
-  }): () => unknown;
-}
-
-export interface HermesPluginRegistry {
-  register(name: string, component: () => unknown): void;
-}
-
-declare global {
-  interface Window {
-    __HERMES_PLUGIN_SDK__?: HermesDashboardSDK;
-    __HERMES_PLUGINS__?: HermesPluginRegistry;
-  }
-  var ReliquaryDashboardHost: Pick<HermesDashboardSDK, "React" | "hooks"> & { components: HostComponents };
-  var createReliquarySurface: CreateReliquarySurface;
-  var ReliquaryDashboardSurface: CreateReliquarySurface;
-  var ReliquaryDashboardSources: {
-    ImportSessions(props: { authedFetch: HermesDashboardSDK["authedFetch"]; mutationBlocked?: string }): unknown;
-  };
-  var ReliquarySetupClient: {
-    createSetupClient(authedFetch: HermesDashboardSDK["authedFetch"]): SetupClient;
-    candidate(main: string, phy: string, config: string, projects?: { id: string; path: string }[]): SetupCandidate;
-    message(error: unknown): string;
-  };
-  var ReliquaryOnboarding: {
-    Onboarding(props: { status: SetupStatus; setup: SetupClient; pickOpenPath?: SetupPicker;
-      pickSavePath?: SetupPicker; mutationsEnabled: boolean; onConnected(): void }): unknown;
-  };
-  var ReliquaryDashboardClient: {
-    createClient(transport: DashboardTransport, sessions?: SessionChoice[], phys?: PhyChoice[], resetTransport?: () => void): DashboardClient;
-  };
-  var ReliquaryDashboardFixtures: {
-    createFixtureClient(fixture?: DashboardFixture, activePhyId?: string | null): DashboardClient;
-  };
-  var ReliquaryDashboardGraph: {
-    GraphView(props: GraphViewProps): unknown;
-    CommunityView(props: CommunityViewProps): unknown;
-  };
-  var ReliquaryDashboardState: {
-    useRead<K extends ReadOperation>(client: DashboardClient, operation: K, scope: ReadScope, args: ReadArgs[K] | null): ReadHandle<ReadResults[K]>;
-    useCursor(): CursorState;
-  };
-  var ReliquaryDashboardViews: {
-    meta(label: string, value: string): unknown;
-    readContent<T>(label: string, read: ReadHandle<T>, render: (value: T) => unknown, resync?: () => void): unknown;
-    pager(label: string, cursor: CursorState, next: string | null): unknown;
-    select(label: string, value: string, options: { value: string; label: string }[], onChange: (value: string) => void,
-      disabled?: boolean): unknown;
-    MemoryList(props: { items: MemorySummary[]; selected: string | null; onSelect: (memoryId: string) => void }): unknown;
-    Inspector(props: { client: DashboardClient; scope: ReadScope; memoryId: string }): unknown;
-    Status(props: { client: DashboardClient; scope: ReadScope; live?: boolean }): unknown;
-  };
-  var ReliquaryDashboardLive: {
-    createLiveClient(authedFetch: HermesDashboardSDK["authedFetch"]): DashboardClient;
-    createLiveMutation(authedFetch: HermesDashboardSDK["authedFetch"]): import("./types-owner-content").DashboardMutationWriter;
-  };
-  var ReliquaryDashboardFixture: DashboardFixture;
-}

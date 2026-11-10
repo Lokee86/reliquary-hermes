@@ -60,6 +60,12 @@ The authenticated Sources API is scoped to the active Hermes plugin profile. `GE
 
 `POST /sources-v1/import` accepts a batch of up to eight session IDs, one authorized REL ID and an explicit true confirmation. The server rechecks each exact session and destination. Web uses the existing same-origin gate and Desktop requires verified native admission. `POST /sources-v1/status` reads the selected sessions' current status without admitting new work. Queued, Staged, Processing and Complete distinguish durable submission, a signed staging receipt, active Root work and completed Root processing. An exact repeat returns Already imported. A changed source or different destination for an accepted session returns a conflict or unavailable result.
 
+## Prepared graph reads
+
+`POST /api/plugins/reliquary-hermes/graph-render-v1/prepare` takes `owner_id`, the mounted owner `generation`, its exact `cut`, and an optional `session_id` (null for owner scope). The route returns the Warlock v2 JSON manifest with render generation, global bounds, hierarchy, chunk descriptors and total node count. The `node-chunk` and `edge-chunk` operations additionally take `generation_id` and `chunk_id`. They return at most 1 MiB of `application/octet-stream` data per request. The `resolve` operation uses `generation_id` and `render_id` to return the authorized Memory ID. The plugin resolves profile and principal through the host and rejects stale cuts and mismatched generation access. All responses are private and marked `no-store`.
+
+`ui.graph_page` serves the inspector’s bounded relation editor. The editor reads nearby semantic relation endpoints with revision and cut and offers writes for authorized user associations. The spatial renderer consumes the separate prepared generation and its binary chunks.
+
 ## Related docs
 
 - [Host and web SDK audit](host-audit.md)

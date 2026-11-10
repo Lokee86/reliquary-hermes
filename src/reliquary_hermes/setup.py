@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 
 from . import setup_paths
-from .capture_policy import ENROLLMENT_FILE, capture_cutoff
+from .capture_policy import ENROLLMENT_FILE, capture_cutoff, history_supported
 from .client import HostClient, HostUnavailable
 from .projects import active_projects, inventory
 from .settings import (
@@ -77,8 +77,15 @@ def status(home):
         configured = (_activation(home).get("memory") or {}).get("provider") == "reliquary"
     except (OSError, ValueError):
         pass
+    capture_status = "unavailable"
+    if history_supported():
+        try:
+            capture_cutoff(home)
+            capture_status = "enrolled" if configured else "setup_required"
+        except ContractError:
+            capture_status = "setup_required"
     _, _, binary, defaults = _defaults(home)
-    return {"configured": configured, "runtime_detected": binary.is_absolute() and binary.is_file(),
+    return {"configured": configured, "capture_status": capture_status, "runtime_detected": binary.is_absolute() and binary.is_file(),
             "config_path": defaults["config_path"], "defaults": defaults}
 
 

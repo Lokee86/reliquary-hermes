@@ -12,11 +12,12 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from . import setup_dialog
 from .client import HostClient, HostUnavailable
+from .graph_render_api import BINARY_OPERATIONS, GRAPH_OPERATIONS, graph_selector, read_render
 from .setup_dialog_locality import local_interactive_request
 from .settings import Settings, profile_home, profile_setup_lock, read_settings, read_token
 from .ui_contract import UIRequest, UIResponse, VerifiedUIContext
@@ -447,6 +448,32 @@ async def setup_validate(request: Request):
 @router.post("/setup-v1/apply")
 async def setup_apply(request: Request):
     return await _setup_request(request, "apply")
+
+
+@router.post("/graph-render-v1/{operation}")
+async def graph_render_v1(request: Request, operation: str):
+    _require_hermes_auth(request, "graph_admission_failed")
+    home = _host_home(request)
+    if operation not in GRAPH_OPERATIONS:
+        raise HTTPException(status_code=404, detail="graph_operation_unavailable")
+    if request.headers.get("content-type", "").partition(";")[0].strip().lower() != "application/json":
+        raise HTTPException(status_code=415, detail="graph_json_required")
+    try:
+        raw = await _read_bounded_body(request, limit=2048, error="graph_request_too_large")
+        selector = graph_selector(raw, operation)
+    except ContractError:
+        raise HTTPException(status_code=400, detail="invalid_graph_selector") from None
+    try:
+        result = await run_in_threadpool(read_render, home, operation, selector)
+    except HostUnavailable as error:
+        status = {"host_denied": 403, "host_conflict": 409}.get(str(error), 503)
+        raise HTTPException(status_code=status, detail={
+            403: "graph_denied", 409: "graph_stale", 503: "graph_unavailable",
+        }[status]) from None
+    except (ContractError, OSError):
+        raise HTTPException(status_code=503, detail="graph_unavailable") from None
+    media = "application/octet-stream" if operation in BINARY_OPERATIONS else "application/json"
+    return Response(result, media_type=media, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/dashboard-v1")

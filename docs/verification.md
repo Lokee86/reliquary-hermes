@@ -156,29 +156,7 @@ The enabled profile discovered the Reliquary manifest, served the exact bundle a
 
 The dashboard build and TypeScript check passed, along with all 5 Node component tests and 353 Python tests with the exact Hermes checkout and the HP01-R1 host and product CLI binaries. The Python count includes the 16 dashboard fixture validations.
 
-To repeat the browser smoke test, prepare the pinned frontend from the locked dependencies in a scratch mirror with the upstream web build script. Point `HERMES_WEB_DIST` at that build's output directory. From the dashboard worktree, stage the manifest and compiled assets in a fresh isolated Hermes home:
-
-```powershell
-$run = Join-Path (Get-Location) 'host\.test-tmp\hu01-smoke-enabled'
-$env:HERMES_HOME = Join-Path $run 'hermes-home'
-$env:TEMP = $run
-$env:TMP = $run
-$env:TMPDIR = $run
-$env:PYTHONPATH = $env:HP01_HERMES_CHECKOUT
-$env:PYTHONDONTWRITEBYTECODE = '1'
-$plugin = Join-Path $env:HERMES_HOME 'plugins\reliquary-hermes\dashboard'
-New-Item -ItemType Directory -Force -Path $plugin | Out-Null
-node dashboard/scripts/build.cjs --fixture
-Copy-Item -LiteralPath 'host/.test-tmp/dashboard-fixture/manifest.json', 'host/.test-tmp/dashboard-fixture/dist' -Destination $plugin -Recurse
-@('plugins:', '  enabled: [reliquary-hermes]') | Set-Content -LiteralPath (Join-Path $env:HERMES_HOME 'config.yaml')
-python -B -c 'from hermes_cli.web_server import start_server; start_server(host="127.0.0.1", port=0, open_browser=False, isolated=True)'
-```
-
-Use the announced loopback URL in a second terminal with a local Chrome installation and the path to Playwright's `index.mjs`. Set that terminal's `TEMP` and `TMP` to the same worktree scratch directory. Repeat in a fresh Hermes home with `plugins.disabled` and append `--disabled` to the test command.
-
-```powershell
-node dashboard/tests/hermes-host-smoke.mjs $dashboardUrl $playwrightModule
-```
+The fixture UI used for this historical checkpoint was retired in the Warlock rebuild. Current UI checks use the live Hermes SDK and isolated profile owners.
 
 ## HU02 read-only dashboard acceptance
 
@@ -274,18 +252,7 @@ Run `tests/test_setup.py` and `tests/test_setup_api.py` with the pinned Python e
 
 ## HU05 web and Desktop checks
 
-Build the web and Desktop entries and check the shared surface with the local Node.js and TypeScript toolchain.
-
-```powershell
-node dashboard/scripts/build.cjs
-node dashboard/scripts/build.cjs --fixture
-node --test dashboard/tests/dashboard.test.cjs
-node desktop/scripts/build.cjs
-node --experimental-vm-modules --test desktop/tests/plugin.test.cjs
-tsc --noEmit -p dashboard/tsconfig.json
-```
-
-Use distinct isolated Hermes profile homes for web-first and Desktop-first setup. Install the same directory package with the rebuilt host in each profile. The Chrome probe is `dashboard/tests/hu05-web-smoke.mjs`. Pass the pinned web address, local Playwright module, and a fixture JSON containing the real owner `paths` and `ids`. Pass `--configured` when reopening the Desktop-first profile.
+For current builds and smoke tests, see [Warlock Knowledge verification](#warlock-knowledge-verification). The following Electron probe records how the isolated test profile and native dialog checks were configured.
 
 The Electron probe is `desktop/tests/live-smoke.mjs`. Pass an isolated fixture JSON with `home`, `ownerIds`, an optional `candidate` containing `mainRel`, `activePhy`, and `configPath`, and an optional `expectedConfigPath`. Set `HU05_DESKTOP_EXE`, `HU05_PLAYWRIGHT`, `HU05_DESKTOP_PYTHON`, and `HP01_HERMES_CHECKOUT`. With `HU05_DESKTOP_APP`, the harness supplies isolated Electron paths before importing the unchanged compiled app. The probe supplies deterministic file choices at the Electron dialog boundary and exercises the real picker bridge and profile REST transport.
 
@@ -391,6 +358,12 @@ Implementation `90f7a88` (`90f7a88a0cc2cbafe8e4183ff1da0e3c59fae414`) was deploy
 The Web and Desktop builds and TypeScript check passed. The suites passed 29 Web, 12 Desktop, 17 Python setup/API and locality, and 33 locked offline Rust host tests. The Web tests covered separate confirmation. The setup and host tests covered exclusive creation and overwrite refusal. Documentation policy and Git whitespace checks passed.
 
 Window testing stopped before live Save As selection, separate creation confirmation, and connection with newly created synthetic owners. The packaged Desktop modal evidence comes from the previous build. This revision used the Desktop automated suite. macOS and Linux dialog behavior was outside this Windows verification.
+
+## Warlock Knowledge verification
+
+Build and check the shared UI with `npm --prefix dashboard run check`. Run the pinned Python tests with `tests/test_graph_render_api.py` and the locked offline host tests from this guide. Verify the Web and Desktop bundles use the same graph scene and use profile-bound raw chunks. Desktop graph verification requires the SDK byte bridge listed in the [installation guide](local-service.md).
+
+Run the live smoke probes only on isolated profiles. Use copies of the November 8 processed `project.rel` and `user.phy`. Verify each file independently with the Root CLI before mounting. Check the render manifest against the exact Root cut and count accepted Memory-to-Memory edges independently. Preserve source corpus bytes and verify copies remain unchanged after read-only browsing.
 
 ## Related docs
 

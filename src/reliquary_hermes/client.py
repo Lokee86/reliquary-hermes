@@ -58,7 +58,8 @@ def _receive(connection: socket.socket, count: int, deadline: float) -> bytes:
     return chunk
 
 
-def _response(connection: socket.socket, deadline: float) -> tuple[int, dict[str, str], bytes]:
+def _response(connection: socket.socket, deadline: float, *, media_type: str = "application/json",
+              response_limit: int = MAX_WIRE_BYTES) -> tuple[int, dict[str, str], bytes]:
     wire = bytearray()
     while b"\r\n\r\n" not in wire:
         if len(wire) == _MAX_HEADER:
@@ -75,10 +76,10 @@ def _response(connection: socket.socket, deadline: float) -> tuple[int, dict[str
         require(separator == ":" and name and name not in fields, "invalid_http")
         fields[name] = value.strip()
     length = fields.get("content-length", "")
-    require(length.isdecimal() and len(length) <= 6 and "transfer-encoding" not in fields and
-            fields.get("content-type") == "application/json", "invalid_http")
+    require(length.isdecimal() and len(length) <= len(str(response_limit)) and "transfer-encoding" not in fields and
+            fields.get("content-type") == (media_type if status == "200" else "application/json"), "invalid_http")
     expected = int(length)
-    require(len(body) <= expected <= MAX_WIRE_BYTES, "wire_limit")
+    require(len(body) <= expected <= response_limit, "wire_limit")
     while len(body) < expected:
         body.extend(_receive(connection, min(8192, expected - len(body)), deadline))
     return int(status), fields, bytes(body)
@@ -216,7 +217,8 @@ class HostClient:
             raise HostUnavailable("invalid_discovery") from None
 
     def _exchange(self, discovery: Discovery, path: str, body: bytes, deadline: float,
-                  *, response_seconds: float = _REQUEST_SECONDS) -> bytes:
+                  *, response_seconds: float = _REQUEST_SECONDS, media_type: str = "application/json",
+                  response_limit: int = MAX_WIRE_BYTES) -> bytes:
         url = urlsplit(discovery.endpoint)
         nonce = secrets.token_hex(16)
         nonce_bytes = nonce.encode("ascii")
@@ -239,7 +241,8 @@ class HostClient:
                 deadline = min(deadline, time.monotonic() + response_seconds)
                 connection.settimeout(_remaining(deadline))
                 connection.sendall(header + body)
-                status, fields, reply = _response(connection, deadline)
+                status, fields, reply = _response(connection, deadline, media_type=media_type,
+                                                  response_limit=response_limit)
             proof = fields.get("x-reliquary-proof", "")
             expected = _sign(key, b"response", nonce_bytes, str(status).encode("ascii"), reply)
             if not hmac.compare_digest(proof, expected):
@@ -265,6 +268,18 @@ class HostClient:
                     pass
             raise HostUnavailable(code or "invalid_host_response")
         return reply
+
+    def graph_render(self, operation: str, selector: dict) -> bytes:
+        limits = {"prepare": 4 << 20, "node-chunk": 1 << 20, "edge-chunk": 1 << 20, "resolve": 4096}
+        require(operation in limits, "invalid_graph_operation")
+        discovery = self._read_discovery()
+        if discovery is None:
+            raise HostUnavailable("host_unavailable")
+        seconds = 30.0 if operation == "prepare" else 5.0
+        media = "application/octet-stream" if operation.endswith("-chunk") else "application/json"
+        return self._exchange(discovery, "/v1/graph-render/" + operation, canonical(selector),
+                              time.monotonic() + _CONNECT_SECONDS + seconds, response_seconds=seconds,
+                              media_type=media, response_limit=limits[operation])
 
     def _launch(self) -> None:
         if self._process is not None and self._process.poll() is None:

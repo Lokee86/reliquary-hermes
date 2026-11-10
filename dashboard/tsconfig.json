@@ -1,36 +1,18 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
-    "lib": [
-      "ES2022",
-      "DOM"
-    ],
-    "module": "commonjs",
-    "allowJs": true,
-    "checkJs": true,
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
     "strict": true,
-    "noEmit": true,
     "skipLibCheck": true,
-    "types": []
+    "noEmit": true,
+    "types": ["react", "three"],
+    "paths": {
+      "react": ["./node_modules/@types/react/index.d.ts"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime.d.ts"]
+    }
   },
-  "files": [
-    "types.d.ts",
-    "src/state.js",
-    "src/client.js",
-    "src/fixtures.js",
-    "src/views.js",
-    "src/graph.js",
-    "src/index.js",
-    "src/live_transport.js",
-    "src/live.js",
-    "src/web_components.js",
-    "src/sources.js",
-    "src/surface.js",
-    "src/onboarding.js",
-    "src/setup_client.js",
-    "types-owner-content.d.ts",
-    "src/owner_content.js",
-    "src/memory_mutations.js",
-    "src/graph_mutations.js"
-  ]
+  "include": ["src", "types.d.ts", "../desktop/src"]
 }

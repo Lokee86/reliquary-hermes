@@ -1,0 +1,229 @@
+--- a/apps/desktop/src/global.d.ts
++++ b/apps/desktop/src/global.d.ts
+@@ -1671,6 +1671,7 @@
+ 
+ export interface HermesApiRequest {
+   path: string
++  responseType?: 'bytes'
+   method?: string
+   body?: unknown
+   // Single-file multipart upload (FastAPI UploadFile endpoints). Mutually
+--- a/apps/desktop/src/api/plugins.ts
++++ b/apps/desktop/src/api/plugins.ts
+@@ -44,6 +44,7 @@
+  *  shape, minus the path (which is namespace-derived). */
+ export interface PluginRestOptions {
+   method?: string
++  responseType?: 'bytes'
+   body?: unknown
+   /** Single-file multipart upload (see HermesApiRequest.upload). */
+   upload?: { filename: string; contentType?: string; bytes: ArrayBuffer }
+@@ -83,6 +84,7 @@
+     body: opts.body,
+     upload: opts.upload,
+     timeoutMs: opts.timeoutMs,
++    responseType: opts.responseType,
+     ...profileScoped()
+   })
+ }
+--- a/apps/desktop/src/contrib/plugin.ts
++++ b/apps/desktop/src/contrib/plugin.ts
+@@ -152,6 +152,8 @@
+    *  `plugin_api.py` — profile-aware, namespace-scoped by construction. Use
+    *  `host.request` for gateway JSON-RPC. */
+   rest: <T>(path: string, opts?: PluginRestOptions) => Promise<T>
++  /** Bounded octet-stream response over the same authenticated profile route. */
++  restBytes: (path: string, opts?: Omit<PluginRestOptions, 'responseType' | 'upload'>) => Promise<ArrayBuffer>
+   /** Live twin of `rest`: a WebSocket to this plugin's own namespace
+    *  ('/events'), JSON frames to `onMessage`, auto-reconnect, disposer
+    *  returned. Resolves to a no-op on OAuth remotes — treat it as an
+@@ -394,6 +396,7 @@
+     onEvent: (type, listener) => track(onGatewayEvent(type, listener)),
+     ...createPluginLifetime(track),
+     rest: <T>(path: string, opts?: PluginRestOptions) => pluginRest<T>(pluginId, path, opts),
++    restBytes: (path, opts) => pluginRest<ArrayBuffer>(pluginId, path, { ...opts, responseType: 'bytes' }),
+     socket: (path, onMessage) => track(pluginSocket(pluginId, path, onMessage)),
+     os: createPluginOs(pluginId),
+     pet: createPluginPet(pluginId, track),
+--- a/apps/desktop/electron/oauth-session-response.ts
++++ b/apps/desktop/electron/oauth-session-response.ts
+@@ -1,6 +1,15 @@
+ import { Buffer } from 'node:buffer'
+ 
+ import { httpStatusError } from './api-transport'
++
++export const MAX_PLUGIN_BINARY_BYTES = 1 << 20
++
++export function pluginBinaryBody(body: Buffer, mediaType: unknown): ArrayBuffer {
++  if (mediaType !== 'application/octet-stream' || body.length > MAX_PLUGIN_BINARY_BYTES) {
++    throw new Error('Invalid plugin binary response')
++  }
++  return Uint8Array.from(body).buffer
++}
+ 
+ // Response-stream extraction based on Bartok9's #99135 (original issue #72530).
+ export interface OauthResponseLike {
+@@ -13,6 +22,8 @@
+ 
+ export interface WireOauthResponseOptions {
+   url: string
++  responseType?: 'bytes'
++  abort?: () => void
+   isTimedOut: () => boolean
+   clearTimer: () => void
+   resolve: (value: unknown) => void
+@@ -25,6 +36,7 @@
+   const { url, isTimedOut, clearTimer, resolve, reject } = opts
+   const chunks: Buffer[] = []
+   let settled = false
++  let total = 0
+ 
+   // Headers exist the moment the response event fires — capture before the
+   // body drains so a fast body can't race the capture.
+@@ -36,6 +48,15 @@
+ 
+   res.on('data', chunk => {
+     if (!settled && !isTimedOut()) {
++      total += chunk.length
++      if (opts.responseType === 'bytes' && total > MAX_PLUGIN_BINARY_BYTES) {
++        settled = true
++        chunks.length = 0
++        clearTimer()
++        opts.abort?.()
++        reject(new Error('Plugin binary response exceeded its size limit'))
++        return
++      }
+       chunks.push(Buffer.from(chunk))
+     }
+   })
+@@ -58,16 +79,26 @@
+ 
+     settled = true
+     clearTimer()
+-    const text = Buffer.concat(chunks).toString('utf8')
++    const body = Buffer.concat(chunks)
+     chunks.length = 0
+     const statusCode = res.statusCode || 500
+ 
+     if (statusCode >= 400) {
+-      reject(httpStatusError(statusCode, text))
++      reject(httpStatusError(statusCode, body.toString('utf8')))
+ 
+       return
+     }
+ 
++    if (opts.responseType === 'bytes') {
++      try {
++        if (statusCode < 200 || statusCode >= 300) throw new Error('Invalid plugin binary status')
++        resolve(pluginBinaryBody(body, res.headers['content-type']))
++      } catch (error) {
++        reject(error as Error)
++      }
++      return
++    }
++    const text = body.toString('utf8')
+     if (!text) {
+       resolve(null)
+ 
+--- a/apps/desktop/electron/main.ts
++++ b/apps/desktop/electron/main.ts
+@@ -415,7 +415,7 @@
+   retryCookie401WithLogin,
+   withoutInteractiveOauthLogin
+ } from './oauth-rest-request'
+-import { wireOauthSessionResponse } from './oauth-session-response'
++import { MAX_PLUGIN_BINARY_BYTES, pluginBinaryBody, wireOauthSessionResponse } from './oauth-session-response'
+ import { listWindowsProcesses, reapPackageRootedProcesses } from './package-process-reap'
+ import {
+   bundledPayload,
+@@ -5239,12 +5239,21 @@
+           res => {
+             const chunks = []
+             res.on('error', reject)
+-            res.on('data', chunk => chunks.push(chunk))
++            let total = 0
++            res.on('data', chunk => {
++              total += chunk.length
++              if (options.responseType === 'bytes' && total > MAX_PLUGIN_BINARY_BYTES) {
++                chunks.length = 0
++                res.destroy(new Error('Plugin binary response exceeded its size limit'))
++                return
++              }
++              chunks.push(chunk)
++            })
+             res.on('end', () => {
+-              const text = Buffer.concat(chunks).toString('utf8')
++              const bytes = Buffer.concat(chunks)
+ 
+               if ((res.statusCode || 500) >= 400) {
+-                reject(httpStatusError(res.statusCode, text, res.statusMessage))
++                reject(httpStatusError(res.statusCode, bytes.toString('utf8'), res.statusMessage))
+ 
+                 return
+               }
+@@ -5258,6 +5267,15 @@
+                 return
+               }
+ 
++              if (options.responseType === 'bytes') {
++                try {
++                  resolve(pluginBinaryBody(bytes, res.headers['content-type']))
++                } catch (error) {
++                  reject(error)
++                }
++                return
++              }
++              const text = bytes.toString('utf8')
+               if (!text) {
+                 resolve(null)
+ 
+@@ -7269,6 +7287,8 @@
+       request.on('response', (res: Electron.IncomingMessage): void => {
+         wireOauthSessionResponse(res, {
+           url,
++          responseType: options.responseType,
++          abort: () => request.abort(),
+           isTimedOut: (): boolean => timedOut,
+           clearTimer: (): void => clearTimeout(timer),
+           resolve,
+@@ -14968,7 +14988,7 @@
+ async function fetchJsonForBackend(
+   descriptor,
+   path,
+-  opts: { method?: string; body?: unknown; upload?: unknown; timeoutMs?: number; profileScoped?: boolean } = {}
++  opts: { method?: string; body?: unknown; upload?: unknown; timeoutMs?: number; profileScoped?: boolean; responseType?: 'bytes' } = {}
+ ) {
+   const url = `${descriptor.baseUrl}${path}`
+ 
+@@ -15005,6 +15025,7 @@
+       method: opts.method,
+       body: opts.body,
+       timeoutMs: opts.timeoutMs,
++      responseType: opts.responseType,
+       headers: descriptor.headers
+     }
+ 
+@@ -15020,6 +15041,7 @@
+     body: opts.body,
+     upload: opts.upload,
+     timeoutMs: opts.timeoutMs,
++    responseType: opts.responseType,
+     headers: descriptor.headers,
+     gatewayDescriptor: descriptor.gatewayEndpoint ? descriptor : undefined
+   })
+@@ -15769,6 +15791,7 @@
+     method: request?.method,
+     body: request?.body,
+     upload: request?.upload,
++    responseType: request?.responseType,
+     timeoutMs: resolveTimeoutMs(request?.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
+   })
+ 
+@@ -15873,6 +15896,7 @@
+       method: request?.method,
+       body: request?.body,
+       upload: request?.upload,
++      responseType: request?.responseType,
+       timeoutMs
+     })
+ 
