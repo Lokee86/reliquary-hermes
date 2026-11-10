@@ -1,5 +1,6 @@
 use crate::graph_render_edge_projection_model::{
     GraphRenderDetailEdge, GraphRenderEdgeAggregate, GraphRenderEdgeProjection,
+    GraphRenderLayoutNeighbor, GraphRenderLayoutTopology,
 };
 use crate::graph_render_edge_projection_support::{
     DetailCandidate, add_aggregate, detail_priority, node_index, retain_detail, territory_for_leaf,
@@ -14,6 +15,7 @@ pub(crate) const GRAPH_RENDER_DETAIL_EDGE_LIMIT: usize = 8_192;
 
 pub(crate) struct GraphRenderEdgeProjectionBuilder {
     degrees: Vec<u32>,
+    layout_edges: Vec<(u32, u32, u64)>,
     territory_by_render: Vec<u32>,
     leaf_by_render: Vec<u32>,
     leaf_slot_by_render: Vec<u32>,
@@ -45,6 +47,7 @@ impl GraphRenderEdgeProjectionBuilder {
 
         Self {
             degrees: vec![0; node_count],
+            layout_edges: Vec::new(),
             territory_by_render,
             leaf_by_render,
             leaf_slot_by_render,
@@ -73,6 +76,12 @@ impl GraphRenderEdgeProjectionBuilder {
 
         let color = relation.style.packed_color;
         let weight = relation.style.weight_units;
+        let pair = if source < target {
+            (source as u32, target as u32)
+        } else {
+            (target as u32, source as u32)
+        };
+        self.layout_edges.push((pair.0, pair.1, weight as u64));
         add_aggregate(
             &mut self.overview,
             self.territory_by_render[source],
@@ -109,6 +118,60 @@ impl GraphRenderEdgeProjectionBuilder {
     }
 
     pub(crate) fn finish(self) -> GraphRenderEdgeProjection {
+        let node_count = self.degrees.len();
+        let mut layout_edges = self.layout_edges;
+        layout_edges.sort_unstable_by_key(|(source, target, _)| (*source, *target));
+        let mut unique_len = 0;
+        for read_index in 0..layout_edges.len() {
+            let edge = layout_edges[read_index];
+            if unique_len > 0
+                && layout_edges[unique_len - 1].0 == edge.0
+                && layout_edges[unique_len - 1].1 == edge.1
+            {
+                layout_edges[unique_len - 1].2 =
+                    layout_edges[unique_len - 1].2.saturating_add(edge.2);
+            } else {
+                layout_edges[unique_len] = edge;
+                unique_len += 1;
+            }
+        }
+        layout_edges.truncate(unique_len);
+        let mut offsets = vec![0_usize; node_count + 1];
+        for &(source, target, _) in &layout_edges {
+            offsets[source as usize + 1] += 1;
+            offsets[target as usize + 1] += 1;
+        }
+        for index in 1..offsets.len() {
+            offsets[index] += offsets[index - 1];
+        }
+        let mut neighbors = vec![
+            GraphRenderLayoutNeighbor {
+                render_id: 0,
+                weight_units: 0,
+            };
+            offsets[node_count]
+        ];
+        let mut cursor = offsets[..node_count].to_vec();
+        for &(source, target, weight_units) in &layout_edges {
+            let source_slot = cursor[source as usize];
+            neighbors[source_slot] = GraphRenderLayoutNeighbor {
+                render_id: target,
+                weight_units,
+            };
+            cursor[source as usize] += 1;
+            let target_slot = cursor[target as usize];
+            neighbors[target_slot] = GraphRenderLayoutNeighbor {
+                render_id: source,
+                weight_units,
+            };
+            cursor[target as usize] += 1;
+        }
+        for source in 0..node_count {
+            neighbors[offsets[source]..offsets[source + 1]]
+                .sort_unstable_by_key(|neighbor| neighbor.render_id);
+        }
+        drop(layout_edges);
+        let layout_topology = GraphRenderLayoutTopology { offsets, neighbors };
         let detail_by_leaf = self
             .detail
             .into_iter()
@@ -121,6 +184,7 @@ impl GraphRenderEdgeProjectionBuilder {
             .collect();
         GraphRenderEdgeProjection {
             degrees: self.degrees,
+            layout_topology,
             overview: self.overview,
             intermediate: self.intermediate,
             detail_by_leaf,

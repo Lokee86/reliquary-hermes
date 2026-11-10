@@ -15,6 +15,7 @@ pub(crate) const GRAPH_RENDER_LABEL_MAX_CHARS: usize = 64;
 
 pub(crate) struct GraphRenderNodeReuse<'a> {
     pub(crate) previous_degrees: &'a [u32],
+    pub(crate) previous_positions: &'a [[f32; 3]],
     pub(crate) previous_store: &'a GraphRenderChunkStore,
 }
 
@@ -77,6 +78,7 @@ fn reusable_payload(
     if leaf.render_ids.iter().any(|render_id| {
         let index = render_id.get() as usize;
         reuse.previous_degrees.get(index) != degrees.get(index)
+            || reuse.previous_positions.get(index) != layout.positions.get(index)
     }) {
         return None;
     }

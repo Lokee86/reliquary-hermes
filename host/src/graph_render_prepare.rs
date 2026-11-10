@@ -8,7 +8,7 @@ use crate::graph_render_hierarchy::{
     DEFAULT_GRAPH_RENDER_LEAF_CAPACITY, GRAPH_RENDER_SUBGROUP_LEAF_FANOUT,
     build_graph_render_hierarchy,
 };
-use crate::graph_render_layout::build_graph_render_layout;
+use crate::graph_render_layout::build_graph_render_layout_with_topology;
 use crate::graph_render_manifest::build_graph_render_manifest;
 use crate::graph_render_node_materialization::{GraphRenderNodeReuse, build_node_chunk_store};
 use crate::graph_render_source::GraphRenderSource;
@@ -43,18 +43,29 @@ pub(crate) fn build_graph_render_generation(
     let structure_reused = previous.is_some_and(|previous| {
         previous.node_keys == node_keys && previous.hierarchy == candidate_hierarchy
     });
-    let (hierarchy, layout) = match previous.filter(|_| structure_reused) {
+    let mut edge_projection =
+        build_edge_projection(&node_keys, &source.relations, &candidate_hierarchy)?;
+    let layout_fingerprint = edge_projection.layout_topology.fingerprint();
+    let layout_reused = previous.is_some_and(|previous| {
+        structure_reused && previous.layout_fingerprint == layout_fingerprint
+    });
+    let (hierarchy, layout) = match previous.filter(|_| layout_reused) {
         Some(previous) => (previous.hierarchy.clone(), previous.layout.clone()),
         None => {
-            let layout = build_graph_render_layout(&candidate_hierarchy, node_keys.len() as u32);
+            let layout = build_graph_render_layout_with_topology(
+                &candidate_hierarchy,
+                node_keys.len() as u32,
+                &edge_projection.layout_topology,
+            );
             (candidate_hierarchy, layout)
         }
     };
+    edge_projection.layout_topology = Default::default();
 
-    let edge_projection = build_edge_projection(&node_keys, &source.relations, &hierarchy)?;
     let previous = previous.filter(|_| structure_reused);
     let node_reuse = previous.map(|previous| GraphRenderNodeReuse {
         previous_degrees: &previous.edge_projection.degrees,
+        previous_positions: &previous.layout.positions,
         previous_store: &previous.chunks,
     });
     let (mut chunks, node_chunks_reused, node_chunks_encoded) = build_node_chunk_store(
@@ -71,7 +82,9 @@ pub(crate) fn build_graph_render_generation(
         &layout,
         &edge_projection,
         &mut chunks,
-        previous.map(|previous| (&previous.edge_projection, &previous.chunks)),
+        previous
+            .filter(|_| layout_reused)
+            .map(|previous| (&previous.edge_projection, &previous.chunks)),
     )?;
 
     let manifest = build_graph_render_manifest(
@@ -83,7 +96,7 @@ pub(crate) fn build_graph_render_generation(
         &chunks,
     );
     let reuse = GraphRenderReuseStats {
-        hierarchy_layout_reused: structure_reused,
+        hierarchy_layout_reused: layout_reused,
         node_chunks_reused,
         node_chunks_encoded,
         edge_chunks_reused,
@@ -103,6 +116,7 @@ pub(crate) fn build_graph_render_generation(
         node_targets,
         hierarchy,
         layout,
+        layout_fingerprint,
         edge_projection,
         manifest,
         chunks,
