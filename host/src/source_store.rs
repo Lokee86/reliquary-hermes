@@ -32,6 +32,8 @@ pub(crate) struct SourceState {
     pub(crate) session_id: Option<String>,
     #[serde(default)]
     pub(crate) owner_id: Option<String>,
+    #[serde(default)]
+    pub(crate) manual: bool,
     pub(crate) generation: u64,
     pub(crate) available: bool,
     pub(crate) stale: bool,
@@ -40,6 +42,7 @@ pub(crate) struct SourceState {
     pub(crate) pending: Option<SourceHead>,
 }
 
+#[derive(Clone)]
 pub(crate) struct SourceStore(PathBuf);
 
 impl SourceStore {
@@ -63,24 +66,20 @@ impl SourceStore {
             .join(format!("{}.json", hex(&Sha256::digest(session.as_bytes()))))
     }
 
-    pub(crate) fn read_all(&self) -> Result<Vec<SourceState>, HttpError> {
-        let mut states = Vec::new();
-        for entry in fs::read_dir(&self.0).map_err(|_| UNAVAILABLE)? {
-            let entry = entry.map_err(|_| UNAVAILABLE)?;
+    pub(crate) fn visit_manual_imports(&self, mut visit: impl FnMut(String, String) -> bool) {
+        let Ok(entries) = fs::read_dir(&self.0) else { return; };
+        for entry in entries.flatten() {
             let path = entry.path();
-            if !path.extension().is_some_and(|extension| extension == "json") {
-                continue;
-            }
-            let state = self.read(&path)?;
-            let Some(session) = state.session_id.as_deref() else {
-                continue;
-            };
-            if self.path(session) != path {
-                return Err(UNAVAILABLE);
-            }
-            states.push(state);
+            if !path.extension().is_some_and(|extension| extension == "json") { continue; }
+            let Ok(state) = self.read(&path) else { continue; };
+            if !state.manual || state.terminal { continue; }
+            let (Some(session), Some(head), Some(owner)) = (
+                state.session_id.as_deref(), state.pending.as_ref().or(state.accepted.as_ref()),
+                state.owner_id.as_deref(),
+            ) else { continue; };
+            if self.path(session) != path { continue; }
+            if !visit(owner.to_owned(), head.import_id.clone()) { return; }
         }
-        Ok(states)
     }
 
     pub(crate) fn read(&self, path: &Path) -> Result<SourceState, HttpError> {
@@ -172,6 +171,40 @@ impl SourceStore {
             .and_then(|directory| directory.sync_all())
             .map_err(|_| UNAVAILABLE)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod manual_resume_tests {
+    use super::*;
+
+    #[test]
+    fn restart_scan_returns_only_explicit_manual_import_heads() {
+        let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join(".test-tmp");
+        fs::create_dir_all(&scratch).unwrap();
+        let directory = tempfile::tempdir_in(&scratch).unwrap();
+        let store = SourceStore::open(directory.path()).unwrap();
+        for (session, manual) in [("old-auto", false), ("selected-manual", true)] {
+            let path = store.path(session);
+            let mut state = SourceState::default();
+            state.session_id = Some(session.to_owned());
+            state.owner_id = Some("configured-rel".to_owned());
+            state.manual = manual;
+            state.accepted = Some(SourceHead {
+                wire_digest: "a".repeat(64),
+                request_key: "b".repeat(64),
+                native_digest: [1; 32],
+                import_id: format!("import-{session}"),
+                branch: None,
+                evidence: Vec::new(),
+                receipt: Some([2; 32]),
+            });
+            state.available = true;
+            store.write(&path, &state).unwrap();
+        }
+        let mut seen = Vec::new();
+        store.visit_manual_imports(|owner, import_id| { seen.push((owner, import_id)); seen.len() < 130 });
+        assert_eq!(seen, vec![("configured-rel".to_owned(), "import-selected-manual".to_owned())]);
     }
 }
 

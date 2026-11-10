@@ -302,7 +302,10 @@ impl Service {
         if !crate::service_protocol::valid_id(&request.session_id) { return Err(INVALID); }
         let registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
         let sources = self.sources.lock().map_err(|_| UNAVAILABLE)?;
-        Ok(HttpResponse::ok(sources.import_status(&request.session_id, &self.instance, &registry)?))
+        let mut runtimes = self.runtimes.lock().map_err(|_| UNAVAILABLE)?;
+        Ok(HttpResponse::ok(sources.import_status(
+            &request.session_id, &self.instance, &registry, &mut runtimes,
+        )?))
     }
 
     fn source(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {

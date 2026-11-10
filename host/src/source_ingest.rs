@@ -102,7 +102,7 @@ impl SourceService {
     }
 
     pub(crate) fn import_status(
-        &self, session: &str, instance: &Instance, registry: &Registry,
+        &self, session: &str, instance: &Instance, registry: &Registry, runtimes: &mut RuntimeRegistry,
     ) -> Result<serde_json::Value, HttpError> {
         let state = self.store.read(&self.store.path(session))?;
         let source_owner = state.owner_id.as_deref().and_then(|value| value.parse::<OwnerId>().ok());
@@ -119,9 +119,15 @@ impl SourceService {
         let Some(owner) = owner_id else {
             return Err(UNAVAILABLE);
         };
+        let fenced = runtimes.has_fence("hermes", session).map_err(|_| UNAVAILABLE)?;
         if state.terminal {
             return Ok(json!({"session_id": session, "state": "tombstoned", "receipt": null,
                              "import_id": null, "owner_id": owner.to_string(), "snapshot_digest": head.wire_digest}));
+        }
+        if state.stale || fenced {
+            return Ok(json!({"session_id": session, "state": "unavailable", "receipt": null,
+                             "import_id": head.import_id, "owner_id": owner.to_string(),
+                             "snapshot_digest": head.wire_digest}));
         }
         let status = instance
             .native_import_status(owner, &head.import_id)
@@ -153,12 +159,18 @@ impl SourceService {
     }
 
     pub(crate) fn resume_all(&mut self, instance: &Instance) -> Result<(), HttpError> {
-        for state in self.store.read_all()? {
-            if state.terminal { continue; }
-            let Some(head) = state.pending.as_ref().or(state.accepted.as_ref()) else { continue; };
-            let Some(owner) = state.owner_id.as_deref().and_then(|value| value.parse::<OwnerId>().ok()) else { continue; };
-            self.schedule(instance, owner, &head.import_id);
-        }
+        if self.runtime.is_none() { return Ok(()); }
+        let store = self.store.clone();
+        let mut resumed = 0;
+        store.visit_manual_imports(|owner_id, import_id| {
+            let Ok(owner) = owner_id.parse::<OwnerId>() else { return true; };
+            let status = instance.native_import_status(owner, &import_id).ok().flatten();
+            if status.is_some_and(|status| matches!(status.state, NativeImportState::Staged | NativeImportState::Settled)) {
+                self.schedule(instance, owner, &import_id);
+                resumed += 1;
+            }
+            resumed < 130
+        });
         Ok(())
     }
 
@@ -220,6 +232,9 @@ impl SourceService {
         }
         if reconciliation_required && request.fence_epoch.is_none() {
             return Err(RECOVERY_REQUIRED);
+        }
+        if request.operation.is_manual() && state.accepted.is_none() && state.pending.is_none() {
+            state.manual = true;
         }
         if request.generation != state.generation {
             return Err(STALE);
