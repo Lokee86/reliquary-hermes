@@ -45,6 +45,40 @@ struct RenderRequest {
     render_id: Option<u32>,
 }
 
+impl RenderRequest {
+    fn valid_for(&self, operation: &str) -> bool {
+        let bounded = |value: &str, max: usize| !value.is_empty() && value.len() <= max;
+        if !bounded(&self.owner_id, 128)
+            || !bounded(&self.principal_id, 128)
+            || !bounded(&self.generation, 39)
+            || !self.generation.bytes().all(|byte| byte.is_ascii_digit())
+            || self.cut.len() != 64
+            || !self
+                .cut
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return false;
+        }
+        match operation {
+            "prepare" => {
+                self.generation_id.is_none() && self.chunk_id.is_none() && self.render_id.is_none()
+            }
+            "node-chunk" | "edge-chunk" => {
+                self.generation_id.as_deref().is_some_and(valid_u64_decimal)
+                    && self.chunk_id.is_some()
+                    && self.render_id.is_none()
+            }
+            "resolve" => {
+                self.generation_id.as_deref().is_some_and(valid_u64_decimal)
+                    && self.chunk_id.is_none()
+                    && self.render_id.is_some()
+            }
+            _ => false,
+        }
+    }
+}
+
 struct Authority {
     owner_id: String,
     root_generation: String,
@@ -68,6 +102,9 @@ impl GraphRenderHost {
         bytes: &[u8],
     ) -> Result<HttpResponse, HttpError> {
         let request: RenderRequest = decode(bytes).map_err(|_| INVALID)?;
+        if !request.valid_for(operation) {
+            return Err(INVALID);
+        }
         let registry = registry.lock().map_err(|_| UNAVAILABLE)?;
         let (owner, kind, _) = registry
             .dashboard_scope(
@@ -146,14 +183,25 @@ impl GraphRenderHost {
         }
         let latest_cut = current_cut(instance, owner, kind)?;
         if latest_cut != cut {
-            self.evict_if_authority_cut_advanced(&request.owner_id, &root_generation, &root_cut);
+            let (latest_generation, latest_cut) = cut_binding(&latest_cut);
+            self.evict_if_authority_cut_advanced(
+                &request.owner_id,
+                &latest_generation,
+                &latest_cut,
+            );
             return Err(HttpError::new(409, "owner_cut_changed", false));
         }
 
         // A service instance is profile scoped. Keep one prepared generation resident;
         // owner switches and changed cuts retire every earlier render identity.
         self.renderer.clear();
+        self.authority = None;
         let summary = self.renderer.prepare(source).map_err(|_| UNAVAILABLE)?;
+        let latest_cut = current_cut(instance, owner, kind)?;
+        if latest_cut != cut {
+            self.renderer.clear();
+            return Err(HttpError::new(409, "owner_cut_changed", false));
+        }
         if self
             .renderer
             .resident_bytes(summary.generation_id)
@@ -521,6 +569,13 @@ fn registry_error(error: RegistryError) -> HttpError {
 
 fn stale_generation() -> HttpError {
     HttpError::new(409, "graph_generation_stale", false)
+}
+
+fn valid_u64_decimal(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 20
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && value.parse::<u64>().is_ok()
 }
 
 fn hex(bytes: &[u8]) -> String {

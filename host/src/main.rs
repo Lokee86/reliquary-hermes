@@ -1,5 +1,60 @@
 //! Standalone HP03 loopback service. Standard input carries the startup secret.
 mod dashboard;
+mod graph_render;
+mod graph_render_binary;
+#[cfg(test)]
+mod graph_render_binary_layout_tests;
+#[cfg(test)]
+mod graph_render_binary_tests;
+mod graph_render_chunk_store;
+mod graph_render_contract;
+#[cfg(test)]
+mod graph_render_contract_tests;
+mod graph_render_edge_chunk;
+mod graph_render_edge_materialization;
+#[cfg(test)]
+mod graph_render_edge_materialization_tests;
+mod graph_render_edge_payload;
+mod graph_render_edge_projection;
+mod graph_render_edge_projection_model;
+mod graph_render_edge_projection_support;
+#[cfg(test)]
+mod graph_render_edge_projection_tests;
+mod graph_render_edge_reuse;
+mod graph_render_error;
+mod graph_render_generation;
+#[cfg(test)]
+mod graph_render_generic_identity_tests;
+mod graph_render_hierarchy;
+mod graph_render_hierarchy_model;
+#[cfg(test)]
+mod graph_render_hierarchy_tests;
+mod graph_render_host;
+mod graph_render_identity;
+mod graph_render_layout;
+mod graph_render_layout_grid;
+mod graph_render_layout_model;
+#[cfg(test)]
+mod graph_render_layout_tests;
+mod graph_render_manifest;
+#[cfg(test)]
+mod graph_render_manifest_tests;
+mod graph_render_node_chunk;
+mod graph_render_node_materialization;
+#[cfg(test)]
+mod graph_render_node_materialization_tests;
+mod graph_render_prepare;
+#[cfg(test)]
+mod graph_render_reuse_tests;
+#[cfg(test)]
+mod graph_render_scale_tests;
+mod graph_render_source;
+mod graph_render_source_style;
+mod graph_render_style;
+#[cfg(test)]
+mod graph_render_style_tests;
+#[cfg(test)]
+mod graph_render_tests;
 mod registry;
 mod retrieval;
 mod runtime;

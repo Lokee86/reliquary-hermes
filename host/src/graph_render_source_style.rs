@@ -6,12 +6,36 @@ pub(crate) fn style_for_relation(
     kind: RelationKind,
     origin: RelationOrigin,
 ) -> GraphRenderEdgeStyle {
-    let detail_priority_tag = ((kind.code() as u64) << 16) ^ ((origin.code() as u64) << 8);
+    let detail_priority_tag =
+        ((kind_code(kind) as u64) << 16) ^ ((origin_code(origin) as u64) << 8);
     GraphRenderEdgeStyle::new(
         edge_color(kind, origin),
         edge_weight_units(kind, origin),
         detail_priority_tag,
     )
+}
+
+const fn kind_code(kind: RelationKind) -> u16 {
+    match kind {
+        RelationKind::Topical => 1,
+        RelationKind::Factual => 2,
+        RelationKind::Causal => 3,
+        RelationKind::Recurrent => 4,
+        RelationKind::References => 5,
+        RelationKind::DuplicateOf => 6,
+        RelationKind::Supersedes => 7,
+        RelationKind::StructuralParent => 8,
+        RelationKind::EntityAssociation => 100,
+        RelationKind::PrincipalAssociation => 101,
+    }
+}
+
+const fn origin_code(origin: RelationOrigin) -> u8 {
+    match origin {
+        RelationOrigin::Dream => 1,
+        RelationOrigin::User => 2,
+        RelationOrigin::Perception => 3,
+    }
 }
 
 pub(crate) const fn edge_color(kind: RelationKind, origin: RelationOrigin) -> u32 {
