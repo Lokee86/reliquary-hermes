@@ -28,6 +28,10 @@ pub(crate) struct SourceHead {
 #[derive(Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceState {
+    #[serde(default)]
+    pub(crate) session_id: Option<String>,
+    #[serde(default)]
+    pub(crate) owner_id: Option<String>,
     pub(crate) generation: u64,
     pub(crate) available: bool,
     pub(crate) stale: bool,
@@ -59,6 +63,26 @@ impl SourceStore {
             .join(format!("{}.json", hex(&Sha256::digest(session.as_bytes()))))
     }
 
+    pub(crate) fn read_all(&self) -> Result<Vec<SourceState>, HttpError> {
+        let mut states = Vec::new();
+        for entry in fs::read_dir(&self.0).map_err(|_| UNAVAILABLE)? {
+            let entry = entry.map_err(|_| UNAVAILABLE)?;
+            let path = entry.path();
+            if !path.extension().is_some_and(|extension| extension == "json") {
+                continue;
+            }
+            let state = self.read(&path)?;
+            let Some(session) = state.session_id.as_deref() else {
+                continue;
+            };
+            if self.path(session) != path {
+                return Err(UNAVAILABLE);
+            }
+            states.push(state);
+        }
+        Ok(states)
+    }
+
     pub(crate) fn read(&self, path: &Path) -> Result<SourceState, HttpError> {
         match path.symlink_metadata() {
             Ok(metadata) if metadata.is_file() => {}
@@ -73,7 +97,8 @@ impl SourceStore {
             return Err(UNAVAILABLE);
         }
         let state: SourceState = crate::service_protocol::decode(&raw).map_err(|_| UNAVAILABLE)?;
-        if (state.stale && state.available)
+        if state.session_id.as_deref().is_some_and(|session| self.path(session) != path)
+            || (state.stale && state.available)
             || state
                 .accepted
                 .as_ref()

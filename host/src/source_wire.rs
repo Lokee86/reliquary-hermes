@@ -13,8 +13,19 @@ use std::collections::BTreeSet;
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SourceAction {
     Snapshot,
+    ManualSnapshot,
     Invalidate,
     Terminal,
+}
+
+impl SourceAction {
+    pub(crate) fn is_snapshot(self) -> bool {
+        matches!(self, Self::Snapshot | Self::ManualSnapshot)
+    }
+
+    pub(crate) fn is_manual(self) -> bool {
+        self == Self::ManualSnapshot
+    }
 }
 
 #[derive(Deserialize)]
@@ -28,6 +39,8 @@ pub(crate) struct SourceRequest {
     pub(crate) idempotency_key: String,
     pub(crate) operation: SourceAction,
     pub(crate) arguments: Value,
+    #[serde(default)]
+    pub(crate) target_owner_id: Option<String>,
     // Transport authority is separate from the durable outbox identity.
     #[serde(default)]
     pub(crate) lease_id: Option<String>,
@@ -45,14 +58,16 @@ impl SourceRequest {
                 .all(|id| valid_id(id))
             || !is_digest(&value.idempotency_key)
             || value.lease_id.as_ref().is_some_and(|id| !valid_id(id))
+            || value.target_owner_id.as_ref().is_some_and(|id| !valid_id(id))
+            || value.operation.is_manual() != value.target_owner_id.is_some()
             || value.fence_epoch.is_some_and(|epoch| {
-                epoch == 0 || value.operation != SourceAction::Snapshot || value.lease_id.is_none()
+                epoch == 0 || !value.operation.is_snapshot() || value.lease_id.is_none()
             })
         {
             return Err(INVALID);
         }
         match value.operation {
-            SourceAction::Snapshot => {
+            SourceAction::Snapshot | SourceAction::ManualSnapshot => {
                 serde_json::from_value::<SnapshotArguments>(value.arguments.clone())
                     .map_err(|_| INVALID)?;
             }

@@ -282,6 +282,17 @@ impl Registry {
         }
     }
 
+    pub(crate) fn configured_source_owner(&self, owner_id: &str) -> Result<OwnerId, RegistryError> {
+        let owner = owner_id
+            .parse::<OwnerId>()
+            .map_err(|_| RegistryError::Invalid("invalid_owner"))?;
+        if owner == self.topology.main_rel || self.topology.projects.values().any(|project| project.rel_id == owner) {
+            Ok(owner)
+        } else {
+            Err(RegistryError::Denied("unconfigured_source_owner"))
+        }
+    }
+
     pub(crate) fn owner_status(
         &self,
         instance: &Instance,

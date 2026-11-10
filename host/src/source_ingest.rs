@@ -47,6 +47,7 @@ pub(crate) struct SourceService {
     store: SourceStore,
     runtime: Option<ConfiguredRuntime>,
     jobs: BTreeMap<OwnerId, OwnerProcessingJob>,
+    active_imports: BTreeMap<OwnerId, String>,
 }
 
 impl SourceService {
@@ -55,6 +56,7 @@ impl SourceService {
             store: SourceStore::open(state_dir)?,
             runtime: configured_runtime(state_dir)?,
             jobs: BTreeMap::new(),
+            active_imports: BTreeMap::new(),
         })
     }
 
@@ -99,6 +101,67 @@ impl SourceService {
         })
     }
 
+    pub(crate) fn import_status(
+        &self, session: &str, instance: &Instance, registry: &Registry,
+    ) -> Result<serde_json::Value, HttpError> {
+        let state = self.store.read(&self.store.path(session))?;
+        let source_owner = state.owner_id.as_deref().and_then(|value| value.parse::<OwnerId>().ok());
+        let head = state.pending.as_ref().or(state.accepted.as_ref());
+        let owner_id = if head.is_some() {
+            source_owner.or_else(|| registry.source_owner(session, true).ok())
+        } else {
+            None
+        };
+        let Some(head) = head else {
+            return Ok(json!({"session_id": session, "state": if state.terminal { "tombstoned" } else { "none" },
+                             "receipt": null, "import_id": null, "owner_id": null, "snapshot_digest": null}));
+        };
+        let Some(owner) = owner_id else {
+            return Err(UNAVAILABLE);
+        };
+        if state.terminal {
+            return Ok(json!({"session_id": session, "state": "tombstoned", "receipt": null,
+                             "import_id": null, "owner_id": owner.to_string(), "snapshot_digest": head.wire_digest}));
+        }
+        let status = instance
+            .native_import_status(owner, &head.import_id)
+            .map_err(|_| UNAVAILABLE)?;
+        let label = match status {
+            None => "staged",
+            Some(status) if status.state == NativeImportState::Completed => "complete",
+            Some(status) if status.state == NativeImportState::Staging => "processing",
+            Some(_status) if self.active_imports.get(&owner) == Some(&head.import_id)
+                && self.jobs.get(&owner).is_some_and(|job| !job.is_finished()) => "processing",
+            Some(status) => {
+                let progress = instance
+                    .processing_status(owner, Some(&head.import_id))
+                    .map_err(|_| UNAVAILABLE)?;
+                if progress.failed > 0 || progress.held > 0 {
+                    "failed"
+                } else if progress.pending > 0 || progress.processing > 0 {
+                    "processing"
+                } else if status.state == NativeImportState::Staged || status.state == NativeImportState::Settled {
+                    "staged"
+                } else {
+                    "unavailable"
+                }
+            }
+        };
+        Ok(json!({"session_id": session, "state": label,
+                  "receipt": head.receipt.map(|value| hex(&value)), "import_id": head.import_id,
+                  "owner_id": owner.to_string(), "snapshot_digest": head.wire_digest}))
+    }
+
+    pub(crate) fn resume_all(&mut self, instance: &Instance) -> Result<(), HttpError> {
+        for state in self.store.read_all()? {
+            if state.terminal { continue; }
+            let Some(head) = state.pending.as_ref().or(state.accepted.as_ref()) else { continue; };
+            let Some(owner) = state.owner_id.as_deref().and_then(|value| value.parse::<OwnerId>().ok()) else { continue; };
+            self.schedule(instance, owner, &head.import_id);
+        }
+        Ok(())
+    }
+
     pub(crate) fn handle(
         &mut self,
         instance: &Instance,
@@ -106,7 +169,7 @@ impl SourceService {
         request: SourceRequest,
         reconciliation_required: bool,
     ) -> Result<HttpResponse, HttpError> {
-        let snapshot = if request.operation == SourceAction::Snapshot {
+        let snapshot = if request.operation.is_snapshot() {
             Some(Snapshot::parse(&request)?)
         } else {
             None
@@ -117,6 +180,19 @@ impl SourceService {
         )?;
         let path = self.store.path(&request.session_id);
         let mut state = self.store.read(&path)?;
+        state.session_id = Some(request.session_id.clone());
+        let selected_owner = owner.to_string();
+        if state.owner_id.as_deref().is_some_and(|value| value != selected_owner) {
+            return Err(HttpError::new(409, "source_owner_conflict", false));
+        }
+        if request.operation.is_manual() {
+            if let Some(snapshot) = snapshot.as_ref() {
+                let prior = state.pending.as_ref().or(state.accepted.as_ref());
+                if prior.is_some_and(|head| head.wire_digest != snapshot.digest) {
+                    return Err(HttpError::new(409, "manual_import_conflict", false));
+                }
+            }
+        }
         if request.operation == SourceAction::Terminal {
             if !state.terminal || request.generation > state.generation {
                 state.generation = state.generation.max(request.generation);
@@ -265,6 +341,7 @@ impl SourceService {
         {
             return Err(UNAVAILABLE);
         }
+        state.owner_id = Some(owner.to_string());
         state.pending = Some(candidate.clone());
         self.store.write(path, &state)?;
         let staged = instance
@@ -376,13 +453,7 @@ impl SourceService {
         let scope = HermesCopyScope::new(registry.profile_id().to_owned(), session.clone())
             .map_err(|_| "unauthorized")?;
         let owner = source_owner.and_then(|id| id.parse::<OwnerId>().ok());
-        if scope.conversation_id() != turn.conversation_id
-            || Some(
-                registry
-                    .source_owner(session, true)
-                    .map_err(|_| "unauthorized")?,
-            ) != owner
-        {
+        if scope.conversation_id() != turn.conversation_id {
             return Err("unauthorized");
         }
         let head = self
@@ -392,6 +463,9 @@ impl SourceService {
                 "source_reconciliation_required" => "stale",
                 _ => "missing",
             })?;
+        let expected_owner = self.source_owner(session).map_err(|_| "unauthorized")?
+            .or_else(|| registry.source_owner(session, true).ok());
+        if expected_owner != owner { return Err("unauthorized"); }
         // Root's accepted import proves the original digest. An append can
         // advance the head digest while retaining the original message.
         if !head
@@ -469,10 +543,10 @@ impl SourceService {
                             HermesCopyScope::new(registry.profile_id().to_owned(), session.clone())
                                 .map_err(|_| PROVENANCE_UNAVAILABLE)?;
                         if scope.conversation_id() != turn.conversation_id
-                            || registry
-                                .source_owner(session, true)
+                            || self.source_owner(session)
                                 .map_err(|_| PROVENANCE_UNAVAILABLE)?
-                                != owner
+                                .or_else(|| registry.source_owner(session, true).ok())
+                                != Some(owner)
                         {
                             return Err(PROVENANCE_UNAVAILABLE);
                         }
@@ -498,6 +572,14 @@ impl SourceService {
         Ok(provenance)
     }
 
+    pub(crate) fn source_owner(&self, session: &str) -> Result<Option<OwnerId>, HttpError> {
+        let state = self.store.read(&self.store.path(session))?;
+        match state.owner_id {
+            Some(value) => value.parse::<OwnerId>().map(Some).map_err(|_| UNAVAILABLE),
+            None => Ok(None),
+        }
+    }
+
     pub(crate) fn is_terminal(&self, session: &str) -> Result<bool, HttpError> {
         Ok(self.store.read(&self.store.path(session))?.terminal)
     }
@@ -507,7 +589,8 @@ impl SourceService {
         if let Ok(state) = self.store.read(&path) {
             if !state.terminal {
                 if let Some(head) = state.accepted {
-                    self.schedule(instance, owner, &head.import_id);
+                    let source_owner = state.owner_id.as_deref().and_then(|value| value.parse::<OwnerId>().ok()).unwrap_or(owner);
+                    self.schedule(instance, source_owner, &head.import_id);
                 }
             }
         }
@@ -522,6 +605,7 @@ impl SourceService {
         }
         if let Some(job) = self.jobs.remove(&owner) {
             let _ = job.join();
+            self.active_imports.remove(&owner);
         }
         if !instance
             .native_import_status(owner, import_id)
@@ -546,6 +630,7 @@ impl SourceService {
             },
         ) {
             self.jobs.insert(owner, job);
+            self.active_imports.insert(owner, import_id.to_owned());
         }
     }
 }
@@ -589,7 +674,7 @@ fn scope(request: &SourceRequest) -> Result<HermesCopyScope, HttpError> {
 
 fn verify_key(request: &SourceRequest, digest: Option<&str>) -> Result<(), HttpError> {
     let kind = match request.operation {
-        SourceAction::Snapshot => "snapshot",
+        SourceAction::Snapshot | SourceAction::ManualSnapshot => "snapshot",
         SourceAction::Invalidate => "invalidate",
         SourceAction::Terminal => "terminal",
     };
@@ -604,6 +689,9 @@ fn verify_key(request: &SourceRequest, digest: Option<&str>) -> Result<(), HttpE
     ];
     if let Some(epoch) = request.fence_epoch {
         parts.extend([json!("reconcile"), json!(request.lease_id), json!(epoch)]);
+    }
+    if request.operation.is_manual() {
+        parts.extend([json!("manual"), json!(request.target_owner_id)]);
     }
     let raw = serde_json::to_vec(&parts).map_err(|_| INVALID)?;
     if request.idempotency_key != hex(&Sha256::digest(raw)) {
