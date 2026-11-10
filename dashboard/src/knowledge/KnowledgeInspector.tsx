@@ -153,7 +153,7 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
         <div><dt>Lifecycle</dt><dd>{memory.lifecycle}</dd></div>
         <div><dt>Type</dt><dd>{memory.category} · {memory.memory_type}</dd></div>
         <div><dt>Revision</dt><dd>{detail.body.revision}{revision ? " · historical" : " · current"}</dd></div>
-        <div><dt>Community</dt><dd>{community ? communityLabel(community) : "—"}</dd></div>
+        <div><dt>Community</dt><dd>{memory.community_id ? communityLabel(community ?? memory.community_id) : "—"}</dd></div>
         <div><dt>Memory ID</dt><dd>{memory.memory_id}</dd></div>
       </dl>
 

@@ -94,8 +94,13 @@ export async function exerciseKnowledge(page, fixture, surface) {
   await inspector.getByRole("heading", { name: "Provenance", exact: true }).waitFor();
   await inspector.getByRole("heading", { name: "History", exact: true }).waitFor();
   await screenshot("inspector");
+  if (fixture.community) {
+    await exerciseCommunity(app, fixture.community, screenshot);
+    console.log(surface + ": community navigation, filtering and rename passed");
+  }
   await rail.getByRole("button", { name: /^PHY\b/ }).click();
   await rail.getByText(fixture.ownerIds.phy, { exact: true }).waitFor();
+  await rail.getByText("Read only", { exact: true }).waitFor();
   await graphReady(fixture.counts.phy);
   assert.equal(await inspector.count(), 0);
   const nav = app.getByRole("navigation", { name: "Reliquary sections" });
@@ -109,6 +114,42 @@ export async function exerciseKnowledge(page, fixture, surface) {
 }
 
 
+async function exerciseCommunity(app, community, screenshot) {
+  const nav = app.getByRole("complementary", { name: "Knowledge navigation" });
+  const list = app.getByRole("region", { name: "Memory list" });
+  const rows = list.locator(".knowledge-memory-row");
+  const next = nav.getByRole("button", { name: "Next community page", exact: true });
+  const first = nav.getByRole("button", { name: "First community page", exact: true });
+  const communityButton = name => nav.getByRole("button").filter({ hasText: name });
+  const original = communityButton(community.name);
+
+  await app.getByLabel("Search memories").fill("");
+  await rows.nth(1).waitFor({ timeout: 30000 });
+  if (community.onNextPage) {
+    await next.waitFor({ timeout: 30000 });
+    assert.equal(await original.count(), 0);
+    await next.click();
+  }
+  await original.click({ timeout: 30000 });
+  await rows.filter({ hasText: community.memberTitle }).waitFor({ timeout: 30000 });
+  await rows.nth(community.memberCount).waitFor({ state: "hidden", timeout: 30000 });
+  assert.equal(await rows.count(), community.memberCount);
+  await screenshot("community");
+
+  if (community.onNextPage) {
+    await first.click();
+    await next.waitFor({ timeout: 30000 });
+    await rows.nth(1).waitFor({ timeout: 30000 });
+    assert.equal(await original.count(), 0);
+    await next.click();
+    await original.click({ timeout: 30000 });
+  }
+  await nav.getByLabel("Community name").fill(community.renamed);
+  await nav.getByRole("button", { name: "Rename", exact: true }).click();
+  if (community.onNextPage) await next.click({ timeout: 30000 });
+  await communityButton(community.renamed).waitFor({ timeout: 30000 });
+  assert.equal(await original.count(), 0);
+}
 async function exerciseWrites(app) {
   await app.getByRole("button", { name: "List", exact: true }).click();
   const inspector = app.getByRole("complementary", { name: "Memory inspector" });

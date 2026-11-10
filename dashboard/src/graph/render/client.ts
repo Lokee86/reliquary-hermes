@@ -9,6 +9,7 @@ import {
 import {
   GRAPH_RENDER_DETAIL_CHUNK_BUDGET,
   GRAPH_RENDER_HIERARCHY_BUDGET,
+  GRAPH_RENDER_INTERMEDIATE_EDGE_BUDGET,
   GRAPH_RENDER_PICK_CHUNK_BUDGET,
   edgeBudget,
   selectGraphRenderLod,
@@ -68,9 +69,12 @@ export class GraphRenderClient {
     validateManifest(manifest);
     this.manifest = manifest;
     this.transport = transport;
+    const detailEdgeCount = manifest.edgeChunks.filter(chunk => chunk.lod === "detail").length;
+    const intermediateEdgeCount = manifest.edgeChunks.filter(chunk => chunk.lod === "intermediate").length;
     this.detailFits = manifest.totalNodeCount <= SMALL_GRAPH_NODE_LIMIT
       && manifest.nodeChunks.length <= GRAPH_RENDER_DETAIL_CHUNK_BUDGET
-      && manifest.edgeChunks.filter(chunk => chunk.lod === "detail").length <= GRAPH_RENDER_DETAIL_CHUNK_BUDGET;
+      && detailEdgeCount + intermediateEdgeCount <= GRAPH_RENDER_DETAIL_CHUNK_BUDGET
+      && intermediateEdgeCount <= GRAPH_RENDER_INTERMEDIATE_EDGE_BUDGET;
     this.hierarchyIndex = new GraphRenderBoundsIndex(
       manifest.hierarchy.map((value) => ({ bounds: value.bounds, value })),
     );
@@ -87,7 +91,6 @@ export class GraphRenderClient {
   planViewport(viewport: GraphRenderViewport) {
     validateViewport(viewport);
     // Small owners fit in the existing detail budgets at the initial camera distance.
-    // Their unpartitioned relations can exist only in detail chunks.
     const lod = this.detailFits ? "detail" : selectGraphRenderLod(viewport, this.manifest.globalBounds);
     const hierarchy = this.hierarchyIndex.querySphere(
       viewport.center,
@@ -97,11 +100,24 @@ export class GraphRenderClient {
     const nodeChunks = lod === "detail"
       ? this.nodeIndex.querySphere(viewport.center, viewport.radius, GRAPH_RENDER_DETAIL_CHUNK_BUDGET)
       : [];
-    const edgeChunks = this.edgeIndexes[lod].querySphere(
-      viewport.center,
-      viewport.radius,
-      edgeBudget(lod),
-    );
+    const edgeChunks = this.detailFits
+      ? [
+        ...this.edgeIndexes.detail.querySphere(
+          viewport.center,
+          viewport.radius,
+          GRAPH_RENDER_DETAIL_CHUNK_BUDGET,
+        ),
+        ...this.edgeIndexes.intermediate.querySphere(
+          viewport.center,
+          viewport.radius,
+          GRAPH_RENDER_INTERMEDIATE_EDGE_BUDGET,
+        ),
+      ]
+      : this.edgeIndexes[lod].querySphere(
+        viewport.center,
+        viewport.radius,
+        edgeBudget(lod),
+      );
     return { lod, hierarchy, nodeChunks, edgeChunks };
   }
 

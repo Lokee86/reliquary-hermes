@@ -17,8 +17,9 @@ interface Props {
   graphTransportFor: (owner: OwnerBinding, sessionId: string | null, signal?: AbortSignal) => GraphRenderTransport | undefined;
   controls: HostControls;
   mutationBlocked?: string;
-  onOwnerRefresh?: (memoryId?: string, includeArchived?: boolean) => void;
+  onOwnerRefresh?: (memoryId?: string, includeArchived?: boolean, view?: ViewMode) => void;
   initialMemoryId?: string;
+  initialView?: ViewMode;
   includeArchived?: boolean;
 }
 
@@ -33,10 +34,10 @@ interface CommunityPageState {
   page: Page<Community>;
 }
 
-export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor, controls, mutationBlocked, onOwnerRefresh, initialMemoryId, includeArchived = false }: Props) {
+export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor, controls, mutationBlocked, onOwnerRefresh, initialMemoryId, initialView, includeArchived = false }: Props) {
   const client = useMemo(() => createKnowledgeClient(transport), [transport]);
   const scope = useMemo<KnowledgeScope>(() => ({ owner, sessionId }), [owner, sessionId]);
-  const [mode, setMode] = useState<ViewMode>(initialMemoryId ? "list" : "graph");
+  const [mode, setMode] = useState<ViewMode>(initialMemoryId ? "list" : initialView ?? "graph");
   const [search, setSearch] = useState("");
   const [showArchived, setShowArchived] = useState(includeArchived);
   const [communityId, setCommunityId] = useState<string | null>(null);
@@ -103,7 +104,7 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
     setMemories(null);
     setCommunities(null);
     setReload((value) => value + 1);
-    onOwnerRefresh?.(memoryId ?? (mode === "list" ? selectedMemoryId ?? undefined : undefined), showArchived);
+    onOwnerRefresh?.(memoryId ?? (mode === "list" ? selectedMemoryId ?? undefined : undefined), showArchived, mode);
   }, [onOwnerRefresh, mode, selectedMemoryId, showArchived]);
 
   function changeQuery(value: string) {

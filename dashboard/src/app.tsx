@@ -58,7 +58,7 @@ function Knowledge({ host, mutationBlocked }: { host: HostBoundary; mutationBloc
   const [cursors, setCursors] = useState<(string | null)[]>([null]);
   const cursor = cursors.at(-1) ?? null;
   const [attempt, setAttempt] = useState(0);
-  const [preferred, setPreferred] = useState<{ ownerId?: string; memoryId?: string; includeArchived: boolean }>();
+  const [preferred, setPreferred] = useState<{ ownerId?: string; memoryId?: string; includeArchived: boolean; view?: "list" | "graph" }>();
   const [snapshot, setSnapshot] = useState<{
     key: string; value?: ReadResults["ui.owner_sessions"]; error?: string;
   } | null>(null);
@@ -84,8 +84,8 @@ function Knowledge({ host, mutationBlocked }: { host: HostBoundary; mutationBloc
   const owner = owners.find(item => item.owner_id === selection) ?? mapped ??
     owners.find(item => item.owner_kind === "REL") ?? owners[0];
   const sessionId = owner && mapped?.owner_id === owner.owner_id ? topology?.active_session_id ?? null : null;
-  function refresh(memoryId?: string, includeArchived = false) {
-    setPreferred({ ownerId: owner?.owner_id, memoryId, includeArchived });
+  function refresh(memoryId?: string, includeArchived = false, view?: "list" | "graph") {
+    setPreferred({ ownerId: owner?.owner_id, memoryId, includeArchived, view });
     setAttempt(value => value + 1);
   }
 
@@ -129,6 +129,7 @@ function Knowledge({ host, mutationBlocked }: { host: HostBoundary; mutationBloc
         owner={owner} sessionId={sessionId} transport={host.json} controls={host.controls}
         graphTransportFor={graphTransportFor} mutationBlocked={mutationBlocked} onOwnerRefresh={refresh}
         initialMemoryId={preferred?.ownerId === owner.owner_id ? preferred.memoryId : undefined}
+        initialView={preferred?.ownerId === owner.owner_id ? preferred.view : undefined}
         includeArchived={preferred?.ownerId === owner.owner_id && preferred.includeArchived} />}
     </main>
   </div>;

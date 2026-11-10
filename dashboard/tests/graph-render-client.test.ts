@@ -33,6 +33,7 @@ const manifest: GraphRenderManifest = {
   }],
   edgeChunks: [
     { chunkId:0,lod:"overview",bounds,segmentCount:1,byteLen:64 },
+    { chunkId:2,lod:"intermediate",bounds,segmentCount:1,byteLen:64 },
     { chunkId:1,lod:"detail",bounds:leafBounds,segmentCount:1,byteLen:64 },
   ],
 };
@@ -78,13 +79,15 @@ const client = await GraphRenderClient.prepare("owner", transport);
 const overview = client.planViewport({ center:[0,0,0], radius:100 });
 assert.equal(overview.lod, "detail");
 assert.equal(overview.nodeChunks.length, 1);
-assert.equal(overview.edgeChunks.length, 1);
+assert.equal(overview.edgeChunks.length, 2);
+assert.deepEqual(overview.edgeChunks.map(chunk => chunk.chunkId).sort(), [1, 2]);
 
 const detailView = { center:[0,0,0] as const, radius:5 };
 const first = await client.loadViewport(detailView);
 assert.equal(first.lod, "detail");
 assert.equal(first.nodeChunks.length, 1);
-assert.equal(first.edgeChunks.length, 1);
+assert.equal(first.edgeChunks.length, 2);
+assert.deepEqual(first.edgeChunks.map(chunk => chunk.chunkId).sort(), [1, 2]);
 assert.equal(first.nodeChunks[0].positions[3], 4);
 assert.equal(first.nodeChunks[0].renderIds[1], 11);
 assert.equal(first.nodeChunks[0].positions.buffer, first.nodeChunks[0].raw.buffer);
@@ -106,11 +109,11 @@ assert.deepEqual(
   [],
 );
 assert.equal(nodeFetches, 1);
-assert.equal(edgeFetches, 1);
+assert.equal(edgeFetches, 2);
 
 await client.loadViewport(detailView);
 assert.equal(nodeFetches, 1);
-assert.equal(edgeFetches, 1);
+assert.equal(edgeFetches, 2);
 
 assert.deepEqual(await client.resolveNode(11), { memoryId:"m-11" });
 assert.deepEqual(await client.resolveNode(11), { memoryId:"m-11" });

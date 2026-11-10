@@ -28,9 +28,14 @@ try {
   assert(chunks.some(reply => new URL(reply.url()).pathname.endsWith("/node-chunk")));
   const accepted = await Promise.all(manifests.map(reply => reply.json()));
   if (fixture.expectedEdges !== undefined) {
+    const lod = fixture.expectedEdgeLod ?? "detail";
+    assert(["overview", "intermediate", "detail"].includes(lod), "Unknown fixture edge LOD.");
     const rel = accepted.find(value => value.ownerId === fixture.ownerIds.main);
-    assert.equal(rel?.edgeChunks.filter(chunk => chunk.lod === "detail")
+    assert.equal(rel?.edgeChunks.filter(chunk => chunk.lod === lod)
       .reduce((count, chunk) => count + chunk.segmentCount, 0), fixture.expectedEdges);
+    if (fixture.expectedEdges > 0) {
+      assert(chunks.some(reply => new URL(reply.url()).pathname.endsWith("/edge-chunk")));
+    }
   }
   const latest = manifests.at(-1);
   const active = accepted.at(-1);
