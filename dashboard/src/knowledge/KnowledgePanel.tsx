@@ -152,6 +152,12 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
               All memories
             </Button>
             <div className="knowledge-nav-label">Communities</div>
+            {(communityCursor !== null || Boolean(communityPage?.next_cursor)) && <div className="knowledge-list-pager" role="group" aria-label="Community pages">
+              <Button type="button" aria-label="First community page" disabled={communityCursor === null}
+                onClick={() => changeCommunityPage(null)}>First</Button>
+              <Button type="button" aria-label="Next community page" disabled={!communityPage?.next_cursor}
+                onClick={() => changeCommunityPage(communityPage?.next_cursor ?? null)}>Next</Button>
+            </div>}
             {communitiesUnavailable && <p className="knowledge-muted" role="status">Community data is unavailable at this cut.</p>}
             {communityPage?.items.map((item) => (
               <Button key={item.community_id} type="button" aria-pressed={communityId === item.community_id}
@@ -159,12 +165,6 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
                 {communityLabel(item)} <small>{item.member_count}</small>
               </Button>
             ))}
-            {communityPage && (communityCursor !== null || communityPage.next_cursor !== null) && <div className="knowledge-list-pager" role="group" aria-label="Community pages">
-              <Button type="button" aria-label="First community page" disabled={communityCursor === null}
-                onClick={() => changeCommunityPage(null)}>First</Button>
-              <Button type="button" aria-label="Next community page" disabled={!communityPage.next_cursor}
-                onClick={() => changeCommunityPage(communityPage.next_cursor)}>Next</Button>
-            </div>}
             {selectedCommunity && <RenameCommunity community={selectedCommunity} controls={controls} blocked={mutationBlocked}
               allowed={writable && owner.capabilities.community_rename} onRename={renameCommunity} />}
           </>
