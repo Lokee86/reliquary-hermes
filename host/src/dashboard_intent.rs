@@ -72,10 +72,10 @@ pub(super) fn prepare(
         {
             return Err(DashboardError::conflict("owner_cut_changed"));
         }
-        if request.operation == "ui.memory_retire" {
+        if request.operation == "ui.memory_retire" && current == intent.cut {
             let id = super::memory::required_id(&request.arguments, "memory_id")?;
             let accepted_successor =
-                super::retirement::successor(instance, owner, OwnerKind::Rel, id, current)?;
+                super::retirement::successor(instance, owner, OwnerKind::Rel, id, current, true)?;
             if intent
                 .retirement
                 .as_ref()
@@ -109,7 +109,7 @@ pub(super) fn prepare(
                 return Err(DashboardError::conflict("memory_not_retirable"));
             }
             let successor =
-                super::retirement::successor(instance, owner, OwnerKind::Rel, id, current)?;
+                super::retirement::successor(instance, owner, OwnerKind::Rel, id, current, true)?;
             let accepted = manager.memory(successor).map_err(DashboardError::product)?;
             if accepted.archived || !accepted.payload_available {
                 return Err(DashboardError::conflict(

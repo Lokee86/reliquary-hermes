@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
-import { exerciseKnowledge } from "./knowledge-live.mjs";
+import { exerciseKnowledge, verifyLocalFixture } from "./knowledge-live.mjs";
 
 const [address, playwright, fixturePath] = process.argv.slice(2);
 assert(address && playwright && fixturePath, "Pass the isolated Hermes URL, local Playwright index.mjs and fixture JSON.");
 const fixture = JSON.parse(await readFile(fixturePath, "utf8"));
+await verifyLocalFixture(fixturePath, fixture);
+assert(["127.0.0.1", "localhost", "[::1]"].includes(new URL(address).hostname));
 const { chromium } = await import(pathToFileURL(playwright).href);
 const browser = await chromium.launch({
   channel: "chrome",

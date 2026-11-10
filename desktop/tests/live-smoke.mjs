@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { exerciseKnowledge } from "../../dashboard/tests/knowledge-live.mjs";
+import { exerciseKnowledge, verifyLocalFixture } from "../../dashboard/tests/knowledge-live.mjs";
 
 const [fixturePath] = process.argv.slice(2);
 assert(fixturePath, "Pass an isolated Desktop smoke profile fixture.");
 const fixture = JSON.parse(await readFile(fixturePath, "utf8"));
+await verifyLocalFixture(fixturePath, fixture);
 const { HU05_DESKTOP_EXE, HU05_DESKTOP_APP, HU05_PLAYWRIGHT, HP01_HERMES_CHECKOUT, HU05_DESKTOP_PYTHON } = process.env;
 assert(HU05_DESKTOP_EXE && HU05_PLAYWRIGHT && HP01_HERMES_CHECKOUT && HU05_DESKTOP_PYTHON,
   "Set the local Electron, Playwright, Hermes checkout, and Python paths.");

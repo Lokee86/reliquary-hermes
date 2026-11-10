@@ -1,6 +1,23 @@
 import assert from "node:assert/strict";
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, realpath } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+export async function verifyLocalFixture(fixturePath, fixture) {
+  const worktree = await realpath(fileURLToPath(new URL("../../", import.meta.url)));
+  async function requireWorktree(path) {
+    const inside = relative(worktree, await realpath(path));
+    assert(inside && !isAbsolute(inside) && inside !== ".." && !inside.startsWith(".." + sep),
+      "Smoke fixtures must use isolated paths inside this worktree.");
+  }
+  await requireWorktree(fixturePath);
+  await requireWorktree(fixture.home);
+  if (fixture.candidate) {
+    await requireWorktree(fixture.candidate.mainRel);
+    await requireWorktree(fixture.candidate.activePhy);
+    if (fixture.candidate.createPhy) await requireWorktree(dirname(fixture.candidate.createPhy));
+  }
+}
 
 export async function exerciseKnowledge(page, fixture, surface) {
   const app = page.locator(".rly-app");
@@ -30,6 +47,16 @@ export async function exerciseKnowledge(page, fixture, surface) {
   }
   const rail = app.getByRole("complementary", { name: "Owner scope" });
   await rail.getByText(fixture.ownerIds.main, { exact: true }).waitFor({ timeout: 30000 });
+  if (fixture.retiredOnly) {
+    await app.getByRole("button", { name: "List", exact: true }).click();
+    await app.getByRole("checkbox", { name: "Show non-active memories", exact: true }).click();
+    await app.getByRole("button", { name: /Retired Memory.*tombstoned/i }).click();
+    const inspector = app.getByRole("complementary", { name: "Memory inspector" });
+    await inspector.getByText("This Memory is retired.", { exact: true }).waitFor();
+    await inspector.getByText("History is unavailable after terminal retirement.", { exact: true }).waitFor();
+    console.log(surface + ": terminal inspector passed after reopen");
+    return;
+  }
   if (fixture.syntheticWrites) {
     await exerciseWrites(app);
     console.log(surface + ": Memory creation, association link/unlink, replacement and retirement passed");

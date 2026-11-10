@@ -16,10 +16,9 @@ interface Props {
   writable: boolean;
   onChanged: (memoryId?: string) => void;
   onOpenMemory: (memoryId: string) => void;
-  onError: (error: string | null) => void;
 }
 
-export function KnowledgeInspector({ client, scope, memoryId, communities, controls, blocked, writable, onChanged, onOpenMemory, onError }: Props) {
+export function KnowledgeInspector({ client, scope, memoryId, communities, controls, blocked, writable, onChanged, onOpenMemory }: Props) {
   const [detail, setDetail] = useState<MemoryDetail | null>(null);
   const [currentRevision, setCurrentRevision] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,6 +30,7 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
   const [historyNext, setHistoryNext] = useState<string | null>(null);
   const [revision, setRevision] = useState<string | null>(null);
   const [provenance, setProvenance] = useState<ReadResults["ui.provenance"] | null>(null);
+  const [provenanceUnavailable, setProvenanceUnavailable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState("");
@@ -39,12 +39,19 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
 
   async function loadDetail(id: string, target: string | null, signal: AbortSignal) {
     const next = await client.read(scope, "ui.memory_detail", { memory_id: id, revision: target }, signal);
-    const evidence = scope.owner.capabilities.provenance
-      ? await client.read(scope, "ui.provenance", { memory_id: id, revision: next.body.revision }, signal)
-      : null;
+    let evidence: ReadResults["ui.provenance"] | null = null;
+    let unavailable = false;
+    if (scope.owner.capabilities.provenance && !next.tombstone) {
+      try {
+        evidence = await client.read(scope, "ui.provenance", { memory_id: id, revision: next.body.revision }, signal);
+      } catch {
+        unavailable = true;
+      }
+    }
     signal.throwIfAborted();
     setDetail(next);
     setProvenance(evidence);
+    setProvenanceUnavailable(unavailable);
     setTitle(next.memory.title ?? "");
     setBody(next.body.content ?? "");
     if (target === null) setCurrentRevision(next.body.revision);
@@ -57,12 +64,11 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
     const controller = new AbortController();
     lifetime.current = controller;
     setError(null);
-    if (memoryId) void Promise.all([
-      loadDetail(memoryId, null, controller.signal),
-      scope.owner.capabilities.history
+    if (memoryId) void loadDetail(memoryId, null, controller.signal).then(next =>
+      scope.owner.capabilities.history && !next.tombstone
         ? client.read(scope, "ui.memory_history", { memory_id: memoryId, cursor: null, limit: 20 }, controller.signal)
-        : Promise.resolve(null),
-    ]).then(([, page]) => {
+        : null,
+    ).then(page => {
       if (controller.signal.aborted) return;
       setHistory(page?.revisions.items.map(item => item.revision) ?? []);
       setHistoryNext(page?.revisions.next_cursor ?? null);
@@ -92,7 +98,7 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
       setHistory((items) => [...items, ...page.revisions.items.map((item) => item.revision)]);
       setHistoryNext(page.revisions.next_cursor);
       setHistoryCursor(historyNext);
-    } catch (reason) { onError(reason instanceof Error ? reason.message : String(reason)); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   }
 
   async function save() {
@@ -122,14 +128,16 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
   </aside>;
 
   const community = communities.find((candidate) => candidate.community_id === memory.community_id) ?? null;
-  const content = detail.body.content ?? "Memory body is unavailable at this revision.";
+  const content = detail.body.content ?? (detail.tombstone
+    ? "This Memory is retired."
+    : "Memory body is unavailable at this revision.");
   const archived = memory.lifecycle !== "active";
   const canEdit = writable && !blocked && !archived && revision === null && scope.owner.capabilities.memory_edit
     && detail.body.availability === "available" && detail.body.body_id !== null;
 
   return (
     <aside className="knowledge-inspector" aria-label="Memory inspector">
-      <div className="knowledge-inspector-title-row"><div><div className="eyebrow">MEMORY</div><h2>{memory.title || "Untitled memory"}</h2>
+      <div className="knowledge-inspector-title-row"><div><div className="eyebrow">MEMORY</div><h2>{memory.title || (detail.tombstone ? "Retired Memory" : "Untitled memory")}</h2>
         {error && <p className="knowledge-inline-error" role="alert">{error}</p>}</div>
         {canEdit && <Button type="button" onClick={() => setEditing((value) => !value)}>{editing ? "Cancel" : "Edit"}</Button>}
       </div>
@@ -138,7 +146,7 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
         <Textarea aria-label="Replacement body" value={body} maxLength={32768} rows={7} disabled={busy}
           onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setBody(event.currentTarget.value)} />
         <Button type="button" disabled={busy || !title.trim() || !body.trim()} onClick={() => void save()}>{busy ? "Saving…" : "Save replacement"}</Button>
-        <p className="knowledge-muted">This creates a revisioned replacement and preserves the original Memory and its provenance.</p>
+        <p className="knowledge-muted">Replacement preserves the original Memory and its provenance. Active relationships can block retirement of the original.</p>
       </div> : <p className="knowledge-memory-body">{content}</p>}
 
       <dl className="knowledge-details">
@@ -151,7 +159,8 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
 
       <section className="knowledge-inspector-section" aria-label="Memory history">
         <h3>History</h3>
-        {!scope.owner.capabilities.history ? <p className="knowledge-muted">History access is not granted for this owner.</p> : <>
+        {detail.tombstone ? <p className="knowledge-muted">History is unavailable after terminal retirement.</p>
+          : !scope.owner.capabilities.history ? <p className="knowledge-muted">History access is not granted for this owner.</p> : <>
         <Button type="button" disabled={!revision} onClick={() => void openRevision(null)}>Current revision</Button>
         <div className="knowledge-history-list">{history.map((item) => <Button key={item} type="button" aria-pressed={item === detail.body.revision}
           onClick={() => void openRevision(item)}>{item === currentRevision ? "Latest" : shortId(item)}{item === detail.body.revision ? " · selected" : ""}</Button>)}</div>
@@ -165,11 +174,13 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
       </Button>}
       {detail.superseded_by && <RetirementForm client={client} scope={scope} memory={memory}
         canRetire={revision === null && writable && !blocked && scope.owner.capabilities.memory_retire && detail.body.availability === "available"}
-        blocked={blocked} controls={controls} onChanged={onChanged} onError={onError} />}
-      {!archived && revision === null && <KnowledgeRelationsEditor client={client} scope={scope} memory={memory} controls={controls} blocked={blocked} onChanged={onChanged} onError={onError} />}
+        blocked={blocked} controls={controls} onChanged={onChanged} onError={setError} />}
+      {!archived && revision === null && <KnowledgeRelationsEditor client={client} scope={scope} memory={memory} controls={controls} blocked={blocked} onChanged={onChanged} onError={setError} />}
       <section className="knowledge-inspector-section" aria-label="Memory provenance">
         <h3>Provenance</h3>
-        {!scope.owner.capabilities.provenance ? <p className="knowledge-muted">Provenance access is not granted for this owner.</p>
+        {detail.tombstone ? <p className="knowledge-muted">Provenance is unavailable after terminal retirement.</p>
+          : !scope.owner.capabilities.provenance ? <p className="knowledge-muted">Provenance access is not granted for this owner.</p>
+          : provenanceUnavailable ? <p className="knowledge-muted">Source evidence is unavailable at this revision.</p>
           : !provenance ? <p className="knowledge-muted">Loading source evidence…</p> : provenance.sources.length === 0
           ? <p className="knowledge-muted">No source evidence is attached.</p>
           : provenance.sources.map((source, index) => <ProvenanceItem key={`${source.kind}:${index}`} source={source} />)}
@@ -201,7 +212,12 @@ function RetirementForm({ client, scope, memory, canRetire, blocked, controls, o
       effect: "retire",
     }, memory.revision);
     setBusy(false);
-    if (result.status !== "ok") { onError(result.code); return; }
+    if (result.status !== "ok") {
+      onError(result.code === "retirement_blocked_active_relations"
+        ? "Active relationships protect this superseded Memory from retirement. Reliquary requires links to be cleared before replacement."
+        : result.code);
+      return;
+    }
     onChanged();
   }
 

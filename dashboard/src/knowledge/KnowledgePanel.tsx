@@ -177,7 +177,7 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
                   aria-pressed={memory.memory_id === selectedMemoryId}
                   className="knowledge-memory-row"
                   onClick={() => setSelectedMemoryId(memory.memory_id)}>
-                  <div><strong>{memory.title || "Untitled memory"}</strong><span>{memory.excerpt}</span></div>
+                  <div><strong>{memory.title || (memory.lifecycle === "tombstoned" ? "Retired Memory" : "Untitled memory")}</strong><span>{memory.excerpt}</span></div>
                   <small>{memory.lifecycle}</small>
                 </Button>)}
               </div>
@@ -187,7 +187,7 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
       {mode === "list" ? <KnowledgeInspector key={`${owner.owner_id}:${owner.cut}:${selectedMemoryId ?? "none"}`}
         client={client} scope={scope} memoryId={selectedMemoryId} communities={communities?.items ?? []} controls={controls}
         blocked={mutationBlocked} writable={writable}
-        onChanged={refresh} onOpenMemory={setSelectedMemoryId} onError={setError} />
+        onChanged={refresh} onOpenMemory={setSelectedMemoryId} />
         : <GraphSelectionInspector selection={selection} controls={controls} onOpenMemory={memoryId => {
           setSelectedMemoryId(memoryId); setMode("list");
         }} />}

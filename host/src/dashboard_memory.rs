@@ -143,7 +143,7 @@ fn memory_detail(
             };
             let superseded_by = if lifecycle == MemoryListLifecycle::Superseded {
                 Some(hex_id(
-                    &super::retirement::successor(instance, owner, kind, id, page.cut)?.0,
+                    &super::retirement::successor(instance, owner, kind, id, page.cut, false)?.0,
                 ))
             } else {
                 None

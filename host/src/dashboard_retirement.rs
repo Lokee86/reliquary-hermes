@@ -11,6 +11,7 @@ pub(super) fn successor(
     kind: OwnerKind,
     original: MemoryId,
     cut: InspectionCut,
+    require_retirable: bool,
 ) -> Result<MemoryId, DashboardError> {
     let query = InspectionQuery::Neighbors {
         anchor: GraphNode::Memory(original.0),
@@ -31,7 +32,7 @@ pub(super) fn successor(
                     "unexpected_neighbor_projection",
                 ));
             };
-            if let Some(source) = successor_edge(&edge, original)?
+            if let Some(source) = successor_edge(&edge, original, require_retirable)?
                 && successor.replace(source).is_some()
             {
                 return Err(DashboardError::conflict("supersession_successor_ambiguous"));
@@ -52,6 +53,7 @@ pub(super) fn successor(
 fn successor_edge(
     edge: &GraphEdge,
     original: MemoryId,
+    require_retirable: bool,
 ) -> Result<Option<MemoryId>, DashboardError> {
     if !edge.active {
         return Ok(None);
@@ -62,9 +64,12 @@ fn successor_edge(
     {
         return Ok(Some(MemoryId(source)));
     }
-    Err(DashboardError::conflict(
-        "retirement_blocked_active_relations",
-    ))
+    if require_retirable {
+        return Err(DashboardError::conflict(
+            "retirement_blocked_active_relations",
+        ));
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -94,7 +99,7 @@ mod tests {
             GraphNode::Memory(original.0),
         );
         assert!(matches!(
-            successor_edge(&expected, original),
+            successor_edge(&expected, original, true),
             Ok(Some(actual)) if actual == successor
         ));
 
@@ -104,7 +109,23 @@ mod tests {
             GraphNode::Memory(original.0),
         );
         assert_eq!(
-            successor_edge(&association, original).unwrap_err().code,
+            successor_edge(&association, original, true)
+                .unwrap_err()
+                .code,
+            "retirement_blocked_active_relations",
+        );
+
+        assert!(matches!(
+            successor_edge(&association, original, false),
+            Ok(None)
+        ));
+        let outgoing = edge(
+            RelationKind::Topical,
+            GraphNode::Memory(original.0),
+            GraphNode::Memory(successor.0),
+        );
+        assert_eq!(
+            successor_edge(&outgoing, original, true).unwrap_err().code,
             "retirement_blocked_active_relations",
         );
 
@@ -114,7 +135,7 @@ mod tests {
             GraphNode::Memory(original.0),
         );
         assert_eq!(
-            successor_edge(&entity_reference, original)
+            successor_edge(&entity_reference, original, true)
                 .unwrap_err()
                 .code,
             "retirement_blocked_active_relations",
@@ -122,6 +143,9 @@ mod tests {
 
         let mut inactive = association;
         inactive.active = false;
-        assert!(matches!(successor_edge(&inactive, original), Ok(None)));
+        assert!(matches!(
+            successor_edge(&inactive, original, true),
+            Ok(None)
+        ));
     }
 }
