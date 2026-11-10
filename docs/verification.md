@@ -378,15 +378,19 @@ Manual history export v2 removes the whole-conversation message/byte cap while r
 
 ## HU09 plugin-local file dialogs
 
-The Windows feasibility check used the running dashboard's Python 3.14.9 executable in Windows Session 1. Tcl/Tk 9.0.4 opened a real Windows Open File dialog, which was canceled without choosing a path.
+Implementation `90f7a88` (`90f7a88a0cc2cbafe8e4183ff1da0e3c59fae414`) was deployed on installed Hermes `4588296`. The installer copied and hash-checked seven integration files. The production dashboard restarted, served byte-identical installed Web assets, and returned HTTP 200 for authenticated setup status. The protected configuration, credentials, processing settings, and host pin matched their pre-deploy hashes.
 
-Use an isolated profile with the installed Hermes runtime on a standalone `127.0.0.1` dashboard. The request must have the existing Hermes authentication and profile scope. The local guard checks that Windows attributes both ends of the connection to the Hermes listener and a supported installed browser running as the same OS user in the same active desktop session. Hosted workers, reverse proxies, public dashboards and unsupported or headless environments use explicit manual paths. No macOS or Linux UI acceptance is recorded here.
+### Installed Windows evidence
 
-Use the four Web controls to verify real Windows dialogs, cancellation, unchanged selected files, overwrite refusal, and confirmed creation and connection of synthetic owners. Check that switching profile or backend discards a pending result. The Desktop picker is a separate Electron path.
+- The feasibility probe used the running dashboard's Python 3.14.9 executable in Windows Session 1. Tcl/Tk 9.0.4 opened a genuine Windows Open File dialog, which was canceled.
+- The isolated dashboard on `127.0.0.1:9130` used the installed Hermes runtime and the final integration build. Select REL, Select PHY, Create REL, and Create PHY each opened and canceled a genuine Windows dialog. The optional configuration picker also opened and was canceled. The Open File dialogs returned the existing synthetic REL and PHY paths.
+- An authenticated same-origin request from a non-browser loopback process returned `unavailable` despite spoofed forwarding headers. The retired listing route returned HTTP 404. Manual paths remain the fallback when Windows cannot verify a supported browser connection under the same OS account and in the same active desktop session.
 
-The isolated dashboard on port 9130 used the installed Hermes runtime and the final rebuilt integration. All four Web controls opened genuine Windows dialogs and canceled. The Open File dialogs returned the existing synthetic REL and PHY paths. A same-origin non-browser connection with spoofed forwarding headers reported unavailable, and the retired listing route returned HTTP 404. The setup and Rust tests covered confirmation and refusal to overwrite.
+### Automated checks and limits
 
- Run the Web and Desktop builds, Node tests, TypeScript, the setup API and locality tests, and the documentation policy checks.
+The Web and Desktop builds and TypeScript check passed. The suites passed 29 Web, 12 Desktop, 17 Python setup/API and locality, and 33 locked offline Rust host tests. The Web tests covered separate confirmation. The setup and host tests covered exclusive creation and overwrite refusal. Documentation policy and Git whitespace checks passed.
+
+Window testing stopped before live Save As selection, separate creation confirmation, and connection with newly created synthetic owners. The packaged Desktop modal evidence comes from the previous build. This revision used the Desktop automated suite. macOS and Linux dialog behavior was outside this Windows verification.
 
 ## Related docs
 
