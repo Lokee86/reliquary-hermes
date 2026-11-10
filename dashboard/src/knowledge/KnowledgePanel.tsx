@@ -17,7 +17,9 @@ interface Props {
   graphTransportFor: (owner: OwnerBinding, sessionId: string | null, signal?: AbortSignal) => GraphRenderTransport | undefined;
   controls: HostControls;
   mutationBlocked?: string;
-  onOwnerRefresh?: () => void;
+  onOwnerRefresh?: (memoryId?: string, includeArchived?: boolean) => void;
+  initialMemoryId?: string;
+  includeArchived?: boolean;
 }
 
 const PAGE_SIZE = 40;
@@ -25,17 +27,18 @@ const EMPTY_FILTERS = { query: "", category: null, memory_type: null, lifecycle:
 
 type ViewMode = "list" | "graph";
 
-export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor, controls, mutationBlocked, onOwnerRefresh }: Props) {
+export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor, controls, mutationBlocked, onOwnerRefresh, initialMemoryId, includeArchived = false }: Props) {
   const client = useMemo(() => createKnowledgeClient(transport), [transport]);
   const scope = useMemo<KnowledgeScope>(() => ({ owner, sessionId }), [owner, sessionId]);
-  const [mode, setMode] = useState<ViewMode>("graph");
+  const [mode, setMode] = useState<ViewMode>(initialMemoryId ? "list" : "graph");
   const [search, setSearch] = useState("");
-  const [showArchived, setShowArchived] = useState(false);
+  const [showArchived, setShowArchived] = useState(includeArchived);
   const [communityId, setCommunityId] = useState<string | null>(null);
   const [memories, setMemories] = useState<Page<MemorySummary> | null>(null);
   const [communities, setCommunities] = useState<Page<Community> | null>(null);
+  const [communitiesUnavailable, setCommunitiesUnavailable] = useState(false);
   const [cursor, setCursor] = useState<string | null>(null);
-  const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
+  const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(initialMemoryId ?? null);
   const [selection, setSelection] = useState<GraphSelection | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,19 +46,6 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
 
   const { Button, Input, Checkbox } = controls;
   const writable = !mutationBlocked && owner.owner_kind === "REL" && owner.capabilities.view && owner.capabilities.manage;
-
-  useEffect(() => {
-    setMode("graph");
-    setSearch("");
-    setCommunityId(null);
-    setCursor(null);
-    setMemories(null);
-    setCommunities(null);
-    setSelectedMemoryId(null);
-    setSelection(null);
-    setError(null);
-    setReload((value) => value + 1);
-  }, [owner.owner_id, owner.generation, owner.cut, sessionId]);
 
   useEffect(() => {
     if (mode !== "list") return;
@@ -68,24 +58,29 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
       lifecycle: showArchived ? null : "active" as const,
       community_id: communityId,
     };
-    void Promise.all([
-      client.read(scope, "ui.memory_list", { cursor, limit: PAGE_SIZE, filters }, controller.signal),
-      communities || !owner.capabilities.community ? Promise.resolve(null)
-        : client.read(scope, "ui.community_list", { cursor: null, limit: 100 }, controller.signal),
-    ]).then(([memoryPage, communityResult]) => {
+    void client.read(scope, "ui.memory_list", { cursor, limit: PAGE_SIZE, filters }, controller.signal).then(memoryPage => {
       if (controller.signal.aborted) return;
       setMemories(memoryPage);
-      if (communityResult) setCommunities(communityResult.communities);
-      setSelectedMemoryId((current) => memoryPage.items.some((item) => item.memory_id === current)
-        ? current : memoryPage.items[0]?.memory_id ?? null);
+      setSelectedMemoryId((current) => current ?? memoryPage.items[0]?.memory_id ?? null);
     }).catch((reason: unknown) => {
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason));
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [client, scope, mode, cursor, search, showArchived, communityId, reload, owner.capabilities.community]);
 
+  useEffect(() => {
+    if (mode !== "list" || !owner.capabilities.community) return;
+    const controller = new AbortController();
+    setCommunitiesUnavailable(false);
+    void client.read(scope, "ui.community_list", { cursor: null, limit: 100 }, controller.signal).then(result => {
+      if (!controller.signal.aborted) setCommunities(result.communities);
+    }).catch(() => {
+      if (!controller.signal.aborted) setCommunitiesUnavailable(true);
+    });
+    return () => controller.abort();
+  }, [client, scope, mode, reload, owner.capabilities.community]);
+
   const filtered = memories?.items ?? [];
-  const selected = filtered.find((memory) => memory.memory_id === selectedMemoryId) ?? null;
   const selectedCommunity = communities?.items.find((community) => community.community_id === communityId) ?? null;
   const graphController = useMemo(() => new AbortController(), [owner.owner_id, owner.generation, owner.cut, sessionId]);
   useEffect(() => () => graphController.abort(), [graphController]);
@@ -94,24 +89,22 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
     [graphTransportFor, owner, sessionId, graphController],
   );
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback((memoryId?: string) => {
     setMemories(null);
     setCommunities(null);
     setReload((value) => value + 1);
-    onOwnerRefresh?.();
-  }, [onOwnerRefresh]);
+    onOwnerRefresh?.(memoryId ?? (mode === "list" ? selectedMemoryId ?? undefined : undefined), showArchived);
+  }, [onOwnerRefresh, mode, selectedMemoryId, showArchived]);
 
   function changeQuery(value: string) {
     setSearch(value);
     setCursor(null);
     setSelectedMemoryId(null);
-
   }
 
   async function renameCommunity(community: Community, name: string) {
     if (!writable || mutationBlocked || !owner.capabilities.community_rename) return;
-    const key = globalThis.crypto?.randomUUID?.() ?? `rename-${Date.now()}`;
-    const outcome = await client.write(scope, "ui.community_rename", { community_id: community.community_id, name }, community.generation, key);
+    const outcome = await client.write(scope, "ui.community_rename", { community_id: community.community_id, name }, community.generation);
     if (outcome.status !== "ok") throw new Error(outcome.code);
     refresh();
   }
@@ -122,7 +115,7 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
   }
 
   return (
-    <section className="knowledge-panel" aria-label="Knowledge">
+    <section className="knowledge-panel" data-view={mode} aria-label="Knowledge">
       <aside className="knowledge-nav" aria-label="Knowledge navigation">
         <div className="knowledge-heading"><span className="eyebrow">KNOWLEDGE</span><strong>{owner.display_label}</strong><span>{owner.owner_kind}</span></div>
         <div className="knowledge-view-switch" role="group" aria-label="Knowledge view">
@@ -135,25 +128,24 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
               <Input type="search" value={search} maxLength={1024} onChange={(event) => changeQuery(event.currentTarget.value)} />
             </label>
             <CreateMemory client={client} scope={scope} controls={controls} blocked={mutationBlocked} onSaved={refresh} />
-            <Checkbox checked={showArchived} aria-label="Show non-active memories" onCheckedChange={setShowArchived} />
+            <Checkbox checked={showArchived} aria-label="Show non-active memories" onCheckedChange={value => { setShowArchived(value); setCursor(null); setSelectedMemoryId(null); }} />
             <span className="knowledge-muted">Show non-active memories</span>
-            <Button type="button" className={!communityId ? "active" : ""} onClick={() => { setCommunityId(null); setCursor(null); }}>
-              All memories <small>{communities?.items.length ?? 0} communities</small>
+            <Button type="button" aria-pressed={!communityId} onClick={() => { setCommunityId(null); setCursor(null); setSelectedMemoryId(null); }}>
+              All memories {communities && <small>{communities.items.length} communities</small>}
             </Button>
             <div className="knowledge-nav-label">Communities</div>
+            {communitiesUnavailable && <p className="knowledge-muted" role="status">Community data is unavailable at this cut.</p>}
             {communities?.items.map((item) => (
-              <Button key={item.community_id} type="button" className={communityId === item.community_id ? "active" : ""}
-                onClick={() => { setCommunityId(item.community_id); setCursor(null); }}>
+              <Button key={item.community_id} type="button" aria-pressed={communityId === item.community_id}
+                onClick={() => { setCommunityId(item.community_id); setCursor(null); setSelectedMemoryId(null); }}>
                 {communityLabel(item)} <small>{item.member_count}</small>
               </Button>
             ))}
             {selectedCommunity && <RenameCommunity community={selectedCommunity} controls={controls} blocked={mutationBlocked}
               allowed={writable && owner.capabilities.community_rename} onRename={renameCommunity} />}
           </>
-        ) : (
-          <p className="knowledge-muted">Spatial graph view. Memory bodies and history load only when you switch to List.</p>
-        )}
-        <Button type="button" onClick={refresh}>Refresh owner data</Button>
+        ) : null}
+        <Button type="button" onClick={() => refresh()}>Refresh owner data</Button>
       </aside>
 
       <section className="knowledge-memory-list" aria-label={mode === "graph" ? "Memory graph" : "Memory list"}>
@@ -161,8 +153,8 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
           <div><strong>{mode === "graph" ? "Graph" : selectedCommunity ? communityLabel(selectedCommunity) : "Memories"}</strong>
             {mode === "list" && <span>{memories?.items.length ?? 0}</span>}</div>
           {mode === "list" && <div className="knowledge-list-pager">
-            <Button type="button" disabled={!cursor} onClick={() => { setCursor(null); }}>First page</Button>
-            <Button type="button" disabled={!memories?.next_cursor} onClick={() => setCursor(memories?.next_cursor ?? null)}>Next page</Button>
+            <Button type="button" disabled={!cursor} onClick={() => { setCursor(null); setSelectedMemoryId(null); }}>First page</Button>
+            <Button type="button" disabled={!memories?.next_cursor} onClick={() => { setCursor(memories?.next_cursor ?? null); setSelectedMemoryId(null); }}>Next page</Button>
             {memories?.truncated && <span>More results are available.</span>}
           </div>}
         </header>
@@ -182,7 +174,8 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
             : filtered.length === 0 ? <div className="knowledge-state">No matching memories.</div> : (
               <div className="knowledge-memory-rows">
                 {filtered.map((memory) => <Button key={memory.memory_id} type="button"
-                  className={`knowledge-memory-row ${memory.memory_id === selectedMemoryId ? "selected" : ""}`}
+                  aria-pressed={memory.memory_id === selectedMemoryId}
+                  className="knowledge-memory-row"
                   onClick={() => setSelectedMemoryId(memory.memory_id)}>
                   <div><strong>{memory.title || "Untitled memory"}</strong><span>{memory.excerpt}</span></div>
                   <small>{memory.lifecycle}</small>
@@ -192,17 +185,19 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
       </section>
 
       {mode === "list" ? <KnowledgeInspector key={`${owner.owner_id}:${owner.cut}:${selectedMemoryId ?? "none"}`}
-        client={client} scope={scope} memory={selected} communities={communities?.items ?? []} controls={controls}
-        blocked={mutationBlocked} writable={writable && !!selected && selected.lifecycle === "active"}
-        onChanged={refresh} onError={setError} />
-        : <GraphSelectionInspector selection={selection} onOpenMemory={() => setMode("list")} />}
+        client={client} scope={scope} memoryId={selectedMemoryId} communities={communities?.items ?? []} controls={controls}
+        blocked={mutationBlocked} writable={writable}
+        onChanged={refresh} onOpenMemory={setSelectedMemoryId} onError={setError} />
+        : <GraphSelectionInspector selection={selection} controls={controls} onOpenMemory={memoryId => {
+          setSelectedMemoryId(memoryId); setMode("list");
+        }} />}
       {mutationBlocked && <div className="knowledge-capability-notice" role="status">{mutationBlocked}</div>}
     </section>
   );
 }
 
 function CreateMemory({ client, scope, controls, blocked, onSaved }: {
-  client: KnowledgeClient; scope: KnowledgeScope; controls: HostControls; blocked?: string; onSaved: () => void;
+  client: KnowledgeClient; scope: KnowledgeScope; controls: HostControls; blocked?: string; onSaved: (memoryId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
@@ -219,14 +214,12 @@ function CreateMemory({ client, scope, controls, blocked, onSaved }: {
     if (!allowed || busy || !title.trim() || !body.trim() || !category.trim() || !memoryType.trim()) return;
     setBusy(true);
     setError(null);
-    const key = globalThis.crypto?.randomUUID?.() ?? `create-${Date.now()}`;
-    const createdAt = String(Math.floor(Date.now() / 1000) * 1_000_000_000);
     const result = await client.write(scope, "ui.memory_create", {
-      title: title.trim(), body: body.trim(), category: category.trim(), memory_type: memoryType.trim(), created_at_ns: createdAt,
-    }, null, key);
+      title: title.trim(), body: body.trim(), category: category.trim(), memory_type: memoryType.trim(),
+    }, null);
     setBusy(false);
     if (result.status !== "ok") { setError(result.code); return; }
-    setTitle(""); setBody(""); setOpen(false); onSaved();
+    setTitle(""); setBody(""); setOpen(false); onSaved(result.value.result.committed.memory.memory_id);
   }
 
   return <details className="knowledge-create" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>

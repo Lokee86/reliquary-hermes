@@ -1,5 +1,4 @@
 export type OwnerKind = "REL" | "PHY";
-export type ViewMode = "graph" | "list";
 
 export interface CapabilityFlags {
   view: boolean;
@@ -216,107 +215,7 @@ export type ReadResults = {
   [Response in ScopedDashboardResponse | OwnerSessionsResponse as Response["operation"]]: Response["result"];
 };
 
-export interface ReadScope {
-  owner: OwnerBinding | null;
-  sessionId: string | null;
-}
-
 export type ReadErrorStatus = "denied" | "unavailable" | "stale_cursor" | "conflict" | "invalid" | "unsupported" | "error";
-export interface ReadFailure {
-  status: ReadErrorStatus;
-  code: string;
-  retryable: boolean;
-}
-export type ReadOutcome<T> = { status: "ok"; value: T } | ReadFailure;
-export type ReadState<T> = { status: "idle" } | { status: "loading" } | ReadOutcome<T>;
-
-export interface ReadHandle<T> {
-  state: ReadState<T>;
-  retry(): void;
-}
-
-export interface CursorState {
-  current: string | null;
-  next(cursor: string): void;
-  previous(): void;
-  reset(): void;
-}
-
-export interface DashboardRequest<K extends ReadOperation = ReadOperation> {
-  protocol_version: 1;
-  request_id: string;
-  operation: K;
-  profile_id: string;
-  principal_id: string;
-  session_id: string | null;
-  owner_id: string | null;
-  generation: string | null;
-  cut: string | null;
-  expected_revision: null;
-  idempotency_key: null;
-  arguments: ReadArgs[K];
-}
-
-export interface DashboardErrorResponse {
-  protocol_version: 1;
-  request_id: string;
-  operation: ReadOperation;
-  status: Exclude<ReadErrorStatus, "error">;
-  binding: null;
-  result: { code: string; retryable: boolean };
-}
-
-export type DashboardResponse = ScopedDashboardResponse | OwnerSessionsResponse | DashboardErrorResponse;
-export type DashboardWireRequest = { [K in ReadOperation]: DashboardRequest<K> }[ReadOperation];
-export type DashboardTransport = (request: DashboardWireRequest, signal: AbortSignal) => Promise<DashboardResponse>;
-
-export interface SessionChoice {
-  sessionId: string;
-  relId: string;
-}
-
-export interface PhyChoice {
-  phyId: string;
-  label: string;
-}
-
-export interface DashboardClient {
-  sessions(): SessionChoice[];
-  phys(): PhyChoice[];
-  invalidate(): void;
-  read<K extends ReadOperation>(operation: K, scope: ReadScope, args: ReadArgs[K], signal: AbortSignal): Promise<ReadOutcome<ReadResults[K]>>;
-}
-
-export interface DashboardFixture {
-  owner_sessions: Record<string, OwnerSessionsResponse[]>;
-  memory_lists: Record<string, MemoryListResponse>;
-  graph_pages: Record<string, GraphPageResponse>;
-  memory_details: Record<string, MemoryDetailResponse[]>;
-  memory_histories: Record<string, MemoryHistoryResponse[]>;
-  provenance: Record<string, ProvenanceResponse[]>;
-  operational_statuses: Record<string, OperationalStatusResponse>;
-  community_lists: Record<string, CommunityListResponse>;
-  community_members: Record<string, CommunityMembersResponse[]>;
-}
-
-export type GraphSelection = { kind: "node" | "edge"; id: string };
-
-export interface GraphViewProps {
-  graph: GraphPageResponse["result"];
-  selected: GraphSelection | null;
-  onSelect(selection: GraphSelection): void;
-  onExpand(nodeId: string): void;
-}
-
-export interface CommunityViewProps {
-  communities: Page<Community>;
-  selected: Community | null;
-  members: Page<string> | null;
-  onCommunity(community: Community): void;
-  onMemory(memoryId: string): void;
-  onNextCommunities(cursor: string): void;
-  onNextMembers(cursor: string): void;
-}
 
 export interface SetupCandidate {
   main_rel: string;
@@ -373,25 +272,8 @@ export interface SetupProjectInventory {
 
 export type SetupCreateKind = "general_rel" | "project_rel" | "phy";
 
-export interface SetupCreateRequest {
-  kind: SetupCreateKind;
-  path: string;
-  project_id?: string;
-}
-
 export type SetupDialogMode = "open_rel" | "open_phy" | "open_config" | "save_rel" | "save_phy";
 export type SetupDialogResult = { status: "selected"; path: string } | { status: "cancelled" } | { status: "unavailable" };
-
-export interface SetupClient {
-  status(signal: AbortSignal): Promise<SetupStatus>;
-  projects(signal: AbortSignal): Promise<SetupProjectInventory>;
-  dialog(mode: SetupDialogMode, signal: AbortSignal): Promise<SetupDialogResult>;
-  create(value: SetupCreateRequest, signal: AbortSignal): Promise<SetupOwner & { path: string }>;
-  validate(candidate: SetupCandidate, signal: AbortSignal): Promise<SetupReport>;
-  apply(candidate: SetupCandidate, signal: AbortSignal): Promise<
-    { valid: true; configured: true } | (SetupReport & { configured: false })
-  >;
-}
 
 export type SetupPicker = (kind: "REL" | "PHY" | "config", signal?: AbortSignal) =>
   Promise<string | null | SetupDialogResult>;

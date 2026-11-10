@@ -7,6 +7,7 @@ import type { GraphRenderNodeChunk } from "./types";
 interface Props {
   client: GraphRenderClient;
   chunks: readonly GraphRenderNodeChunk[];
+  markerScale: number;
   pointsByChunk: Map<number, THREE.Points>;
   onHover: (renderId: number | null) => void;
   onPick: (renderId: number) => void;
@@ -15,6 +16,7 @@ interface Props {
 export function BoundedPicker({
   client,
   chunks,
+  markerScale,
   pointsByChunk,
   onHover,
   onPick,
@@ -22,9 +24,9 @@ export function BoundedPicker({
   const { camera, gl } = useThree();
   const raycaster = useMemo(() => {
     const value = new THREE.Raycaster();
-    value.params.Points = { threshold: 3 };
+    value.params.Points = { threshold: 3 * markerScale };
     return value;
-  }, []);
+  }, [markerScale]);
   const pointer = useMemo(() => new THREE.Vector2(), []);
   const chunkById = useMemo(
     () => new Map(chunks.map((chunk) => [chunk.chunkId, chunk])),

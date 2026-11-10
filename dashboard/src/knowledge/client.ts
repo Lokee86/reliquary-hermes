@@ -1,22 +1,39 @@
-import type { OwnerBinding, ReadArgs, ReadErrorStatus, ReadOperation, ReadResults } from "../../types";
+import type { Community, GraphEdge, MemoryDetail, OwnerBinding, ReadArgs, ReadErrorStatus, ReadOperation, ReadResults } from "../../types";
 import type { JsonTransport } from "../host";
 
 export interface KnowledgeScope { owner: OwnerBinding; sessionId: string | null }
 export interface KnowledgeFailure { status: ReadErrorStatus; code: string; retryable: boolean }
 export type KnowledgeOutcome<T> = { status: "ok"; value: T } | KnowledgeFailure;
 
-export interface KnowledgeMutationReceipt {
+interface MutationArguments {
+  "ui.memory_create": { title: string; body: string; category: string; memory_type: string };
+  "ui.memory_edit": { memory_id: string; title: string; body: string };
+  "ui.memory_retire": { memory_id: string; effect: "retire" };
+  "ui.relation_change": { source_id: string; target_id: string; source_revision: string; target_revision: string;
+    action: "link" | "unlink"; relation_kind: "user_association"; edge_id: string | null };
+  "ui.community_rename": { community_id: string; name: string };
+}
+interface MutationResults {
+  "ui.memory_create": MemoryDetail;
+  "ui.memory_edit": { original_memory_id: string; original_revision: string; replacement: MemoryDetail };
+  "ui.memory_retire": { memory_id: string; revision: string; lifecycle: "tombstoned" };
+  "ui.relation_change": GraphEdge;
+  "ui.community_rename": Community;
+}
+interface KnowledgeMutationReceipt<K extends keyof MutationResults> {
   receipt_id: string;
   request_id: string;
   idempotency_key: string;
   changed: boolean;
-  committed: unknown;
+  committed: MutationResults[K];
 }
 
 export interface KnowledgeClient {
   ownerSessions(sessionId: string | null, cursor: string | null, signal?: AbortSignal): Promise<ReadResults["ui.owner_sessions"]>;
   read<K extends Exclude<ReadOperation, "ui.owner_sessions">>(scope: KnowledgeScope, operation: K, args: ReadArgs[K], signal?: AbortSignal): Promise<ReadResults[K]>;
-  write(scope: KnowledgeScope, operation: "ui.memory_create" | "ui.memory_edit" | "ui.memory_retire" | "ui.relation_change" | "ui.community_rename", args: Record<string, string | null>, expectedRevision: string | null, idempotencyKey: string, signal?: AbortSignal): Promise<KnowledgeOutcome<{ binding: OwnerBinding; result: KnowledgeMutationReceipt }>>;
+  write<K extends keyof MutationArguments>(scope: KnowledgeScope, operation: K, args: MutationArguments[K],
+    expectedRevision: string | null, signal?: AbortSignal):
+    Promise<KnowledgeOutcome<{ binding: OwnerBinding; result: KnowledgeMutationReceipt<K> }>>;
 }
 
 const dashboardPath = "/dashboard-v1";
@@ -71,6 +88,8 @@ function capabilityFor(operation: ReadOperation): keyof OwnerBinding["capabiliti
 }
 
 export function createKnowledgeClient(json: JsonTransport): KnowledgeClient {
+  const retryKeys = new Map<string, string>();
+
   async function request(operation: ReadOperation, scope: KnowledgeScope | null, args: unknown, signal?: AbortSignal, overrideSessionId?: string | null) {
     const owner = scope?.owner ?? null;
     const reqId = requestId();
@@ -89,6 +108,7 @@ export function createKnowledgeClient(json: JsonTransport): KnowledgeClient {
       arguments: args,
     };
     const value = await json(dashboardPath, { method: "POST", body: wire, signal });
+    signal?.throwIfAborted();
     const response = unwrap(value);
     if (response.request_id !== reqId || response.operation !== operation) {
       throw new Error("Dashboard response did not match this request.");
@@ -128,7 +148,8 @@ export function createKnowledgeClient(json: JsonTransport): KnowledgeClient {
       const response = await request(operation, scope, args, signal);
       return response.result as ReadResults[typeof operation];
     },
-    async write(scope, operation, args, expectedRevision, idempotencyKey, signal) {
+    async write<K extends keyof MutationArguments>(scope: KnowledgeScope, operation: K, args: MutationArguments[K],
+      expectedRevision: string | null, signal?: AbortSignal) {
       const caps = scope.owner.capabilities;
       const capability = {
         "ui.memory_create": "memory_create", "ui.memory_edit": "memory_edit", "ui.memory_retire": "memory_retire",
@@ -136,6 +157,17 @@ export function createKnowledgeClient(json: JsonTransport): KnowledgeClient {
       }[operation] as keyof OwnerBinding["capabilities"];
       if (scope.owner.owner_kind !== "REL" || !caps.view || !caps.manage || !caps[capability]) {
         return { status: "denied", code: "capability_denied", retryable: false };
+      }
+      const intent = JSON.stringify([scope.owner.owner_id, scope.owner.generation, scope.owner.cut,
+        scope.sessionId, operation, expectedRevision, args]);
+      let idempotencyKey = retryKeys.get(intent);
+      if (!idempotencyKey) {
+        idempotencyKey = requestId();
+        retryKeys.set(intent, idempotencyKey);
+        if (retryKeys.size > 16) {
+          const oldest = retryKeys.keys().next();
+          if (!oldest.done) retryKeys.delete(oldest.value);
+        }
       }
       const reqId = requestId();
       const wire = {
@@ -156,12 +188,13 @@ export function createKnowledgeClient(json: JsonTransport): KnowledgeClient {
           return { status: response.status as ReadErrorStatus, code: typeof result?.code === "string" ? result.code : "dashboard_request_failed", retryable: result?.retryable === true };
         }
         const binding = response.binding as OwnerBinding;
-        const result = response.result as KnowledgeMutationReceipt;
+        const result = response.result as KnowledgeMutationReceipt<K>;
         const changedCut = !result.changed || binding.cut !== scope.owner.cut;
         if (!sameBinding(binding, scope.owner, capability, false) || !binding.capabilities.manage || !changedCut || result.request_id !== reqId
           || result.idempotency_key !== idempotencyKey || typeof result.receipt_id !== "string") {
           return { status: "conflict", code: "response_binding_mismatch", retryable: false };
         }
+        retryKeys.delete(intent);
         return { status: "ok", value: { binding, result } };
       } catch (error) {
         if (signal?.aborted) throw error;

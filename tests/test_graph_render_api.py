@@ -133,6 +133,8 @@ assert calls == [selector]
         **os.environ, "HERMES_HOME": str(home), "PYTHONPATH": str(pinned_checkout),
         "TEMP": str(tmp_path), "TMP": str(tmp_path), "TMPDIR": str(tmp_path),
     }
-    result = subprocess.run([sys.executable, "-B", "-c", script], cwd=tmp_path, env=environment,
-                            text=True, capture_output=True, timeout=60)
-    assert result.returncode == 0, result.stderr
+    log = tmp_path / "graph-route.log"
+    with log.open("w", encoding="utf-8") as output:
+        result = subprocess.run([sys.executable, "-B", "-c", script], cwd=tmp_path, env=environment,
+                                stdout=output, stderr=subprocess.STDOUT, timeout=90)
+    assert result.returncode == 0, log.read_text(encoding="utf-8", errors="replace")

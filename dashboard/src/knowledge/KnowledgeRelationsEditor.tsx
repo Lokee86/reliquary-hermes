@@ -76,7 +76,6 @@ export function KnowledgeRelationsEditor({ client, scope, memory, controls, bloc
       onError("The graph cut changed. Refresh owner data before editing relationships."); return;
     }
     const linking = edge === null;
-    const key = globalThis.crypto?.randomUUID?.() ?? `relation-${Date.now()}`;
     setBusy(true);
     const result = await client.write(scope, "ui.relation_change", {
       source_id: linking ? sourceNode.memory_id! : edge.source_id,
@@ -86,7 +85,7 @@ export function KnowledgeRelationsEditor({ client, scope, memory, controls, bloc
       action: linking ? "link" : "unlink",
       relation_kind: "user_association",
       edge_id: edge?.edge_id ?? null,
-    }, edge?.revision ?? null, key);
+    }, edge?.revision ?? null);
     setBusy(false);
     if (result.status !== "ok") { onError(result.code); return; }
     onChanged();

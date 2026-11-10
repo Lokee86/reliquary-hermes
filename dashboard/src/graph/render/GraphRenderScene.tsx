@@ -91,6 +91,7 @@ export function GraphRenderScene({ client, onSelect, onFrameReady }: Props) {
         <color attach="background" args={["#06090f"]} />
         <Scene
           center={center}
+          markerScale={Math.min(1, extent / 40)}
           client={client}
           frame={frame}
           selectedRenderId={selectedRenderId}
@@ -105,6 +106,7 @@ export function GraphRenderScene({ client, onSelect, onFrameReady }: Props) {
 
 function Scene({
   center,
+  markerScale,
   client,
   frame,
   selectedRenderId,
@@ -112,6 +114,7 @@ function Scene({
   onViewport,
 }: {
   center: readonly [number, number, number];
+  markerScale: number;
   client: GraphRenderClient;
   frame: GraphRenderFrame | null;
   selectedRenderId: number | null;
@@ -142,14 +145,16 @@ function Scene({
         <RenderNodeChunk
           key={chunk.chunkId}
           chunk={chunk}
+          markerScale={markerScale}
           selectedRenderId={selectedRenderId}
           register={registerChunk}
         />
       ))}
-      {frame && <RenderLabels labels={frame.labels} />}
+      {frame && <RenderLabels labels={frame.labels} markerScale={markerScale} />}
       <BoundedPicker
         client={client}
         chunks={frame?.nodeChunks ?? []}
+        markerScale={markerScale}
         pointsByChunk={pointsByChunk.current}
         onHover={(renderId) => client.setHoveredRenderId(renderId)}
         onPick={onPick}

@@ -58,11 +58,11 @@ function Knowledge({ host, mutationBlocked }: { host: HostBoundary; mutationBloc
   const [cursors, setCursors] = useState<(string | null)[]>([null]);
   const cursor = cursors.at(-1) ?? null;
   const [attempt, setAttempt] = useState(0);
+  const [preferred, setPreferred] = useState<{ ownerId?: string; memoryId?: string; includeArchived: boolean }>();
   const [snapshot, setSnapshot] = useState<{
     key: string; value?: ReadResults["ui.owner_sessions"]; error?: string;
   } | null>(null);
   const key = JSON.stringify([session, cursor, attempt]);
-  const refresh = useCallback(() => { setAttempt(value => value + 1); }, []);
   const graphTransportFor = useCallback((owner: OwnerBinding, sessionId: string | null, signal?: AbortSignal) =>
     createGraphTransport(host, owner, sessionId, signal), [host]);
 
@@ -84,13 +84,17 @@ function Knowledge({ host, mutationBlocked }: { host: HostBoundary; mutationBloc
   const owner = owners.find(item => item.owner_id === selection) ?? mapped ??
     owners.find(item => item.owner_kind === "REL") ?? owners[0];
   const sessionId = owner && mapped?.owner_id === owner.owner_id ? topology?.active_session_id ?? null : null;
+  function refresh(memoryId?: string, includeArchived = false) {
+    setPreferred({ ownerId: owner?.owner_id, memoryId, includeArchived });
+    setAttempt(value => value + 1);
+  }
 
   return <div className="rly-workspace">
     <aside className="rly-rail" aria-label="Owner scope">
       <span className="rly-overline">Scope</span>
       <h2>Owners</h2>
       {owners.map(item => <Button key={item.owner_id} aria-pressed={item.owner_id === owner?.owner_id}
-        className="rly-owner-link" onClick={() => setSelection(item.owner_id)}>
+        className="rly-owner-link" onClick={() => { setPreferred(undefined); setSelection(item.owner_id); }}>
         <span className="rly-owner-kind">{item.owner_kind}</span><span>{item.display_label}</span>
       </Button>)}
       {topology?.owners.next_cursor && <Button type="button" onClick={() => {
@@ -115,7 +119,7 @@ function Knowledge({ host, mutationBlocked }: { host: HostBoundary; mutationBloc
           <Button type="submit" size="sm">Look up session</Button>
         </form>
       </details>
-      <Button size="sm" onClick={refresh}>Refresh owners</Button>
+      <Button size="sm" onClick={() => refresh()}>Refresh owners</Button>
     </aside>
     <main className="rly-workspace-main" aria-label="Knowledge">
       {!current && <p className="rly-section" role="status">Loading owners…</p>}
@@ -123,7 +127,9 @@ function Knowledge({ host, mutationBlocked }: { host: HostBoundary; mutationBloc
       {topology && !owner && <p className="rly-section">There are no authorized owners on this page.</p>}
       {owner && <KnowledgePanel key={JSON.stringify([owner.owner_id, owner.generation, owner.cut, sessionId])}
         owner={owner} sessionId={sessionId} transport={host.json} controls={host.controls}
-        graphTransportFor={graphTransportFor} mutationBlocked={mutationBlocked} onOwnerRefresh={refresh} />}
+        graphTransportFor={graphTransportFor} mutationBlocked={mutationBlocked} onOwnerRefresh={refresh}
+        initialMemoryId={preferred?.ownerId === owner.owner_id ? preferred.memoryId : undefined}
+        includeArchived={preferred?.ownerId === owner.owner_id && preferred.includeArchived} />}
     </main>
   </div>;
 }

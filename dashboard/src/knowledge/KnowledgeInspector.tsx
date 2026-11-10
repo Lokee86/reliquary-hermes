@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import type { Community, MemoryDetail, MemorySummary, ReadResults } from "../../types";
 import type { HostControls } from "../host";
@@ -9,17 +9,23 @@ import { communityLabel, shortId } from "./knowledgeUi";
 interface Props {
   client: KnowledgeClient;
   scope: KnowledgeScope;
-  memory: MemorySummary | null;
+  memoryId: string | null;
   communities: Community[];
   controls: HostControls;
   blocked?: string;
   writable: boolean;
-  onChanged: () => void;
+  onChanged: (memoryId?: string) => void;
+  onOpenMemory: (memoryId: string) => void;
   onError: (error: string | null) => void;
 }
 
-export function KnowledgeInspector({ client, scope, memory, communities, controls, blocked, writable, onChanged, onError }: Props) {
+export function KnowledgeInspector({ client, scope, memoryId, communities, controls, blocked, writable, onChanged, onOpenMemory, onError }: Props) {
   const [detail, setDetail] = useState<MemoryDetail | null>(null);
+  const [currentRevision, setCurrentRevision] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const lifetime = useRef<AbortController | null>(null);
+  const revisionRequest = useRef<AbortController | null>(null);
+  const memory = detail?.memory;
   const [history, setHistory] = useState<string[]>([]);
   const [historyCursor, setHistoryCursor] = useState<string | null>(null);
   const [historyNext, setHistoryNext] = useState<string | null>(null);
@@ -31,46 +37,58 @@ export function KnowledgeInspector({ client, scope, memory, communities, control
   const [body, setBody] = useState("");
   const { Button, Input, Textarea } = controls;
 
+  async function loadDetail(id: string, target: string | null, signal: AbortSignal) {
+    const next = await client.read(scope, "ui.memory_detail", { memory_id: id, revision: target }, signal);
+    const evidence = scope.owner.capabilities.provenance
+      ? await client.read(scope, "ui.provenance", { memory_id: id, revision: next.body.revision }, signal)
+      : null;
+    signal.throwIfAborted();
+    setDetail(next);
+    setProvenance(evidence);
+    setTitle(next.memory.title ?? "");
+    setBody(next.body.content ?? "");
+    if (target === null) setCurrentRevision(next.body.revision);
+    setRevision(target);
+    setEditing(false);
+    return next;
+  }
+
   useEffect(() => {
-    setDetail(null); setHistory([]); setHistoryCursor(null); setHistoryNext(null); setRevision(null);
-    setProvenance(null); setEditing(false); onError(null);
-    if (!memory) return;
     const controller = new AbortController();
-    void Promise.all([
-      client.read(scope, "ui.memory_detail", { memory_id: memory.memory_id, revision: null }, controller.signal),
+    lifetime.current = controller;
+    setError(null);
+    if (memoryId) void Promise.all([
+      loadDetail(memoryId, null, controller.signal),
       scope.owner.capabilities.history
-        ? client.read(scope, "ui.memory_history", { memory_id: memory.memory_id, cursor: null, limit: 20 }, controller.signal)
+        ? client.read(scope, "ui.memory_history", { memory_id: memoryId, cursor: null, limit: 20 }, controller.signal)
         : Promise.resolve(null),
-      scope.owner.capabilities.provenance
-        ? client.read(scope, "ui.provenance", { memory_id: memory.memory_id, revision: memory.revision }, controller.signal)
-        : Promise.resolve(null),
-    ]).then(([nextDetail, nextHistory, nextProvenance]) => {
+    ]).then(([, page]) => {
       if (controller.signal.aborted) return;
-      setDetail(nextDetail); setTitle(nextDetail.memory.title ?? "");
-      setBody(nextDetail.body.content ?? "");
-      setHistory(nextHistory?.revisions.items.map((item) => item.revision) ?? []);
-      setHistoryNext(nextHistory?.revisions.next_cursor ?? null);
-      setProvenance(nextProvenance);
+      setHistory(page?.revisions.items.map(item => item.revision) ?? []);
+      setHistoryNext(page?.revisions.next_cursor ?? null);
     }).catch((reason: unknown) => {
-      if (!controller.signal.aborted) onError(reason instanceof Error ? reason.message : String(reason));
+      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Could not open this Memory.");
     });
-    return () => controller.abort();
-  }, [client, scope, memory?.memory_id, memory?.revision]);
+    return () => { controller.abort(); revisionRequest.current?.abort(); };
+  }, [client, scope, memoryId]);
 
   async function openRevision(nextRevision: string | null) {
-    if (!memory) return;
+    if (!memoryId) return;
+    revisionRequest.current?.abort();
     const controller = new AbortController();
+    revisionRequest.current = controller;
+    setError(null);
     try {
-      const value = await client.read(scope, "ui.memory_detail", { memory_id: memory.memory_id, revision: nextRevision }, controller.signal);
-      setDetail(value); setRevision(nextRevision);
-      setTitle(value.memory.title ?? ""); setBody(value.body.content ?? "");
-    } catch (reason) { onError(reason instanceof Error ? reason.message : String(reason)); }
+      await loadDetail(memoryId, nextRevision, controller.signal);
+    } catch (reason) {
+      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Could not open this revision.");
+    }
   }
 
   async function loadNextHistory() {
     if (!memory || !historyNext) return;
     try {
-      const page = await client.read(scope, "ui.memory_history", { memory_id: memory.memory_id, cursor: historyNext, limit: 20 });
+      const page = await client.read(scope, "ui.memory_history", { memory_id: memory.memory_id, cursor: historyNext, limit: 20 }, lifetime.current?.signal);
       setHistory((items) => [...items, ...page.revisions.items.map((item) => item.revision)]);
       setHistoryNext(page.revisions.next_cursor);
       setHistoryCursor(historyNext);
@@ -79,30 +97,40 @@ export function KnowledgeInspector({ client, scope, memory, communities, control
 
   async function save() {
     if (!memory || !detail || !writable || blocked || !scope.owner.capabilities.memory_edit || !title.trim() || !body.trim()) return;
+    const signal = lifetime.current?.signal;
     setBusy(true);
-    const createdAt = String(Math.floor(Date.now() / 1000) * 1_000_000_000);
-    const key = globalThis.crypto?.randomUUID?.() ?? `edit-${Date.now()}`;
-    const result = await client.write(scope, "ui.memory_edit", {
-      memory_id: memory.memory_id, title: title.trim(), body: body.trim(),
-      expected_body_id: detail.body.body_id, created_at_ns: createdAt,
-    }, detail.body.revision, key);
-    setBusy(false);
-    if (result.status !== "ok") { onError(result.code); return; }
-    setEditing(false); onChanged();
+    setError(null);
+    try {
+      const result = await client.write(scope, "ui.memory_edit", {
+        memory_id: memory.memory_id, title: title.trim(), body: body.trim(),
+      }, detail.body.revision, signal);
+      signal?.throwIfAborted();
+      if (result.status !== "ok") { setError(result.code); return; }
+      setEditing(false);
+      onChanged(result.value.result.committed.replacement.memory.memory_id);
+    } catch (reason) {
+      if (!signal?.aborted) setError(reason instanceof Error ? reason.message : "Could not save this replacement.");
+    } finally {
+      if (!signal?.aborted) setBusy(false);
+    }
   }
 
-  if (!memory) return <aside className="knowledge-inspector"><div className="knowledge-state">Select a memory.</div></aside>;
-  if (!detail) return <aside className="knowledge-inspector" aria-label="Memory inspector"><div className="knowledge-state">Loading detail, history, and provenance…</div></aside>;
+  if (!memoryId) return <aside className="knowledge-inspector"><div className="knowledge-state">Select a memory.</div></aside>;
+  if (!detail || !memory) return <aside className="knowledge-inspector" aria-label="Memory inspector">
+    {error ? <p className="knowledge-inline-error" role="alert">{error}</p>
+      : <div className="knowledge-state">Loading detail, history, and provenance…</div>}
+  </aside>;
 
   const community = communities.find((candidate) => candidate.community_id === memory.community_id) ?? null;
   const content = detail.body.content ?? "Memory body is unavailable at this revision.";
   const archived = memory.lifecycle !== "active";
-  const canEdit = writable && !blocked && !archived && scope.owner.capabilities.memory_edit
+  const canEdit = writable && !blocked && !archived && revision === null && scope.owner.capabilities.memory_edit
     && detail.body.availability === "available" && detail.body.body_id !== null;
 
   return (
     <aside className="knowledge-inspector" aria-label="Memory inspector">
-      <div className="knowledge-inspector-title-row"><div><div className="eyebrow">MEMORY</div><h2>{memory.title || "Untitled memory"}</h2></div>
+      <div className="knowledge-inspector-title-row"><div><div className="eyebrow">MEMORY</div><h2>{memory.title || "Untitled memory"}</h2>
+        {error && <p className="knowledge-inline-error" role="alert">{error}</p>}</div>
         {canEdit && <Button type="button" onClick={() => setEditing((value) => !value)}>{editing ? "Cancel" : "Edit"}</Button>}
       </div>
       {editing ? <div className="knowledge-edit-memory">
@@ -126,16 +154,19 @@ export function KnowledgeInspector({ client, scope, memory, communities, control
         {!scope.owner.capabilities.history ? <p className="knowledge-muted">History access is not granted for this owner.</p> : <>
         <Button type="button" disabled={!revision} onClick={() => void openRevision(null)}>Current revision</Button>
         <div className="knowledge-history-list">{history.map((item) => <Button key={item} type="button" aria-pressed={item === detail.body.revision}
-          onClick={() => void openRevision(item)}>{item === memory.revision ? "Latest" : shortId(item)}{item === detail.body.revision ? " · selected" : ""}</Button>)}</div>
+          onClick={() => void openRevision(item)}>{item === currentRevision ? "Latest" : shortId(item)}{item === detail.body.revision ? " · selected" : ""}</Button>)}</div>
         {historyNext && <Button type="button" onClick={() => void loadNextHistory()}>Load older revisions</Button>}
         {historyCursor && <span className="knowledge-muted">History is paged; additional revisions are available above.</span>}
         </>}
       </section>
 
+      {detail.superseded_by && <Button type="button" onClick={() => onOpenMemory(detail.superseded_by!)}>
+        Open replacement
+      </Button>}
       {detail.superseded_by && <RetirementForm client={client} scope={scope} memory={memory}
-        canRetire={writable && !blocked && scope.owner.capabilities.memory_retire && detail.body.availability === "available"}
+        canRetire={revision === null && writable && !blocked && scope.owner.capabilities.memory_retire && detail.body.availability === "available"}
         blocked={blocked} controls={controls} onChanged={onChanged} onError={onError} />}
-      {!archived && <KnowledgeRelationsEditor client={client} scope={scope} memory={memory} controls={controls} blocked={blocked} onChanged={onChanged} onError={onError} />}
+      {!archived && revision === null && <KnowledgeRelationsEditor client={client} scope={scope} memory={memory} controls={controls} blocked={blocked} onChanged={onChanged} onError={onError} />}
       <section className="knowledge-inspector-section" aria-label="Memory provenance">
         <h3>Provenance</h3>
         {!scope.owner.capabilities.provenance ? <p className="knowledge-muted">Provenance access is not granted for this owner.</p>
@@ -165,11 +196,10 @@ function RetirementForm({ client, scope, memory, canRetire, blocked, controls, o
   async function retire() {
     if (!canRetire || !confirmed || busy) return;
     setBusy(true);
-    const key = globalThis.crypto?.randomUUID?.() ?? `retire-${Date.now()}`;
     const result = await client.write(scope, "ui.memory_retire", {
       memory_id: memory.memory_id,
       effect: "retire",
-    }, memory.revision, key);
+    }, memory.revision);
     setBusy(false);
     if (result.status !== "ok") { onError(result.code); return; }
     onChanged();

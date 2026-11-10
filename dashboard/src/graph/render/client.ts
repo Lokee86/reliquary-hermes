@@ -31,11 +31,24 @@ import type {
 } from "./types";
 
 const RESOLUTION_CACHE_LIMIT = 128;
+const RESIDENT_CHUNK_LIMIT = 2 * GRAPH_RENDER_DETAIL_CHUNK_BUDGET;
+const SMALL_GRAPH_NODE_LIMIT = 256;
+
+function retain<T>(cache: Map<number, T>, id: number, value: T) {
+  cache.delete(id);
+  cache.set(id, value);
+  if (cache.size > RESIDENT_CHUNK_LIMIT) {
+    const oldest = cache.keys().next();
+    if (!oldest.done) cache.delete(oldest.value);
+  }
+  return value;
+}
 
 export class GraphRenderClient {
   readonly manifest: GraphRenderManifest;
 
   private readonly transport: GraphRenderTransport;
+  private readonly detailFits: boolean;
   private readonly hierarchyIndex: GraphRenderBoundsIndex<GraphRenderHierarchyDescriptor>;
   private readonly nodeIndex: GraphRenderBoundsIndex<GraphRenderNodeChunkDescriptor>;
   private readonly edgeIndexes: Record<GraphRenderEdgeLod, GraphRenderBoundsIndex<GraphRenderEdgeChunkDescriptor>>;
@@ -55,6 +68,9 @@ export class GraphRenderClient {
     validateManifest(manifest);
     this.manifest = manifest;
     this.transport = transport;
+    this.detailFits = manifest.totalNodeCount <= SMALL_GRAPH_NODE_LIMIT
+      && manifest.nodeChunks.length <= GRAPH_RENDER_DETAIL_CHUNK_BUDGET
+      && manifest.edgeChunks.filter(chunk => chunk.lod === "detail").length <= GRAPH_RENDER_DETAIL_CHUNK_BUDGET;
     this.hierarchyIndex = new GraphRenderBoundsIndex(
       manifest.hierarchy.map((value) => ({ bounds: value.bounds, value })),
     );
@@ -70,7 +86,9 @@ export class GraphRenderClient {
 
   planViewport(viewport: GraphRenderViewport) {
     validateViewport(viewport);
-    const lod = selectGraphRenderLod(viewport, this.manifest.globalBounds);
+    // Small owners fit in the existing detail budgets at the initial camera distance.
+    // Their unpartitioned relations can exist only in detail chunks.
+    const lod = this.detailFits ? "detail" : selectGraphRenderLod(viewport, this.manifest.globalBounds);
     const hierarchy = this.hierarchyIndex.querySphere(
       viewport.center,
       viewport.radius,
@@ -147,7 +165,7 @@ export class GraphRenderClient {
 
   private ensureNodeChunk(descriptor: GraphRenderNodeChunkDescriptor) {
     const resident = this.nodeResidents.get(descriptor.chunkId);
-    if (resident) return Promise.resolve(resident);
+    if (resident) return Promise.resolve(retain(this.nodeResidents, descriptor.chunkId, resident));
     const requested = this.nodeRequests.get(descriptor.chunkId);
     if (requested) return requested;
 
@@ -160,8 +178,7 @@ export class GraphRenderClient {
           this.manifest.generationId,
           descriptor,
         );
-        this.nodeResidents.set(descriptor.chunkId, chunk);
-        return chunk;
+        return retain(this.nodeResidents, descriptor.chunkId, chunk);
       })
       .finally(() => this.nodeRequests.delete(descriptor.chunkId));
     this.nodeRequests.set(descriptor.chunkId, request);
@@ -170,7 +187,7 @@ export class GraphRenderClient {
 
   private ensureEdgeChunk(descriptor: GraphRenderEdgeChunkDescriptor) {
     const resident = this.edgeResidents.get(descriptor.chunkId);
-    if (resident) return Promise.resolve(resident);
+    if (resident) return Promise.resolve(retain(this.edgeResidents, descriptor.chunkId, resident));
     const requested = this.edgeRequests.get(descriptor.chunkId);
     if (requested) return requested;
 
@@ -184,8 +201,7 @@ export class GraphRenderClient {
           descriptor.chunkId,
           descriptor.segmentCount,
         );
-        this.edgeResidents.set(descriptor.chunkId, chunk);
-        return chunk;
+        return retain(this.edgeResidents, descriptor.chunkId, chunk);
       })
       .finally(() => this.edgeRequests.delete(descriptor.chunkId));
     this.edgeRequests.set(descriptor.chunkId, request);

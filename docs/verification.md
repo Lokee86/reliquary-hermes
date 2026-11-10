@@ -361,9 +361,36 @@ Window testing stopped before live Save As selection, separate creation confirma
 
 ## Warlock Knowledge verification
 
-Build and check the shared UI with `npm --prefix dashboard run check`. Run the pinned Python tests with `tests/test_graph_render_api.py` and the locked offline host tests from this guide. Verify the Web and Desktop bundles use the same graph scene and use profile-bound raw chunks. Desktop graph verification requires the SDK byte bridge listed in the [installation guide](local-service.md).
+The source inventory is Warlock `cf41c6690e089cab4a00950d6048ad6828eaeab7` and Hermes baseline `7ccc429e51e37bb731313dc6184f426f527d34ce`. The Warlock worktree had local Cargo manifest and lockfile edits. The port used the tracked source at the frozen revision and pinned the renderer dependencies in `dashboard/package-lock.json`. The public Root graph source landed at `fa574eec`.
 
-Run the live smoke probes only on isolated profiles. Use copies of the November 8 processed `project.rel` and `user.phy`. Verify each file independently with the Root CLI before mounting. Check the render manifest against the exact Root cut and count accepted Memory-to-Memory edges independently. Preserve source corpus bytes and verify copies remain unchanged after read-only browsing.
+The Web and Desktop bundles share the React UI, renderer and host theme mapping. The live runs used Chrome with Hermes Web SDK 1.1.0 and Electron 44.9.3 with the Hermes Desktop byte bridge on `458829681db8761e50b8242aa034d23ae9bcdcd5`. The Web smoke checks the authenticated chunk media type and length, rejects forged owner and principal selectors and stale generation and render IDs, and checks that the current chunk remains usable. The Desktop canvas uses the same binary decoder through the SDK's authenticated byte IPC. The final Desktop smoke exercised native Save As, separate creation confirmation and native owner selection before connecting. Stock Desktop exposes List and the inspector with an explanation of the required graph capability.
+
+The November 8 corpus was copied through a read-only mapped view to avoid the source file's Windows byte-range lock. Root independently verified 13 visible REL Memories at Memory version 26 and graph version 10, with 10 active Memory-to-Memory relations. Root verified four PHY Memories at Memory version 4 and graph version 0. The REL manifest contained 13 nodes and 10 detail segments. The PHY manifest contained four nodes. The active-only List showed 11 REL Memories. The lifecycle toggle exposes other states. The graph uses the Warlock Memory-to-Memory projection. The public Root source also carries typed relations with other endpoint kinds.
+
+Astra independently checked the Web graph, binary traffic, picking into the same Memory, revision history, provenance, PHY switching, Setup and Sources, and layouts at 1440, 1280, 900 and 600 pixels. The agent accepted the final Web layout and reviewed the Desktop graph and inspector captures after the real Desktop smoke passed. Missing source evidence in the reference corpus is reported explicitly. Community availability is independent of the List. The existing Hermes write scope allows user associations and community rename where granted.
+
+Run the local checks from the integration repository.
+
+```powershell
+npm --prefix dashboard run check
+cargo fmt --manifest-path host/Cargo.toml --check
+cargo test --manifest-path host/Cargo.toml --locked --offline -- --test-threads=1
+node dashboard/tests/web-live.mjs $dashboardUrl $playwrightModule $webFixture
+node desktop/tests/live-smoke.mjs $desktopFixture
+```
+
+The UI build, typecheck and four focused TypeScript tests passed. The locked host suite passed 89 tests. The installed bundle and host-pin SHA-256 hashes matched in both isolated packages. The reference and both browsed copies of each corpus owner matched byte for byte. Its separate ignored characterization exercises the two synthetic tiers. Use a fresh isolated profile and corpus copies for each live run. Provide `home`, `ownerIds`, `counts` and optional `candidate` in each fixture. Web also accepts `expectedEdges`. The Desktop runner takes `HU05_DESKTOP_EXE`, `HU05_DESKTOP_APP`, `HU05_PLAYWRIGHT`, `HU05_DESKTOP_PYTHON`, and `HP01_HERMES_CHECKOUT`. When supplied, `candidate.createPhy` uses a synthetic destination to exercise the native Save As and separate creation confirmation.
+
+The release characterization compiled the exact renderer modules in isolation with a deterministic input graph and fixed relation style.
+
+| Input nodes | Logical edges | Prepare time | Packed bytes | Manifest bytes | Output segments |
+| --- | --- | --- | --- | --- | --- |
+| 100,000 | 1,000,000 | 0.36–0.62 s | 3,448,992 | 3,702 | 32,772 |
+| 1,000,000 | 10,000,000 | 6.07–7.82 s | 32,129,472 | 24,151 | 253,983 |
+
+Peak process working set across both tiers was 1.35 GiB. The largest node and edge chunks were 786,464 and 262,176 bytes. The signed host caps chunk responses at 1 MiB and manifests at 4 MiB. The client retains bounded LRU chunk caches and applies the Warlock viewport and picking budgets. Small graphs that fit those detail budgets show their nodes and edges at the initial camera distance.
+
+The Warlock September 28 baseline assembled whole-graph JavaScript objects and uploaded their geometry. The Hermes measurements cover Rust projection and binary packing. GPU timings and million-node transport throughput in Hermes are unmeasured. The live Web and Desktop checks used the copied 13-node REL and 4-node PHY.
 
 ## Related docs
 

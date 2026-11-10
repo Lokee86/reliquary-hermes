@@ -1,2 +1,6 @@
 # Unified diffs preserve blank context lines, including at EOF.
 patches/*.patch whitespace=-blank-at-eol,-blank-at-eof
+
+# The generated Three.js bundles embed upstream GLSL template literals verbatim.
+dashboard/dist/index.js whitespace=-blank-at-eol,-space-before-tab
+desktop/plugin.js whitespace=-blank-at-eol,-space-before-tab

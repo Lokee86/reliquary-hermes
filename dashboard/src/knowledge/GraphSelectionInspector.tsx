@@ -1,3 +1,4 @@
+import type { HostControls } from "../host";
 import type { GraphRenderNodeResolution } from "../graph/render";
 
 export interface GraphSelection {
@@ -6,9 +7,10 @@ export interface GraphSelection {
   renderId: number;
 }
 
-interface Props { selection: GraphSelection | null; onOpenMemory?: (memoryId: string) => void; }
+interface Props { selection: GraphSelection | null; controls: HostControls; onOpenMemory(memoryId: string): void; }
 
-export function GraphSelectionInspector({ selection, onOpenMemory }: Props) {
+export function GraphSelectionInspector({ selection, controls, onOpenMemory }: Props) {
+  const { Button } = controls;
   return (
     <aside className="knowledge-inspector" aria-label="Graph selection">
       <div className="eyebrow">GRAPH SELECTION</div>
@@ -19,7 +21,7 @@ export function GraphSelectionInspector({ selection, onOpenMemory }: Props) {
             <div><dt>Memory ID</dt><dd>{selection.resolution.memoryId}</dd></div>
             <div><dt>Render generation</dt><dd>{selection.generationId}</dd></div>
           </dl>
-          <button type="button" onClick={() => onOpenMemory?.(selection.resolution.memoryId)}>Inspect in List</button>
+          <Button type="button" onClick={() => onOpenMemory(selection.resolution.memoryId)}>Inspect in List</Button>
         </>
       )}
     </aside>

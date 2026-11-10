@@ -26,6 +26,9 @@ _REQUEST_SECONDS = 1.5
 _PREFETCH_SECONDS = 7.0
 _RETRIEVAL_SECONDS = 67.0
 _STARTUP_SECONDS = 3.0
+# Interactive setup may cold-mount an existing processed corpus. The provider
+# attach budget above is unchanged.
+_DASHBOARD_STARTUP_SECONDS = 15.0
 
 
 class HostUnavailable(RuntimeError):
@@ -333,7 +336,7 @@ class HostClient:
             self._attached = None
             raise
 
-    def _connect(self, exchange):
+    def _connect(self, exchange, *, startup_seconds=_STARTUP_SECONDS):
         previous = self._read_discovery()
         if previous is not None:
             try:
@@ -343,7 +346,7 @@ class HostClient:
         if self._binary is None:
             raise HostUnavailable("host_unavailable")
         self._launch()
-        deadline = time.monotonic() + _STARTUP_SECONDS
+        deadline = time.monotonic() + startup_seconds
         while True:
             remaining = _remaining(deadline)
             current = self._read_discovery()
@@ -355,7 +358,7 @@ class HostClient:
         """Start or reuse the profile host, then verify its signed owner topology."""
         return self._connect(lambda discovery, deadline: self._dashboard_topology(
             discovery, session_id, deadline, owners_fingerprint,
-        ))
+        ), startup_seconds=_DASHBOARD_STARTUP_SECONDS)
 
     def cancel_startup(self) -> bool:
         """Stop only a process this client launched while applying setup."""

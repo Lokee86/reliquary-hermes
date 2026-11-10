@@ -41,6 +41,19 @@ const desktopStyles = {
     }));
   },
 };
+const desktopReact = {
+  name: "hermes-desktop-react",
+  setup(plugin) {
+    plugin.onResolve({ filter: /^react(?:\/jsx-(?:dev-)?runtime)?$/ }, args =>
+      args.kind === "require-call"
+        ? { path: args.path, namespace: "hermes-react" }
+        : { path: args.path, external: true });
+    plugin.onLoad({ filter: /.*/, namespace: "hermes-react" }, args => ({
+      loader: "js",
+      contents: 'import * as React from ' + JSON.stringify(args.path) + '; module.exports = React.default ?? React;',
+    }));
+  },
+};
 await build({ ...common, entryPoints: ["../desktop/src/plugin.tsx"], outfile: "../desktop/plugin.js",
-  format: "esm", loader: { ".css": "empty" }, plugins: [desktopStyles],
-  external: ["react", "react/jsx-runtime", "@hermes/plugin-sdk"] });
+  format: "esm", loader: { ".css": "empty" }, plugins: [desktopReact, desktopStyles],
+  external: ["@hermes/plugin-sdk"] });

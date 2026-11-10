@@ -10,23 +10,25 @@ interface LabelTexture {
 
 export function RenderLabels({
   labels,
+  markerScale,
 }: {
   labels: readonly GraphRenderLabel[];
+  markerScale: number;
 }) {
   return (
     <group>
-      {labels.map((label) => <Label key={label.renderId} value={label} />)}
+      {labels.map((label) => <Label key={label.renderId} value={label} markerScale={markerScale} />)}
     </group>
   );
 }
 
-function Label({ value }: { value: GraphRenderLabel }) {
+function Label({ value, markerScale }: { value: GraphRenderLabel; markerScale: number }) {
   const texture = useMemo(() => createTexture(value.label), [value.label]);
   useEffect(() => () => texture?.texture.dispose(), [texture]);
   if (!texture) return null;
 
   const importance = Math.log2(value.importance + 2);
-  const worldHeight = Math.min(5.2, 2.4 + importance * 0.35);
+  const worldHeight = Math.min(5.2, 2.4 + importance * 0.35) * markerScale;
   return (
     <sprite
       position={[

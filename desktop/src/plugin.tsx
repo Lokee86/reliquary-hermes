@@ -67,7 +67,8 @@ function desktopBoundary(ctx: PluginContext, current: () => boolean): HostBounda
   return {
     surface: "Desktop", controls,
     json(path, { method = "GET", body, signal }: RequestOptions = {}) {
-      return request(() => ctx.rest(path, { method, body, timeoutMs: path.endsWith("/prepare") ? 45000 : undefined }), signal);
+      const timeoutMs = path.endsWith("/prepare") ? 45000 : path === "/setup-v1/apply" || path === "/dashboard-v1" ? 25000 : undefined;
+      return request(() => ctx.rest(path, { method, body, timeoutMs }), signal);
     },
     bytes: typeof ctx.restBytes === "function" ? async (path, { method = "GET", body, signal }) => {
       const result = await request(() => ctx.restBytes!(path, { method, body }), signal);

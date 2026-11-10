@@ -76,8 +76,8 @@ await assert.rejects(
 
 const client = await GraphRenderClient.prepare("owner", transport);
 const overview = client.planViewport({ center:[0,0,0], radius:100 });
-assert.equal(overview.lod, "overview");
-assert.equal(overview.nodeChunks.length, 0);
+assert.equal(overview.lod, "detail");
+assert.equal(overview.nodeChunks.length, 1);
 assert.equal(overview.edgeChunks.length, 1);
 
 const detailView = { center:[0,0,0] as const, radius:5 };
@@ -145,6 +145,8 @@ const crowded = await GraphRenderClient.prepare("owner", {
   ...transport,
   async prepare() { return crowdedManifest; },
 });
+assert.equal(crowded.planViewport({ center: [0, 0, 0], radius: 100 }).lod, "overview");
+assert.equal(crowded.planViewport({ center: [0, 0, 0], radius: 20 }).lod, "intermediate");
 const crowdedPlan = crowded.planViewport(detailView);
 assert.equal(crowdedPlan.nodeChunks.length, 32);
 assert.equal(crowdedPlan.edgeChunks.length, 32);

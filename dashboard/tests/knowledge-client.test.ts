@@ -83,3 +83,20 @@ test("owner discovery validates the selected session from the direct browser DTO
     };
   }).ownerSessions("session-1", null));
 });
+
+test("retrying the same unconfirmed draft preserves its idempotency key", async () => {
+  const keys: unknown[] = [];
+  const client = createKnowledgeClient(async (_path, options) => {
+    const body = options?.body as Record<string, unknown>;
+    keys.push(body.idempotency_key);
+    assert.deepEqual(Object.keys(body.arguments as object).sort(), ["body", "category", "memory_type", "title"]);
+    throw new Error("the reply was lost");
+  });
+  const scope = { owner, sessionId: null };
+  const draft = { title: "Test memory", body: "Original draft", category: "fact", memory_type: "general" };
+  assert.equal((await client.write(scope, "ui.memory_create", draft, null)).status, "unavailable");
+  assert.equal((await client.write(scope, "ui.memory_create", { ...draft }, null)).status, "unavailable");
+  await client.write(scope, "ui.memory_create", { ...draft, body: "New draft" }, null);
+  assert.equal(keys[0], keys[1]);
+  assert.notEqual(keys[1], keys[2]);
+});

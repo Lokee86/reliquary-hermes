@@ -2,12 +2,20 @@
 
 **Date:** 2026-11-10
 
-**Status:** implementation-ready design; no implementation authorized by this document
+**Status:** implementation and acceptance evidence are tracked in the verification guide.
 
 **Repository:** `C:\!bin\workspace\reliquary-hermes`, baseline `7ccc429e51e37bb731313dc6184f426f527d34ce`
 
 **Reference implementation:** `C:\!bin\workspace\warlock-v2` at `cf41c6690e089cab4a00950d6048ad6828eaeab7` (source commit; two local Cargo manifest/lock edits excluded)
 **User intent:** Recreate the **existing Warlock Reliquary Knowledge experience inside Hermes**, not redesign its appearance or rehabilitate the current Hermes dashboard.
+
+## Purpose
+
+Port the established Warlock Knowledge experience to Hermes using one renderer, one shared React application and the existing Hermes ownership and authentication model.
+
+## Overview
+
+The rebuild covers the public Reliquary graph source, prepared graph generations and the Hermes Web and Desktop surfaces. The integration gates below govern acceptance.
 
 ## Problem statement
 
@@ -178,3 +186,13 @@ Avoid wholesale deletion of `dashboard/plugin_api.py`, existing setup/source ser
 - Warlock: `docs/GRAPH_RENDER_ARCHITECTURE.md`; `docs/GRAPH_RENDER_BASELINE_2026-09-28.md`; `src/features/workspace/KnowledgePanel.tsx`; `src/features/graph/render/*`; `src-tauri/src/graph_render*.rs`; `src-tauri/src/workspace_graph_render.rs`; `src-tauri/src/workspace_graph_render_adapter.rs`.
 - Hermes: `dashboard/src/owner_content.js`; `dashboard/src/graph.js`; `host/src/dashboard_graph.rs`; `dashboard/scripts/live-bundle.cjs`; `desktop/src/plugin.js`; `docs/ui-contract.md`, `docs/hu05-cross-surface-onboarding-desktop-spec-2026-11-08.md`, `docs/hu07-hermes-native-presentation-spec-2026-11-09.md`, `docs/roadmap.md`.
 - Real evidence: `C:\!bin\workspace-data\reliquary-oc09-live-2026-11-08\fresh-process-reopen.json`; `postprocess-resume-2.stdout.log`.
+
+## Related docs
+
+- [Verification and current acceptance evidence](verification.md#warlock-knowledge-verification)
+- [Prepared graph transport](ui-contract.md#prepared-graph-reads)
+- [Local installation and Desktop SDK capability](local-service.md)
+
+## Notes
+
+The Web and Desktop entries share the frozen Warlock renderer. The Hermes relation editor maps writes to user associations. Other relation kinds retain read access under the existing grants. The Desktop byte bridge is pinned separately to the audited Desktop host revision. The upstream Warlock Cargo edits are outside the source inventory.

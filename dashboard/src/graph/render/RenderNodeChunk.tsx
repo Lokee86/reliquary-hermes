@@ -5,6 +5,7 @@ import { nodeRgb } from "./renderColors";
 
 interface Props {
   chunk: GraphRenderNodeChunk;
+  markerScale: number;
   selectedRenderId: number | null;
   register: (chunkId: number, points: THREE.Points | null) => void;
 }
@@ -13,6 +14,7 @@ let pointSprite: THREE.CanvasTexture | null = null;
 
 export function RenderNodeChunk({
   chunk,
+  markerScale,
   selectedRenderId,
   register,
 }: Props) {
@@ -44,7 +46,7 @@ export function RenderNodeChunk({
       </bufferGeometry>
       <pointsMaterial
         vertexColors
-        size={4}
+        size={4 * markerScale}
         sizeAttenuation
         map={getPointSprite()}
         alphaTest={0.35}
