@@ -14,6 +14,7 @@
 - [HU05 two-track release/routing specification](hu05-release-fallback-and-hermes-attribution-spec-2026-11-09.md) separates stock-Hermes General REL release from a minimal upstream Hermes session-project metadata PR.
 - [HU08 new-session ingestion and manual history import specification](hu08-session-ingestion-policy-and-manual-import-spec-2026-11-09.md) defines default historical-session exclusion and a selective Sources import workflow.
 - [HU09 native file-dialog onboarding specification](hu09-native-file-dialogs-onboarding-spec-2026-11-09.md) defines the plugin-local Tk Open File and Save As dialogs on Windows and the explicit manual-path fallback.
+- [Warlock-parity Hermes UI hard-cut rebuild](warlock-ui-hard-cut-rebuild-spec-2026-11-10.md): canonical Warlock component inventory, Rust graph renderer reuse, authenticated transport seams, deletion scope, implementation phases and acceptance gates. Supersedes the existing dashboard as the UI implementation target; the old contracts remain reference evidence until cutover.
 - [Verification and later gates](verification.md): exact commands, evidence, ownership impact and unimplemented capabilities.
 - [Roadmap](roadmap.md): deferred service-lifecycle work that remains intentionally outside the current acceptance scope.
 - [Documentation policy and procedure](documentation-policy.md): service profile, canonical owners and required checks.

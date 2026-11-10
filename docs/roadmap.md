@@ -40,13 +40,17 @@ Do not add this policy opportunistically during HP04. It belongs to a later serv
 
 **Full correction:** The authoritative roadmap is `C:\!bin\workspace\Reliquary\docs\rel-homogeneity-and-dependency-roadmap-2026-11-10.md`. Inventory and remove behavioral scope predicates from core and host adapters, preserve legacy owner file compatibility, and verify/restore explicit multi-parent inter-REL dependency DAG semantics. No core change or on-disk rewrite is authorized as part of the Hermes test workaround.
 
+## Active UI rebuild specification
+
+The current dashboard is scheduled for a **hard-cut replacement**, not incremental remediation. See [Warlock-parity Hermes UI hard-cut rebuild](warlock-ui-hard-cut-rebuild-spec-2026-11-10.md). Warlock's existing Knowledge experience and scalable graph renderer are the reference implementation; existing Hermes backend provider/setup/sources contracts are preserved. The outdated SVG and hand-concatenated frontend will be deleted at cutover. Authenticated binary transport is an explicit integration gate.
+
 ## Purpose
 
-Record deferred integration lifecycle and REL-homogeneity work outside the current acceptance scope.
+Record active UI architecture correction and deferred service lifecycle/REL-homogeneity work.
 
 ## Overview
 
-Current deferred items are configurable queued-work keepalive and the core REL-scope/homogeneous-dependency correction. Neither is part of the immediate Hermes compatibility patch.
+The Warlock-parity UI hard-cut has its own implementation specification. Separate deferred items are configurable queued-work keepalive and the core REL-scope/homogeneous-dependency correction.
 
 ## Related docs
 
