@@ -43,7 +43,11 @@ export function GraphRenderScene({ client: clientValue, selectedMemoryId, onSele
   const [focusRequest, setFocusRequest] = useState<{ position: GraphRenderVec3; sequence: number } | null>(null);
   const [hoverRenderId, setHoverRenderId] = useState<number | null>(null);
   const [hoverDetail, setHoverDetail] = useState<GraphRenderNodeInspection | null>(null);
-  const [neighborhood, setNeighborhood] = useState<GraphRenderNeighborhood | null>(null);
+  const [neighborhood, setNeighborhood] = useState<{
+    generationId: string;
+    renderId: number;
+    value: GraphRenderNeighborhood;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [resetVersion, setResetVersion] = useState(0);
   const requestVersion = useRef(0);
@@ -172,7 +176,9 @@ export function GraphRenderScene({ client: clientValue, selectedMemoryId, onSele
     if (selectedRenderId === null) return;
     const controller = new AbortController();
     void client.neighborhood(selectedRenderId, controller.signal).then((result) => {
-      if (!controller.signal.aborted && client.selectedRenderId === selectedRenderId) setNeighborhood(result);
+      if (!controller.signal.aborted && client.selectedRenderId === selectedRenderId) {
+        setNeighborhood({ generationId: client.manifest.generationId, renderId: selectedRenderId, value: result });
+      }
     }).catch((reason: unknown) => {
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason));
     });
@@ -180,13 +186,21 @@ export function GraphRenderScene({ client: clientValue, selectedMemoryId, onSele
   }, [client, selectedRenderId]);
 
   const center = useMemo(() => boundsCenter(client.manifest.globalBounds), [client]);
-  const extent = boundsExtent(client.manifest.globalBounds);
-  const selectedRelationshipCount = neighborhood?.totalCount ?? 0;
-  const omittedRelationships = neighborhood
-    ? Math.max(0, neighborhood.totalCount - neighborhood.edges.length)
+  const graphExtent = boundsExtent(client.manifest.globalBounds);
+  const extent = useMemo(
+    () => framingExtent(client, center, graphExtent),
+    [client, center, graphExtent],
+  );
+  const activeNeighborhood = neighborhood?.generationId === client.manifest.generationId
+    && neighborhood.renderId === selectedRenderId
+    ? neighborhood.value
+    : null;
+  const highlightedRelationshipCount = activeNeighborhood?.edges.length ?? 0;
+  const omittedRelationships = activeNeighborhood
+    ? Math.max(0, activeNeighborhood.totalCount - activeNeighborhood.edges.length)
     : 0;
-  const relationKinds = neighborhood
-    ? Array.from(new Set(neighborhood.edges.map((edge) => edge.style.relationKind))).filter(Boolean)
+  const relationKinds = activeNeighborhood
+    ? Array.from(new Set(activeNeighborhood.edges.map((edge) => edge.style.relationKind))).filter(Boolean)
     : [];
 
   return (
@@ -211,13 +225,13 @@ export function GraphRenderScene({ client: clientValue, selectedMemoryId, onSele
         <Scene
           center={center}
           extent={extent}
-          markerScale={Math.min(1, extent / 40)}
+          markerScale={Math.min(1, graphExtent / 40)}
           client={client}
           frame={frame}
           useSpheres={client.manifest.totalNodeCount <= 256}
           selectedRenderId={selectedRenderId}
           hoveredRenderId={hoverRenderId}
-          neighborhood={neighborhood}
+          neighborhood={activeNeighborhood}
           focusRequest={focusRequest}
           resetVersion={resetVersion}
           onPick={pick}
@@ -240,12 +254,12 @@ export function GraphRenderScene({ client: clientValue, selectedMemoryId, onSele
           <span>{shortIdentifier(hoverDetail.memoryId)}</span>
         </div>
       )}
-      {selectedRenderId !== null && neighborhood && (
+      {selectedRenderId !== null && activeNeighborhood && (
         <div className="graph-render-relationships" role="status" aria-live="polite">
-          {selectedRelationshipCount.toLocaleString()} {selectedRelationshipCount === 1 ? "relationship" : "relationships"} highlighted
+          {highlightedRelationshipCount.toLocaleString()} {highlightedRelationshipCount === 1 ? "relationship" : "relationships"} highlighted
           {relationKinds.length > 0 && <span>Types: {relationKinds.slice(0, 4).join(", ")}{relationKinds.length > 4 ? ` +${relationKinds.length - 4}` : ""}</span>}
           {omittedRelationships > 0 && <span>{omittedRelationships.toLocaleString()} more relationships</span>}
-          {neighborhood.truncated && omittedRelationships === 0 && <span>Additional relationships are not available in this selection window.</span>}
+          {activeNeighborhood.truncated && omittedRelationships === 0 && <span>Additional relationships are not available in this selection window.</span>}
         </div>
       )}
       {error && <div className="knowledge-graph-status error" role="alert">{error}</div>}
@@ -367,4 +381,29 @@ function Scene({
 function shortIdentifier(memoryId: string) {
   const compact = memoryId.replace(/[^a-zA-Z0-9]/g, "");
   return compact.length > 12 ? `…${compact.slice(-8)}` : memoryId;
+}
+
+function framingExtent(client: GraphRenderClient, graphCenter: GraphRenderVec3, baseExtent: number) {
+  let extent = baseExtent;
+  for (const node of client.manifest.hierarchy) {
+    const territory = node.territory;
+    if (node.kind !== "territory" || !territory) continue;
+    const radius = Math.max(0.1, territory.radius);
+    const labelHeight = Math.max(1.5, Math.min(24, radius * 0.16));
+    const labelHalfWidth = labelHeight * (460 / 112) * 0.5;
+    const labelRadius = Math.hypot(
+      labelHalfWidth,
+      labelHeight * 0.5,
+      radius * 0.82 + labelHeight,
+      radius * 0.62,
+    );
+    const territoryRadius = Math.max(radius, labelRadius);
+    const centerDistance = Math.hypot(
+      territory.center[0] - graphCenter[0],
+      territory.center[1] - graphCenter[1],
+      territory.center[2] - graphCenter[2],
+    );
+    extent = Math.max(extent, centerDistance + territoryRadius);
+  }
+  return extent;
 }

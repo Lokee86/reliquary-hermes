@@ -38,7 +38,7 @@ function Territory({ descriptor, showLabel }: {
   );
   useEffect(() => () => texture?.dispose(), [texture]);
   const radius = Math.max(0.1, territory.radius);
-  const labelHeight = Math.max(8, Math.min(24, radius * 0.16));
+  const labelHeight = Math.max(1.5, Math.min(24, radius * 0.16));
 
   return (
     <group position={territory.center} raycast={() => null}>

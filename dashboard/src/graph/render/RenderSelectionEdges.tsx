@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import * as THREE from "three";
 import type { GraphRenderIncidentEdge, GraphRenderNeighborhood } from "./types";
 
@@ -25,6 +25,7 @@ export function RenderSelectionEdges({ neighborhood }: { neighborhood: GraphRend
     value.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     return value;
   }, [neighborhood]);
+  useEffect(() => () => geometry?.dispose(), [geometry]);
 
   if (!geometry) return null;
   return (

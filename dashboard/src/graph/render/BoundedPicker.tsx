@@ -34,7 +34,7 @@ export function BoundedPicker({
     () => new Map(chunks.map((chunk) => [chunk.chunkId, chunk])),
     [chunks],
   );
-  const pointerDown = useRef<{ x: number; y: number; button: number } | null>(null);
+  const pointerDown = useRef<{ x: number; y: number; button: number; moved: boolean } | null>(null);
   const hovered = useRef<number | null>(null);
   const pendingMove = useRef<PointerEvent | null>(null);
   const frameRequest = useRef<number | null>(null);
@@ -97,6 +97,8 @@ export function BoundedPicker({
     };
 
     const move = (event: PointerEvent) => {
+      const start = pointerDown.current;
+      if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 3) start.moved = true;
       pendingMove.current = event;
       if (frameRequest.current !== null) return;
       frameRequest.current = requestAnimationFrame(() => {
@@ -116,13 +118,13 @@ export function BoundedPicker({
     };
 
     const down = (event: PointerEvent) => {
-      pointerDown.current = { x: event.clientX, y: event.clientY, button: event.button };
+      pointerDown.current = { x: event.clientX, y: event.clientY, button: event.button, moved: false };
     };
 
     const up = (event: PointerEvent) => {
       const start = pointerDown.current;
       pointerDown.current = null;
-      if (!start || start.button !== 0 || event.button !== 0) return;
+      if (!start || start.button !== 0 || event.button !== 0 || start.moved) return;
       if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 3) return;
       const hit = pickAt(event);
       if (hit) onPick(hit.renderId, hit.position);
@@ -151,7 +153,12 @@ export function BoundedPicker({
       canvas.removeEventListener("pointerdown", down);
       canvas.removeEventListener("pointerup", up);
       canvas.removeEventListener("keydown", keydown);
-      if (frameRequest.current !== null) cancelAnimationFrame(frameRequest.current);
+      if (frameRequest.current !== null) {
+        cancelAnimationFrame(frameRequest.current);
+        frameRequest.current = null;
+      }
+      pendingMove.current = null;
+      pointerDown.current = null;
       if (hovered.current !== null) {
         hovered.current = null;
         onHover(null);
