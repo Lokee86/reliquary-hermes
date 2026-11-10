@@ -109,13 +109,12 @@ impl SourceService {
         runtimes: &mut RuntimeRegistry,
     ) -> Result<serde_json::Value, HttpError> {
         let state = self.store.read(&self.store.path(session))?;
-        let source_owner = state
-            .owner_id
-            .as_deref()
-            .and_then(|value| value.parse::<OwnerId>().ok());
         let head = state.pending.as_ref().or(state.accepted.as_ref());
         let owner_id = if head.is_some() {
-            source_owner.or_else(|| registry.source_owner(session, true).ok())
+            match state.owner_id.as_deref() {
+                Some(value) => Some(value.parse::<OwnerId>().map_err(|_| UNAVAILABLE)?),
+                None => registry.source_owner(session, true).ok(),
+            }
         } else {
             None
         };
@@ -147,17 +146,23 @@ impl SourceService {
         let status = instance
             .native_import_status(owner, &head.import_id)
             .map_err(|_| UNAVAILABLE)?;
+        let Some(status) = status else {
+            return Ok(
+                json!({"session_id": session, "state": "unavailable", "receipt": null,
+                             "import_id": head.import_id, "owner_id": owner.to_string(),
+                             "snapshot_digest": head.wire_digest}),
+            );
+        };
         let label = match status {
-            None => "staged",
-            Some(status) if status.state == NativeImportState::Completed => "complete",
-            Some(status) if status.state == NativeImportState::Staging => "processing",
-            Some(_status)
+            status if status.state == NativeImportState::Completed => "complete",
+            status if status.state == NativeImportState::Staging => "processing",
+            _status
                 if self.active_imports.get(&owner) == Some(&head.import_id)
                     && self.jobs.get(&owner).is_some_and(|job| !job.is_finished()) =>
             {
                 "processing"
             }
-            Some(status) => {
+            status => {
                 let progress = instance
                     .processing_status(owner, Some(&head.import_id))
                     .map_err(|_| UNAVAILABLE)?;
