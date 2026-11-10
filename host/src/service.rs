@@ -753,6 +753,9 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
         if let Ok(mut runtimes) = service.runtimes.lock() {
             let _ = runtimes.expire();
         }
+        if let Ok(mut graph_render) = service.graph_render.try_lock() {
+            graph_render.expire();
+        }
         if service.closing.load(Ordering::Acquire) {
             if service.inflight.load(Ordering::Acquire) == 0
                 && service

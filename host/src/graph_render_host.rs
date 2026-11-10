@@ -77,6 +77,7 @@ impl GraphRenderHost {
                 None,
             )
             .map_err(registry_error)?;
+        drop(registry);
 
         match operation {
             "prepare" => self.prepare(instance, owner, kind, request),
@@ -103,17 +104,55 @@ impl GraphRenderHost {
         kind: OwnerKind,
         request: RenderRequest,
     ) -> Result<HttpResponse, HttpError> {
-        let (source, cut) = source_for_owner(instance, owner, kind)?;
+        let cut = current_cut(instance, owner, kind)?;
         let (root_generation, root_cut) = cut_binding(&cut);
         if request.generation != root_generation || request.cut != root_cut {
-            self.evict();
+            self.evict_if_authority_cut_advanced(&request.owner_id, &root_generation, &root_cut);
+            return Err(HttpError::new(409, "owner_cut_changed", false));
+        }
+
+        if let Some(authority) = self.authority.as_ref() {
+            if authority.prepared_at.elapsed() > GENERATION_TTL {
+                self.evict();
+            } else if authority.owner_id == request.owner_id
+                && authority.root_generation == root_generation
+                && authority.root_cut == root_cut
+            {
+                let manifest = self
+                    .renderer
+                    .manifest(authority.render_generation)
+                    .map_err(|_| stale_generation())?;
+                let body = serde_json::to_value(manifest).map_err(|_| UNAVAILABLE)?;
+                return Ok(HttpResponse::graph_manifest(body));
+            }
+        }
+
+        let (source, source_cut) = match source_for_owner(instance, owner, kind, cut) {
+            Ok(source) => source,
+            Err(error) => {
+                if let Ok(latest_cut) = current_cut(instance, owner, kind) {
+                    let (latest_generation, latest_cut) = cut_binding(&latest_cut);
+                    self.evict_if_authority_cut_advanced(
+                        &request.owner_id,
+                        &latest_generation,
+                        &latest_cut,
+                    );
+                }
+                return Err(error);
+            }
+        };
+        if source_cut != cut {
+            return Err(HttpError::new(409, "owner_cut_changed", false));
+        }
+        let latest_cut = current_cut(instance, owner, kind)?;
+        if latest_cut != cut {
+            self.evict_if_authority_cut_advanced(&request.owner_id, &root_generation, &root_cut);
             return Err(HttpError::new(409, "owner_cut_changed", false));
         }
 
         // A service instance is profile scoped. Keep one prepared generation resident;
         // owner switches and changed cuts retire every earlier render identity.
-        self.renderer = GraphRenderService::default();
-        self.authority = None;
+        self.renderer.clear();
         let summary = self.renderer.prepare(source).map_err(|_| UNAVAILABLE)?;
         if self
             .renderer
@@ -151,20 +190,20 @@ impl GraphRenderHost {
         request: &RenderRequest,
     ) -> Result<(), HttpError> {
         let authority = self.authority.as_ref().ok_or_else(stale_generation)?;
-        if authority.prepared_at.elapsed() > GENERATION_TTL
-            || authority.owner_id != request.owner_id
-            || authority.root_generation != request.generation
-            || authority.root_cut != request.cut
-        {
+        if authority.prepared_at.elapsed() > GENERATION_TTL {
             self.evict();
             return Err(stale_generation());
         }
-        let (current, _) = instance
-            .semantic_graph_memory_page(owner, kind, None, None, 1)
-            .map_err(product_error)?;
+        if authority.owner_id != request.owner_id {
+            return Err(stale_generation());
+        }
+        let current = current_cut(instance, owner, kind)?;
         let (generation, cut) = cut_binding(&current);
         if authority.root_generation != generation || authority.root_cut != cut {
             self.evict();
+            return Err(stale_generation());
+        }
+        if request.generation != generation || request.cut != cut {
             return Err(stale_generation());
         }
         Ok(())
@@ -223,26 +262,66 @@ impl GraphRenderHost {
         if requested != authority.render_generation
             || authority.prepared_at.elapsed() > GENERATION_TTL
         {
-            self.evict();
             return Err(stale_generation());
         }
         Ok(requested)
     }
 
     fn evict(&mut self) {
-        self.renderer = GraphRenderService::default();
+        self.renderer.clear();
         self.authority = None;
     }
+
+    fn evict_if_authority_cut_advanced(
+        &mut self,
+        owner_id: &str,
+        current_generation: &str,
+        current_cut: &str,
+    ) {
+        let should_evict = self.authority.as_ref().is_some_and(|authority| {
+            authority.owner_id == owner_id
+                && (authority.root_generation != current_generation
+                    || authority.root_cut != current_cut)
+        });
+        if should_evict {
+            self.evict();
+        }
+    }
+
+    pub(crate) fn expire(&mut self) {
+        if self
+            .authority
+            .as_ref()
+            .is_some_and(|authority| authority.prepared_at.elapsed() > GENERATION_TTL)
+        {
+            self.evict();
+        }
+    }
+}
+
+fn current_cut(
+    instance: &Instance,
+    owner: OwnerId,
+    kind: OwnerKind,
+) -> Result<SemanticGraphCut, HttpError> {
+    let (cut, _) = instance
+        .semantic_graph_memory_page(owner, kind, None, None, 1)
+        .map_err(product_error)?;
+    Ok(cut)
 }
 
 fn source_for_owner(
     instance: &Instance,
     owner: OwnerId,
     kind: OwnerKind,
+    expected_cut: SemanticGraphCut,
 ) -> Result<(GraphRenderSource, SemanticGraphCut), HttpError> {
     let (cut, first_page) = instance
-        .semantic_graph_memory_page(owner, kind, None, None, SOURCE_PAGE_LIMIT)
+        .semantic_graph_memory_page(owner, kind, Some(expected_cut), None, SOURCE_PAGE_LIMIT)
         .map_err(product_error)?;
+    if cut != expected_cut {
+        return Err(HttpError::new(409, "owner_cut_changed", false));
+    }
     let mut memories = first_page.memories;
     let mut after = first_page.next;
     while let Some(next) = after {
@@ -446,4 +525,57 @@ fn stale_generation() -> HttpError {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn authority(owner_id: &str) -> Authority {
+        Authority {
+            owner_id: owner_id.to_owned(),
+            root_generation: "17".to_owned(),
+            root_cut: "cut-a".to_owned(),
+            render_generation: 9,
+            prepared_at: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn stale_selectors_do_not_evict_a_different_live_generation() {
+        let mut host = GraphRenderHost {
+            renderer: GraphRenderService::default(),
+            authority: Some(authority("owner-a")),
+        };
+        host.evict_if_authority_cut_advanced("owner-b", "18", "cut-b");
+        assert!(host.authority.is_some());
+
+        let request = RenderRequest {
+            owner_id: "owner-a".into(),
+            principal_id: "principal".into(),
+            generation: "17".into(),
+            cut: "cut-a".into(),
+            generation_id: Some("8".into()),
+            chunk_id: Some(0),
+            render_id: None,
+        };
+        assert!(host.check_render_generation(&request).is_err());
+        assert_eq!(host.authority.as_ref().unwrap().render_generation, 9);
+    }
+
+    #[test]
+    fn authority_cut_advance_and_ttl_expire_resident_generation() {
+        let mut host = GraphRenderHost {
+            renderer: GraphRenderService::default(),
+            authority: Some(authority("owner-a")),
+        };
+        host.evict_if_authority_cut_advanced("owner-a", "18", "cut-b");
+        assert!(host.authority.is_none());
+
+        let mut expired = authority("owner-a");
+        expired.prepared_at = Instant::now() - GENERATION_TTL - Duration::from_secs(1);
+        host.authority = Some(expired);
+        host.expire();
+        assert!(host.authority.is_none());
+    }
 }
