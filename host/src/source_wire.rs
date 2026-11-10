@@ -58,7 +58,10 @@ impl SourceRequest {
                 .all(|id| valid_id(id))
             || !is_digest(&value.idempotency_key)
             || value.lease_id.as_ref().is_some_and(|id| !valid_id(id))
-            || value.target_owner_id.as_ref().is_some_and(|id| !valid_id(id))
+            || value
+                .target_owner_id
+                .as_ref()
+                .is_some_and(|id| !valid_id(id))
             || value.operation.is_manual() != value.target_owner_id.is_some()
             || value.fence_epoch.is_some_and(|epoch| {
                 epoch == 0 || !value.operation.is_snapshot() || value.lease_id.is_none()
@@ -299,7 +302,8 @@ mod tests {
             "operation": "snapshot",
             "arguments": {"snapshot_digest": "b".repeat(64), "source_json": "{}"},
             "target_owner_id": "configured-rel"
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(SourceRequest::parse(&bytes).is_err());
     }
 

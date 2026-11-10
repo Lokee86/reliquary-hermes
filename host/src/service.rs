@@ -6,8 +6,8 @@ use crate::{
     service_http::{
         ATTACH, DASHBOARD_READ, DASHBOARD_TOPOLOGY, FORBIDDEN, HttpError, HttpRequest,
         HttpResponse, INVALID, MAX_WIRE_BYTES, RETRIEVAL_PREPARE, RETRIEVAL_TOOL, RUNTIME_ATTACH,
-        RUNTIME_DETACH, RUNTIME_HEARTBEAT, RUNTIME_SCOPE, SOURCE, SOURCE_STATUS, TransportKey, UNAVAILABLE, hex,
-        read_request, write_response,
+        RUNTIME_DETACH, RUNTIME_HEARTBEAT, RUNTIME_SCOPE, SOURCE, SOURCE_STATUS, TransportKey,
+        UNAVAILABLE, hex, read_request, write_response,
     },
     service_protocol::{
         AttachRequest, Discovery, HERMES_REVISION, Operation, PROTOCOL_VERSION, ProviderRequest,
@@ -294,17 +294,28 @@ impl Service {
     fn source_status(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
-        struct Request { profile_id: String, principal_id: String, session_id: String }
+        struct Request {
+            profile_id: String,
+            principal_id: String,
+            session_id: String,
+        }
         let request: Request = decode(bytes).map_err(|_| INVALID)?;
-        if request.profile_id != self.discovery.profile_id || request.principal_id != self.principal_id {
+        if request.profile_id != self.discovery.profile_id
+            || request.principal_id != self.principal_id
+        {
             return Err(FORBIDDEN);
         }
-        if !crate::service_protocol::valid_id(&request.session_id) { return Err(INVALID); }
+        if !crate::service_protocol::valid_id(&request.session_id) {
+            return Err(INVALID);
+        }
         let registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
         let sources = self.sources.lock().map_err(|_| UNAVAILABLE)?;
         let mut runtimes = self.runtimes.lock().map_err(|_| UNAVAILABLE)?;
         Ok(HttpResponse::ok(sources.import_status(
-            &request.session_id, &self.instance, &registry, &mut runtimes,
+            &request.session_id,
+            &self.instance,
+            &registry,
+            &mut runtimes,
         )?))
     }
 
@@ -327,7 +338,11 @@ impl Service {
             let accepted_source_owner = if prior_source_owner.is_some() {
                 prior_source_owner
             } else if sources.has_source_head(&request.session_id)? {
-                Some(registry.source_owner(&request.session_id, true).map_err(attach_error)?)
+                Some(
+                    registry
+                        .source_owner(&request.session_id, true)
+                        .map_err(attach_error)?,
+                )
             } else {
                 None
             };
@@ -337,14 +352,20 @@ impl Service {
             selected
         } else if let Some(source_owner) = prior_source_owner {
             if request.operation == SourceAction::Snapshot
-                && registry.source_owner(&request.session_id, true).map_err(attach_error)? != source_owner
+                && registry
+                    .source_owner(&request.session_id, true)
+                    .map_err(attach_error)?
+                    != source_owner
             {
                 return Err(HttpError::new(409, "source_owner_conflict", false));
             }
             source_owner
         } else {
             registry
-                .source_owner(&request.session_id, request.operation == SourceAction::Snapshot)
+                .source_owner(
+                    &request.session_id,
+                    request.operation == SourceAction::Snapshot,
+                )
                 .map_err(attach_error)?
         };
         let mut runtimes = self.runtimes.lock().map_err(|_| UNAVAILABLE)?;
@@ -654,7 +675,9 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
     );
     let runtimes = RuntimeRegistry::open(state_dir)?;
     let mut sources = SourceService::open(state_dir)?;
-    sources.resume_all(&instance).map_err(|_| "source_state_unavailable")?;
+    sources
+        .resume_all(&instance)
+        .map_err(|_| "source_state_unavailable")?;
     let service = Arc::new(Service {
         expected_host,
         discovery,

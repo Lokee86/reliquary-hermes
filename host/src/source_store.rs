@@ -67,18 +67,36 @@ impl SourceStore {
     }
 
     pub(crate) fn visit_manual_imports(&self, mut visit: impl FnMut(String, String) -> bool) {
-        let Ok(entries) = fs::read_dir(&self.0) else { return; };
+        let Ok(entries) = fs::read_dir(&self.0) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.extension().is_some_and(|extension| extension == "json") { continue; }
-            let Ok(state) = self.read(&path) else { continue; };
-            if !state.manual || state.terminal { continue; }
+            if !path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                continue;
+            }
+            let Ok(state) = self.read(&path) else {
+                continue;
+            };
+            if !state.manual || state.terminal {
+                continue;
+            }
             let (Some(session), Some(head), Some(owner)) = (
-                state.session_id.as_deref(), state.pending.as_ref().or(state.accepted.as_ref()),
+                state.session_id.as_deref(),
+                state.pending.as_ref().or(state.accepted.as_ref()),
                 state.owner_id.as_deref(),
-            ) else { continue; };
-            if self.path(session) != path { continue; }
-            if !visit(owner.to_owned(), head.import_id.clone()) { return; }
+            ) else {
+                continue;
+            };
+            if self.path(session) != path {
+                continue;
+            }
+            if !visit(owner.to_owned(), head.import_id.clone()) {
+                return;
+            }
         }
     }
 
@@ -96,7 +114,10 @@ impl SourceStore {
             return Err(UNAVAILABLE);
         }
         let state: SourceState = crate::service_protocol::decode(&raw).map_err(|_| UNAVAILABLE)?;
-        if state.session_id.as_deref().is_some_and(|session| self.path(session) != path)
+        if state
+            .session_id
+            .as_deref()
+            .is_some_and(|session| self.path(session) != path)
             || (state.stale && state.available)
             || state
                 .accepted
@@ -203,8 +224,17 @@ mod manual_resume_tests {
             store.write(&path, &state).unwrap();
         }
         let mut seen = Vec::new();
-        store.visit_manual_imports(|owner, import_id| { seen.push((owner, import_id)); seen.len() < 130 });
-        assert_eq!(seen, vec![("configured-rel".to_owned(), "import-selected-manual".to_owned())]);
+        store.visit_manual_imports(|owner, import_id| {
+            seen.push((owner, import_id));
+            seen.len() < 130
+        });
+        assert_eq!(
+            seen,
+            vec![(
+                "configured-rel".to_owned(),
+                "import-selected-manual".to_owned()
+            )]
+        );
     }
 }
 

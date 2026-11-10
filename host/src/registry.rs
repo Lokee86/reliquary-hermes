@@ -286,7 +286,13 @@ impl Registry {
         let owner = owner_id
             .parse::<OwnerId>()
             .map_err(|_| RegistryError::Invalid("invalid_owner"))?;
-        if owner == self.topology.main_rel || self.topology.projects.values().any(|project| project.rel_id == owner) {
+        if owner == self.topology.main_rel
+            || self
+                .topology
+                .projects
+                .values()
+                .any(|project| project.rel_id == owner)
+        {
             Ok(owner)
         } else {
             Err(RegistryError::Denied("unconfigured_source_owner"))

@@ -389,7 +389,23 @@ fn malformed_and_missing_durable_state_fail_closed() {
 fn manual_source_destination_is_limited_to_configured_rels() {
     let fixture = Fixture::new();
     let registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
-    assert_eq!(registry.configured_source_owner(&fixture.main_id.to_string()).unwrap(), fixture.main_id);
-    assert_eq!(registry.configured_source_owner(&fixture.project_id.to_string()).unwrap(), fixture.project_id);
-    assert_eq!(registry.configured_source_owner(&fixture.phy_id.to_string()).unwrap_err().code(), "unconfigured_source_owner");
+    assert_eq!(
+        registry
+            .configured_source_owner(&fixture.main_id.to_string())
+            .unwrap(),
+        fixture.main_id
+    );
+    assert_eq!(
+        registry
+            .configured_source_owner(&fixture.project_id.to_string())
+            .unwrap(),
+        fixture.project_id
+    );
+    assert_eq!(
+        registry
+            .configured_source_owner(&fixture.phy_id.to_string())
+            .unwrap_err()
+            .code(),
+        "unconfigured_source_owner"
+    );
 }
