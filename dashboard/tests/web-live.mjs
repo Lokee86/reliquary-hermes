@@ -83,6 +83,9 @@ async function exerciseGraphSelection(page, fixture, manifestValues, nodeChunks,
   const app = page.locator(".rly-app");
   const sections = app.getByRole("navigation", { name: "Reliquary sections" });
   await sections.getByRole("button", { name: "Knowledge", exact: true }).click();
+  const rail = app.getByRole("complementary", { name: "Owner scope" });
+  await rail.getByRole("button", { name: /^REL\b/ }).click();
+  await rail.getByText(fixture.ownerIds.main, { exact: true }).waitFor({ timeout: 30000 });
   await app.getByRole("button", { name: "Graph", exact: true }).click();
   const graph = app.locator(".knowledge-graph-wrap");
   await graph.locator('[data-graph-ready="true"]').waitFor({ timeout: 40000 });
