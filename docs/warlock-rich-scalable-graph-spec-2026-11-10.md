@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-10
 
-**Status:** Implementation and acceptance evidence are tracked in the verification guide.
+**Status:** Implemented and verified locally in Hermes Web and Desktop. The verification guide records the acceptance and benchmark evidence.
 
 **Owner:** Reliquary Hermes plugin's existing graph rendering subsystem, with reusable design/contract anchored in Warlock.
 

@@ -406,23 +406,36 @@ Run the existing Rust, Python and dashboard suites from the integration checkout
 
 The paired renderer benchmark uses the baseline at `8136458` and the candidate under the same release profile and graph generator. For the 100k-node/1M-edge and 1M-node/10M-edge tiers, the release gate allows up to 2.5 times the baseline preparation time and twice its peak working set. The million-node preparation must also fit the 30-second host response window before host and transport overhead. Report a dense moderate tier separately. Hosted timings must record browser heap, frame timing and p95 hover and selected-neighborhood response time. Record the sample count and build for every reported timing.
 
-The isolated release benchmark compiled the production renderer modules for each revision. It alternated two baseline and two candidate runs per tier on the same Windows host. The timer covers generation preparation, and peak working set includes creation of the synthetic source. Root mounting, network transfer and GPU work are outside these measurements.
+The isolated release benchmark compiled the production renderer modules for each revision. The table records the final paired sample for each tier on the same Windows host. The timer covers generation preparation, and peak working set includes creation of the synthetic source. Root mounting, network transfer and GPU work are outside these measurements.
 
 | Nodes / input edges | Baseline prepare | Candidate prepare | Baseline peak working set | Candidate peak working set |
 | --- | ---: | ---: | ---: | ---: |
-| 25k / 2.5M | 0.81–0.85 s | 1.31–1.35 s | 258 MB | 377–378 MB |
-| 100k / 1M | 0.46–0.50 s | 0.87–0.96 s | 149–150 MB | 195 MB |
-| 1M / 10M | 4.99–5.36 s | 8.29–8.79 s | 1,447 MB | 1,911 MB |
+| 25k / 2.5M | 0.75 s | 1.07 s | 258 MB | 377 MB |
+| 100k / 1M | 0.74 s | 0.58 s | 149 MB | 195 MB |
+| 1M / 10M | 6.99 s | 6.78 s | 1,447 MB | 1,911 MB |
 
-All three tiers retained the baseline packed chunk size. The 1M tier used 32,129,472 packed bytes and a 26,598-byte manifest. The two release-gated tiers met both ceilings. The standalone release harness passed 15 layout and hierarchy tests, including weight-sensitive distance across territories, exact deterministic positions, and minimum node clearance across local population boundaries.
+All three tiers retained the baseline packed chunk size. The 1M tier used 32,129,472 packed bytes and a 26,562-byte manifest. The two release-gated tiers met both ceilings. The standalone release harness passed 15 layout and hierarchy tests, including weight-sensitive distance across territories, exact deterministic positions, and minimum node clearance across local population boundaries.
+
+The matched browser comparison served those same binary chunks over loopback to each revision's production React renderer in Chrome with SwiftShader at 1280×900. Overview used the manifest center. Detail centered on the nearest leaf, kept the manifest's extent for LOD thresholds, and zoomed through the normal controls. The harness sampled six seconds at overview and eight seconds at detail.
+
+| Nodes / input edges | Renderer | Overview p95 / frames | Detail p95 / frames | Used JS heap overview / detail | Detail node bytes fetched |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 100k / 1M | Baseline | 173.6 ms / 42 | 253.5 ms / 33 | 9.0 / 15.6 MB | 786,464 |
+| 100k / 1M | Rich | 187.6 ms / 37 | 263.9 ms / 34 | 8.7 / 9.8 MB | 40,736 |
+| 1M / 10M | Baseline | 284.7 ms / 38 | 270.8 ms / 32 | 9.1 / 16.0 MB | 786,464 |
+| 1M / 10M | Rich | 173.7 ms / 39 | 319.5 ms / 29 | 9.1 / 10.5 MB | 786,464 |
+
+The candidate selected a smaller leaf in the 100k sample. At 1M both renderers fetched one full node chunk and the same edge bytes at detail. The rich renderer used less JS heap and had a longer p95 detail frame interval in this software-rendered sample. All four browser runs reached both LODs without page errors. The hosted corpus run below measures the new inspect and neighborhood routes, which were absent from the frozen baseline.
 
 The locked offline host suite passed 95 tests. All four Root inspection tests passed. The graph projection case verified the same result as List for combined query, category, type and lifecycle filters, induced links, early visitor stop, and stale-cut denial. The pinned Python API, setup and source lifecycle run passed 19 tests. The installed-source run passed six capture, history and manual processing tests. The shared dashboard passed typecheck and four TypeScript tests and produced both bundles.
 
-The signed loopback smoke used independent copies of the November 8 owners. It verified 11 active and 13 total REL Memories, v3 descriptors, binary framing, title inspection, incident counts, locate, filter exclusion, and stale and cross-owner denial. Both owner hashes matched before and after browsing. For 20 sequential reads each on the debug host, signed loopback p95 was 100.76 ms for inspection and 102.70 ms for the neighborhood. These samples cover the signed host round trip.
+The signed loopback smoke used independent copies of the November 8 owners. It verified 11 active and 13 total REL Memories, v3 descriptors, binary framing, title inspection, incident counts, locate, filter exclusion, and stale and cross-owner denial. For 20 sequential reads each on the final debug host, signed loopback p95 was 100.77 ms for inspection and 100.81 ms for the neighborhood. These samples cover the signed host round trip.
 
-Hosted Hermes Web passed the copied-corpus smoke in Chrome with SwiftShader. It covered both owner canvases, authenticated binary responses, owner and generation denial, graph click through to full detail, Graph and List selection continuity, search, provenance, history and Sources. The lifecycle control moved the REL graph from 11 to 13 and back to 11 Memories. The browser observation sampled five visible hover tooltips and five selected neighborhoods and confirmed the selection stayed active after right-drag. Browser request p95 was 219.7 ms for inspect and 251.8 ms for neighborhood. Used JS heap was 21.3 MB and p95 frame interval was 70.2 ms over 28 animation frames. These small samples characterize the isolated Chrome software renderer and debug host.
+Hosted Hermes Web passed the copied-corpus smoke in Chrome with SwiftShader. It covered both owner canvases, authenticated binary responses, owner and generation denial, graph click through to full detail, Graph and List selection continuity, search, provenance, history and Sources. The lifecycle control moved the REL graph from 11 to 13 and back to 11 Memories. The final interaction run verified five visible hover tooltips and five selected neighborhoods, single-selection double-click, keyboard selection and a settled right-drag with selection retained. During a concurrent Desktop smoke, the final Web run measured request p95 of 592.7 ms for inspect and 570.7 ms for neighborhood, 18.2 MB of used JS heap, and p95 frame interval of 105 ms over 23 animation frames.
 
 Hosted Hermes Desktop passed the copied-corpus Electron smoke with both owner canvases, full Memory inspection, Sources, and Graph and List selection continuity. A second isolated REL had six Memories in two accepted communities and one cross-community relation. The Desktop smoke filtered to the selected community's three-node canvas, selected a Memory, and retained the selection through List and Graph. The profile exposed community browsing under its read-only grant.
+
+The original November 8 REL and PHY and both final hosted copies matched the initial SHA-256 hashes after verification.
 
 ## Related docs
 
