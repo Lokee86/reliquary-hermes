@@ -24,6 +24,7 @@
     "src/live_transport.js",
     "src/live.js",
     "src/web_components.js",
+    "src/sources.js",
     "src/surface.js",
     "src/onboarding.js",
     "src/setup_client.js",

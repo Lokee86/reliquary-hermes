@@ -7,64 +7,114 @@
   const endpoint = "/api/plugins/reliquary-hermes/sources-v1";
   const statuses = new Set(["available", "queued", "staged", "processing", "complete", "failed", "already_imported", "unavailable"]);
   const activeStatuses = new Set(["queued", "staged", "processing"]);
+  /** @typedef {"available" | "queued" | "staged" | "processing" | "complete" | "failed" | "already_imported" | "unavailable"} ImportStatus */
+  /** @typedef {{session_id:string,title:string,started_at:number,last_activity_at:number,message_count:number,project_name:string|null,status:ImportStatus,reason:string|null,retryable:boolean}} HistorySession */
+  /** @typedef {{owner_id:string,label:string}} Destination */
+  /** @typedef {{available:boolean,destinations:Destination[],sessions:HistorySession[],next_offset:number|null}} SessionPage */
+  /** @typedef {{session_id:string,status:ImportStatus,reason:string|null,retryable:boolean}} ImportStatusRow */
+  /** @typedef {import("../types").HermesDashboardSDK["authedFetch"]} AuthedFetch */
   const statusLabels = { available: "Available", queued: "Queued", staged: "Staged", processing: "Processing",
     complete: "Complete", failed: "Failed", already_imported: "Already imported", unavailable: "Unavailable" };
+  /** @type {Record<string,string>} */
+  const reasonLabels = {
+    history_too_large: "This conversation exceeds the supported history size and cannot be imported completely.",
+    history_unsupported: "This conversation’s history format is not supported for import.",
+    history_identity_unavailable: "Hermes could not verify the original message identities needed for import.",
+    history_session_unavailable: "This conversation is no longer available for import.",
+    manual_import_conflict: "This conversation conflicts with an existing imported source and needs review.",
+    source_owner_conflict: "This conversation is already associated with a different REL.",
+  };
 
+  /** @param {string} reason */
+  function reasonText(reason) { return reasonLabels[reason] ?? "Import details are unavailable."; }
+
+  /** @param {unknown} value @returns {HistorySession|null} */
   function safeSession(value) {
-    if (!value || typeof value !== "object" || typeof value.session_id !== "string" || !value.session_id ||
-      typeof value.title !== "string" || !Number.isFinite(value.started_at) || !Number.isFinite(value.last_activity_at) ||
-      !Number.isInteger(value.message_count) || value.message_count < 0 ||
-      !(value.project_name === null || typeof value.project_name === "string") || typeof value.status !== "string" ||
-      !statuses.has(value.status) || !(value.reason === null || typeof value.reason === "string") || typeof value.retryable !== "boolean") return null;
-    return value;
+    if (!value || typeof value !== "object") return null;
+    const row = /** @type {Record<string, unknown>} */ (value);
+    if (typeof row.session_id !== "string" || !row.session_id || typeof row.title !== "string" ||
+      !Number.isFinite(row.started_at) || !Number.isFinite(row.last_activity_at) || !Number.isInteger(row.message_count) ||
+      (/** @type {number} */ (row.message_count)) < 0 || !(row.project_name === null || typeof row.project_name === "string") ||
+      typeof row.status !== "string" || !statuses.has(row.status) ||
+      !(row.reason === null || typeof row.reason === "string") || typeof row.retryable !== "boolean") return null;
+    return /** @type {HistorySession} */ (row);
   }
 
+  /** @param {unknown} value @returns {Destination|null} */
+  function safeDestination(value) {
+    if (!value || typeof value !== "object") return null;
+    const row = /** @type {Record<string, unknown>} */ (value);
+    return typeof row.owner_id === "string" && row.owner_id && typeof row.label === "string"
+      ? /** @type {Destination} */ (row) : null;
+  }
+
+  /** @param {unknown} value @param {string[]} expectedIds @returns {ImportStatusRow[]|null} */
   function safeStatuses(value, expectedIds) {
-    if (!value || !Array.isArray(value.sessions)) return null;
+    if (!value || typeof value !== "object") return null;
+    const statusRows = /** @type {Record<string, unknown>} */ (value).sessions;
+    if (!Array.isArray(statusRows)) return null;
     const seen = new Set();
+    /** @type {ImportStatusRow[]} */
     const rows = [];
-    for (const item of value.sessions) {
-      if (!item || typeof item.session_id !== "string" || !expectedIds.includes(item.session_id) || seen.has(item.session_id) ||
-        !statuses.has(item.status) || typeof item.retryable !== "boolean" || !(item.reason === null || typeof item.reason === "string")) return null;
-      seen.add(item.session_id); rows.push(item);
+    for (const item of statusRows) {
+      if (!item || typeof item !== "object") return null;
+      const row = /** @type {Record<string, unknown>} */ (item);
+      if (typeof row.session_id !== "string" || !expectedIds.includes(row.session_id) || seen.has(row.session_id) ||
+        typeof row.status !== "string" || !statuses.has(row.status) || typeof row.retryable !== "boolean" ||
+        !(row.reason === null || typeof row.reason === "string")) return null;
+      seen.add(row.session_id); rows.push(/** @type {ImportStatusRow} */ (row));
     }
     return seen.size === expectedIds.length ? rows : null;
   }
 
-  async function request(authedFetch, path, method, body) {
-    const response = await authedFetch(endpoint + path, { method,
-      headers: { "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
-    if (!response.ok) throw new Error("request_failed");
-    return response.json();
+  /** @param {AuthedFetch} authedFetch @param {string} path @param {"GET"|"POST"} method @param {Record<string, unknown>} [body] @returns {Promise<unknown>} */
+  function request(authedFetch, path, method, body) {
+    return authedFetch(endpoint + path, { method,
+      headers: { "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) }).then((response) => {
+      if (!response.ok) throw new Error("request_failed");
+      return response.json();
+    });
   }
 
+  /** @param {{authedFetch:AuthedFetch,mutationBlocked?:string}} props */
   function ImportSessions({ authedFetch, mutationBlocked }) {
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState("");
     const [submittedQuery, setSubmittedQuery] = useState("");
     const [offset, setOffset] = useState(0);
-    const [page, setPage] = useState(null);
+    const [page, setPage] = useState(/** @type {SessionPage|null} */ (null));
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
-    const [selected, setSelected] = useState([]);
+    const [selected, setSelected] = useState(/** @type {string[]} */ ([]));
     const [ownerId, setOwnerId] = useState("");
     const [review, setReview] = useState(false);
     const [busy, setBusy] = useState(false);
-    const [statusById, setStatusById] = useState({});
+    const [statusById, setStatusById] = useState(/** @type {Record<string,ImportStatusRow>} */ ({}));
     const [polling, setPolling] = useState(0);
 
     async function loadPage(nextOffset = offset, q = submittedQuery) {
       setLoading(true); setError("");
       try {
         const value = await request(authedFetch, "/sessions?offset=" + nextOffset + "&q=" + encodeURIComponent(q), "GET");
-        if (!value || typeof value.available !== "boolean" || !Array.isArray(value.destinations) || !Array.isArray(value.sessions) ||
-          !(value.next_offset === null || (Number.isInteger(value.next_offset) && value.next_offset >= 0))) throw new Error("invalid_response");
-        const destinations = value.destinations.filter((item) => item && typeof item.owner_id === "string" && item.owner_id && typeof item.label === "string");
-        const sessions = value.sessions.map(safeSession);
-        if (destinations.length !== value.destinations.length || sessions.some((item) => !item)) throw new Error("invalid_response");
-        setPage({ ...value, destinations, sessions });
+        if (!value || typeof value !== "object") throw new Error("invalid_response");
+        const candidate = /** @type {Record<string, unknown>} */ (value);
+        const destinationRows = candidate.destinations;
+        const sessionRows = candidate.sessions;
+        const next = candidate.next_offset;
+        if (typeof candidate.available !== "boolean" || !Array.isArray(destinationRows) || !Array.isArray(sessionRows) ||
+          !(next === null || (typeof next === "number" && Number.isInteger(next) && next >= 0))) throw new Error("invalid_response");
+        const destinationRowsSafe = destinationRows.map(safeDestination);
+        const sessionRowsSafe = sessionRows.map(safeSession);
+        if (destinationRowsSafe.some((item) => !item) || sessionRowsSafe.some((item) => !item)) throw new Error("invalid_response");
+        const destinations = /** @type {Destination[]} */ (destinationRowsSafe);
+        const sessions = /** @type {HistorySession[]} */ (sessionRowsSafe);
+        setPage({ available: candidate.available, destinations, sessions,
+          next_offset: /** @type {number|null} */ (next) });
+        setStatusById((old) => ({ ...old, ...Object.fromEntries(sessions.map(({ session_id, status, reason, retryable }) =>
+          [session_id, { session_id, status, reason, retryable }])) }));
+        if (sessions.some((item) => activeStatuses.has(item.status))) setPolling(1);
         setSelected([]); setReview(false);
-        if (!destinations.some((item) => item.owner_id === ownerId)) setOwnerId(destinations[0]?.owner_id ?? "");
+        if (!destinations.some((item) => item.owner_id === ownerId)) setOwnerId("");
       } catch { setPage(null); setError("Could not load session history. Retry to check availability."); }
       finally { setLoading(false); }
     }
@@ -74,7 +124,7 @@
       if (!polling) return undefined;
       const timer = setTimeout(async () => {
         try {
-          const ids = Object.entries(statusById).filter(([, item]) => item && activeStatuses.has(item.status)).map(([id]) => id);
+          const ids = Object.entries(statusById).filter(([, item]) => activeStatuses.has(item.status)).map(([id]) => id).slice(0, 8);
           if (!ids.length) { setPolling(0); return; }
           const value = await request(authedFetch, "/status", "POST", { session_ids: ids });
           const updates = safeStatuses(value, ids);
@@ -86,6 +136,7 @@
       return () => clearTimeout(timer);
     }, [polling, statusById]);
 
+    /** @param {string[]} ids */
     async function importIds(ids) {
       if (mutationBlocked || !ownerId || !ids.length || ids.length > 8) return;
       setBusy(true); setError("");
@@ -106,14 +157,17 @@
       h(Button, { type: "button", onClick: () => setOpen(true) }, "Import Existing Sessions"));
 
     const current = page?.sessions ?? [];
+    /** @param {string} id */
     const checked = (id) => selected.includes(id);
+    /** @param {string} id */
     function toggle(id) { setSelected((old) => old.includes(id) ? old.filter((item) => item !== id) : old.length < 8 ? [...old, id] : old); }
     const destination = page?.destinations.find((item) => item.owner_id === ownerId);
+    /** @param {HistorySession} item */
     function sessionRow(item) {
       const status = statusById[item.session_id] ?? { status: item.status, reason: item.reason, retryable: item.retryable };
       const retry = status.retryable && ["failed", "unavailable"].includes(status.status) && !review
-        ? h(Button, { type: "button", disabled: busy || mutationBlocked,
-            onClick: () => importIds([item.session_id]) }, "Retry import") : null;
+        ? h(Button, { type: "button", disabled: busy || mutationBlocked || !ownerId,
+            onClick: () => { setSelected([item.session_id]); setReview(true); } }, "Retry import") : null;
       return h("li", { key: item.session_id, className: "rly-import-row" },
         !review && h(Checkbox, { checked: checked(item.session_id), disabled: busy || status.status === "unavailable" ||
           status.status === "already_imported" || status.status === "complete", "aria-label": "Select " + item.title,
@@ -127,7 +181,7 @@
             h("div", null, h("dt", null, "Messages"), h("dd", null, item.message_count)),
             item.project_name && h("div", null, h("dt", null, "Hermes project"), h("dd", null, item.project_name)),
             h("div", null, h("dt", null, "Import status"), h("dd", null, statusLabels[status.status]))),
-          status.reason && h("p", { className: "rly-muted" }, status.reason), retry));
+          status.reason && h("p", { className: "rly-muted" }, reasonText(status.reason)), retry));
     }
     return h("section", { className: "rly-sources", "aria-label": "Import Existing Sessions" },
       h("div", { className: "rly-toolbar" }, h("div", null, h("h2", null, "Import Existing Sessions"),
@@ -138,20 +192,22 @@
       loading && h("p", { role: "status" }, "Loading session history…"),
       page && !page.available && h("p", { role: "status", className: "rly-live-notice" }, "Session import is unavailable on this Hermes build."),
       page?.available && h("div", null,
-        h("form", { className: "rly-session-lookup", onSubmit: (event) => {
+        h("form", { className: "rly-session-lookup", onSubmit: (/** @type {{preventDefault():void}} */ event) => {
           event.preventDefault(); setOffset(0); setSubmittedQuery(query.trim()); loadPage(0, query.trim());
         } },
-          h("label", { className: "rly-field" }, h("span", null, "Search conversations"), h(Input, { value: query, maxLength: 200,
-            onChange: (event) => setQuery(event.currentTarget.value) })),
-          h(Button, { type: "submit" }, "Search"), h(Button, { type: "button", onClick: () => loadPage() }, "Refresh")),
-        h("div", { className: "rly-field" }, h("label", { htmlFor: "rly-import-destination" }, "Import destination"),
+          h("label", { className: "rly-field" }, h("span", null, "Search conversations"), h(Input, { value: query, maxLength: 128, disabled: review || busy,
+            onChange: (/** @type {{currentTarget:HTMLInputElement}} */ event) => setQuery(event.currentTarget.value) })),
+          h(Button, { type: "submit", disabled: review || busy }, "Search"), h(Button, { type: "button", disabled: review || busy, onClick: () => loadPage() }, "Refresh")),
+        h("label", { className: "rly-field" }, h("span", null, "Import destination"),
           h(Select, { label: "Import destination", value: ownerId, disabled: review || busy,
-            options: page.destinations.map((item) => ({ value: item.owner_id, label: item.label })), onValueChange: setOwnerId })),
+            options: [{ value: "", label: "Choose an authorized REL" }, ...page.destinations.map((item) => ({ value: item.owner_id, label: item.label }))], onValueChange: setOwnerId })),
         current.length ? h("ul", { className: "rly-import-list" }, ...current.map(sessionRow))
           : h("p", { className: "rly-empty" }, "No conversations on this page."),
         h("div", { className: "rly-pager" },
           h(Button, { type: "button", disabled: offset === 0 || loading || review, onClick: () => { const next = Math.max(0, offset - 16); setOffset(next); loadPage(next); } }, "Previous page"),
-          h(Button, { type: "button", disabled: page.next_offset === null || loading || review, onClick: () => { setOffset(page.next_offset); loadPage(page.next_offset); } }, "Next page")),
+          h(Button, { type: "button", disabled: page.next_offset === null || loading || review, onClick: () => {
+            const next = page.next_offset; if (next !== null) { setOffset(next); loadPage(next); }
+          } }, "Next page")),
         review && h("div", { className: "rly-import-review", role: "group", "aria-label": "Review import" },
           h("h3", null, "Review import"), h("p", null, "Import " + selected.length + " selected conversation" + (selected.length === 1 ? "" : "s") + " into " + (destination?.label ?? "the selected REL") + "?"),
           h("ul", null, ...current.filter((item) => selected.includes(item.session_id)).map((item) => h("li", { key: item.session_id }, item.title))),

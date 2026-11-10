@@ -147,19 +147,25 @@ test("uses the SDK profile scope for status, project inventory, creation, valida
 
 test("allows only the scoped Sources history and import routes through the SDK REST bridge", async () => {
   const calls = [];
-  const { render } = await load({ rest: async (path, options) => {
-    calls.push({ path, method: options.method, body: options.body });
-    return { available: true, destinations: [], sessions: [], next_offset: null };
+  const { render, routing } = await load({ rest: async (path, options) => {
+    calls.push({ path, profile: routing.profile, method: options.method, body: options.body });
+    if (path.startsWith("/sources-v1/sessions?")) return { available: false, destinations: [], sessions: [], next_offset: null };
+    if (path === "/sources-v1/status") return { sessions: [{ session_id: "s1", status: "already_imported", reason: null, retryable: false }] };
+    return { sessions: [{ session_id: "s1", status: "queued", reason: null, retryable: false }] };
   } });
-  const { surface } = render();
+  let { surface } = render();
+  routing.profile = "work";
+  routing.epoch += 1;
+  surface = render().surface;
   const list = await surface.authedFetch(url("/sources-v1/sessions?offset=0&q=design"));
   assert.equal(list.ok, true);
+  assert.equal((await list.json()).available, false);
   await surface.authedFetch(url("/sources-v1/status"), { method: "POST", body: JSON.stringify({ session_ids: ["s1"] }) });
   await surface.authedFetch(url("/sources-v1/import"), { method: "POST", body: JSON.stringify({ session_ids: ["s1"], owner_id: "rel1", confirm: true }) });
-  assert.deepEqual(calls.map(({ path, method }) => [path, method]), [
-    ["/sources-v1/sessions?offset=0&q=design", "GET"],
-    ["/sources-v1/status", "POST"],
-    ["/sources-v1/import", "POST"],
+  assert.deepEqual(calls.map(({ path, profile, method }) => [path, profile, method]), [
+    ["/sources-v1/sessions?offset=0&q=design", "work", "GET"],
+    ["/sources-v1/status", "work", "POST"],
+    ["/sources-v1/import", "work", "POST"],
   ]);
   assert.equal(JSON.stringify(calls[2].body), JSON.stringify({ session_ids: ["s1"], owner_id: "rel1", confirm: true }));
   await assert.rejects(surface.authedFetch(url("/sources-v1/sessions?offset=-1&q=x")), /Unsupported Reliquary API request/);

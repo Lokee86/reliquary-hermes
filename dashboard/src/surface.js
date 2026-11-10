@@ -67,7 +67,7 @@
           h(Button, { type: "button", "aria-pressed": section === "dashboard", onClick: () => setSection("dashboard") }, "Dashboard"),
           h(Button, { type: "button", "aria-pressed": section === "sources", onClick: () => setSection("sources") }, "Sources")),
         section === "sources" && h(ImportSessions, { authedFetch, mutationBlocked: blockReason }),
-        section === "dashboard" && h(React.Fragment, null,
+        section === "dashboard" && h("div", { className: "rly-dashboard-content" },
         refreshing && h("p", { className: "rly-refreshing", role: "status" },
           write ? "Refreshing owner binding. Writes are paused until it completes." : "Refreshing owner binding."),
         readContent("owner and session bindings", visibleDiscovery, (data) => {

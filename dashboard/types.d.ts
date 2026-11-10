@@ -459,6 +459,9 @@ declare global {
   var ReliquaryDashboardHost: Pick<HermesDashboardSDK, "React" | "hooks"> & { components: HostComponents };
   var createReliquarySurface: CreateReliquarySurface;
   var ReliquaryDashboardSurface: CreateReliquarySurface;
+  var ReliquaryDashboardSources: {
+    ImportSessions(props: { authedFetch: HermesDashboardSDK["authedFetch"]; mutationBlocked?: string }): unknown;
+  };
   var ReliquarySetupClient: {
     createSetupClient(authedFetch: HermesDashboardSDK["authedFetch"]): SetupClient;
     candidate(main: string, phy: string, config: string, projects?: { id: string; path: string }[]): SetupCandidate;
