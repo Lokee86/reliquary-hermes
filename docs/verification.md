@@ -422,6 +422,8 @@ The signed loopback smoke used independent copies of the November 8 owners. It v
 
 Hosted Hermes Web passed the copied-corpus smoke in Chrome with SwiftShader. It covered both owner canvases, authenticated binary responses, owner and generation denial, graph click through to full detail, Graph and List selection continuity, search, provenance, history and Sources. The lifecycle control moved the REL graph from 11 to 13 and back to 11 Memories. The browser observation sampled five visible hover tooltips and five selected neighborhoods and confirmed the selection stayed active after right-drag. Browser request p95 was 219.7 ms for inspect and 251.8 ms for neighborhood. Used JS heap was 21.3 MB and p95 frame interval was 70.2 ms over 28 animation frames. These small samples characterize the isolated Chrome software renderer and debug host.
 
+Hosted Hermes Desktop passed the copied-corpus Electron smoke with both owner canvases, full Memory inspection, Sources, and Graph and List selection continuity. A second isolated REL had six Memories in two accepted communities and one cross-community relation. The Desktop smoke filtered to the selected community's three-node canvas, selected a Memory, and retained the selection through List and Graph. The profile exposed community browsing under its read-only grant.
+
 ## Related docs
 
 - [HU09 native file-dialog specification](hu09-native-file-dialogs-onboarding-spec-2026-11-09.md)

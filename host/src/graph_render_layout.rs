@@ -6,6 +6,7 @@ use crate::graph_render_layout_grid::{
     grid_sphere_extent,
 };
 use crate::graph_render_layout_model::{GraphRenderLayout, GraphRenderLayoutNode, empty_bounds};
+use crate::graph_render_style::edge_weight_from_units;
 use std::collections::BTreeMap;
 
 /// Hard limits for the local solver. Each population considers at most 128²
@@ -327,8 +328,9 @@ fn apply_attraction(
     if distance <= f32::EPSILON {
         return;
     }
-    let strength = (weight_units as f32 / (weight_units as f32 + 160.0)).clamp(0.2, 0.8);
-    let target_distance = 2.0 + 1.7 / (1.0 + weight_units as f32 / 160.0);
+    let weight = edge_weight_from_units(weight_units);
+    let strength = weight / (1.0 + weight);
+    let target_distance = 2.0 + 1.7 / (1.0 + weight);
     let amount = (distance - target_distance) * strength * 0.12;
     let unit = scale(delta, 1.0 / distance);
     add_to(&mut force[source], scale(unit, amount));
@@ -555,7 +557,8 @@ fn apply_center_attraction(
     if distance <= minimum_distance || distance <= f32::EPSILON {
         return;
     }
-    let strength = (weight_units as f32 / (weight_units as f32 + 320.0)).clamp(0.05, 0.65);
+    let weight = edge_weight_from_units(weight_units);
+    let strength = weight / (1.0 + weight);
     let amount = (distance - minimum_distance) * strength * 0.15;
     let unit = scale(delta, 1.0 / distance);
     add_to(&mut force[left], scale(unit, amount));

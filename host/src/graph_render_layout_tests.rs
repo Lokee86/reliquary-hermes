@@ -81,8 +81,8 @@ fn sibling_territories_are_packed_with_clear_sphere_separation() {
 fn weighted_edges_pull_connected_nodes_closer_with_deterministic_positions() {
     let memories = (1..=6).map(memory_id).collect::<Vec<_>>();
     let hierarchy = build_graph_render_hierarchy(&memories, vec![], 8, 2).unwrap();
-    let weak = pair_topology(memories.len(), 100);
-    let strong = pair_topology(memories.len(), 320);
+    let weak = pair_topology(memories.len(), 9_000);
+    let strong = pair_topology(memories.len(), 32_000);
 
     let weak_first =
         build_graph_render_layout_with_topology(&hierarchy, memories.len() as u32, &weak);
@@ -114,11 +114,11 @@ fn weighted_walk_keeps_cross_population_neighbors_together() {
         neighbors: vec![
             GraphRenderLayoutNeighbor {
                 render_id: 128,
-                weight_units: 300,
+                weight_units: 30_000,
             },
             GraphRenderLayoutNeighbor {
                 render_id: 0,
-                weight_units: 300,
+                weight_units: 30_000,
             },
         ],
     };
@@ -164,19 +164,19 @@ fn cross_territory_topology_places_linked_territories_adjacent() {
         neighbors: vec![
             GraphRenderLayoutNeighbor {
                 render_id: 2,
-                weight_units: 300,
+                weight_units: 32_000,
             },
             GraphRenderLayoutNeighbor {
                 render_id: 0,
-                weight_units: 300,
+                weight_units: 32_000,
             },
         ],
     };
     let strong_layout =
         build_graph_render_layout_with_topology(&hierarchy, memories.len() as u32, &topology);
     let mut weak_topology = topology.clone();
-    weak_topology.neighbors[0].weight_units = 10;
-    weak_topology.neighbors[1].weight_units = 10;
+    weak_topology.neighbors[0].weight_units = 9_000;
+    weak_topology.neighbors[1].weight_units = 9_000;
     let weak_layout =
         build_graph_render_layout_with_topology(&hierarchy, memories.len() as u32, &weak_topology);
 
