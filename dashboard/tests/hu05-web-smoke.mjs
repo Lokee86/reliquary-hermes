@@ -48,15 +48,17 @@ try {
     assert.equal(await owner.count(), 0);
     const general = page.getByRole("region", { name: "General memory", exact: true });
     const identity = page.getByRole("region", { name: "Active identity", exact: true });
-    await page.getByText("Native file dialogs unavailable for this connection", { exact: true }).waitFor();
-    assert.equal(await page.getByText("Permitted folders", { exact: true }).count(), 0);
+    const hasNativeDialogs = await general.getByRole("button", { name: "Select REL", exact: true }).isEnabled();
+    if (!hasNativeDialogs) {
+      await page.getByText("Native file dialogs unavailable for this connection", { exact: true }).waitFor();
+    }
     assert.equal(await main.count(), 0);
     assert.equal(await phy.count(), 0);
     assert.equal(await config.count(), 0);
     assert.equal(await page.getByText("Project memories", { exact: true }).count(), 0);
     for (const [region, kind] of [[general, "REL"], [identity, "PHY"]]) {
       for (const action of ["Select", "Create"]) {
-        assert.equal(await region.getByRole("button", { name: action + " " + kind, exact: true }).isDisabled(), true);
+        assert.equal(await region.getByRole("button", { name: action + " " + kind, exact: true }).isEnabled(), hasNativeDialogs);
       }
     }
     await page.getByRole("button", { name: "Enter path manually", exact: true }).click();

@@ -279,7 +279,8 @@ test("setup candidate carries only validated owner and config paths", () => {
 });
 
 test("setup client uses the admitted Hermes transport and redacts unknown failures", async () => {
-  const initial = { configured: false, runtime_detected: true, desktop_native_mutations: true, config_path: null,
+  const initial = { configured: false, runtime_detected: true, desktop_native_mutations: true,
+    local_dialogs_available: true, config_path: null,
     defaults: { main_rel: null, active_phy: null, projects: {}, config_path: null } };
   const selection = candidate("C:/test/main.rel", "C:/test/active.phy", "", []);
   const replies = [Response.json(initial), Response.json({ valid: true, configured: true }),
@@ -320,8 +321,33 @@ test("a missing or non-boolean Desktop capability preserves setup status and fai
   const status = { configured: true, runtime_detected: true, config_path: null, defaults: { projects: {} } };
   for (const value of [undefined, false, "true", 1]) {
     const setup = createSetupClient(async () => Response.json({ ...status, desktop_native_mutations: value }));
-    assert.deepEqual(await setup.status(signal), { ...status, desktop_native_mutations: false });
+    assert.deepEqual(await setup.status(signal), { ...status, desktop_native_mutations: false,
+      local_dialogs_available: false });
   }
+});
+
+test("Web dialog API sends only enum modes and validates typed outcomes", async () => {
+  const replies = [
+    { status: "selected", path: "C:/synthetic/main.rel" },
+    { status: "cancelled" }, { status: "unavailable" },
+    { status: "selected", path: "" }, { status: "selected", path: "C:/bad\0path" },
+  ];
+  const calls = [];
+  const setup = createSetupClient(async (url, init) => {
+    calls.push([url, init]);
+    return Response.json(replies.shift());
+  });
+  assert.deepEqual(await setup.dialog("open_rel", signal), { status: "selected", path: "C:/synthetic/main.rel" });
+  assert.deepEqual(await setup.dialog("open_phy", signal), { status: "cancelled" });
+  assert.deepEqual(await setup.dialog("save_phy", signal), { status: "unavailable" });
+  await assert.rejects(setup.dialog("open_config", signal), /invalid_setup_response/);
+  await assert.rejects(setup.dialog("save_rel", signal), /invalid_setup_response/);
+  assert.deepEqual(calls.slice(0, 3).map(([url, init]) => [url.split("setup-v1/")[1], init.method,
+    JSON.parse(init.body)]), [
+    ["dialog", "POST", { mode: "open_rel" }], ["dialog", "POST", { mode: "open_phy" }],
+    ["dialog", "POST", { mode: "save_phy" }],
+  ]);
+  assert.equal(calls[0][1].signal, signal);
 });
 
 function renderHostSurface(status, mutationBlockReason, owner = general, inventory) {

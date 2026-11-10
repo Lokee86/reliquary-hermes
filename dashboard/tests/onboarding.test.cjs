@@ -120,6 +120,20 @@ test("native selections are inert on cancel and Save As requires an independent 
   assert.deepEqual(harness.validations, []);
 });
 
+test("typed cancellation is inert and unavailable dialogs keep manual fallback available", async () => {
+  const harness = renderOnboarding({
+    async pickOpenPath() { return { status: "cancelled" }; },
+    async pickSavePath() { return { status: "unavailable" }; },
+  });
+  await button(harness.render(), "Select REL").props.onClick();
+  assert.ok(text(region(harness.render(), "General memory"), "C:/synthetic/main.rel"));
+  await button(harness.render(), "Create REL").props.onClick();
+  assert.equal(region(harness.render(), "Confirm owner creation"), undefined);
+  assert.ok(text(harness.render(), "Native file dialogs are unavailable for this connection. Try again or enter the path manually."));
+  assert.ok(button(harness.render(), "Enter path manually"));
+  assert.deepEqual(harness.creations, []);
+});
+
 test("unavailable native dialogs offer only explicit manual path entry", async () => {
   const harness = renderOnboarding();
   let view = harness.render();

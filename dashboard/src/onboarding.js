@@ -135,8 +135,12 @@
       if (!picker) return;
       return run(async (signal) => {
         try {
-          const path = await picker(target.kind);
-          if (path && !signal.aborted) acceptPath(target, creating, path);
+          const result = await picker(target.kind, signal);
+          if (signal.aborted || !result) return;
+          if (typeof result === "object") {
+            if (result.status === "selected") acceptPath(target, creating, result.path);
+            else if (result.status === "unavailable") setError("Native file dialogs are unavailable for this connection. Try again or enter the path manually.");
+          } else acceptPath(target, creating, result);
         } catch {
           if (!signal.aborted) setError("Could not open the native file dialog. Try again or enter the path manually.");
         }

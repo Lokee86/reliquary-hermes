@@ -106,12 +106,11 @@ def test_setup_rejects_authority_and_keeps_project_session_mappings(setup_profil
     assert json.loads(owner_file.read_bytes()) == owners
 
 
-def test_browse_caps_listing_and_rejects_directory_links(tmp_path, monkeypatch):
+def test_destination_allows_validated_paths_and_rejects_profile_or_directory_links(tmp_path, monkeypatch):
     home = tmp_path / "hermes"
     home.mkdir()
     external = tmp_path / "private"
     external.mkdir()
-    (external / "outside.rel").touch()
     alias = home / "alias"
     if os.name == "nt":
         # Windows junctions require no developer mode or symbolic-link privilege.
@@ -121,18 +120,14 @@ def test_browse_caps_listing_and_rejects_directory_links(tmp_path, monkeypatch):
         alias.symlink_to(external, target_is_directory=True)
 
     monkeypatch.setattr(setup_paths, "_default_home", lambda: home)
-    monkeypatch.setattr(setup_paths, "active_projects", lambda home: {})
-    monkeypatch.setattr(setup_paths, "_MAX_ENTRIES", 2)
-    for index in range(3):
-        (home / f"owner-{index}.rel").touch()
-    result = setup_paths.browse(home, {}, "rel", str(home))
-    assert result["truncated"]
-    assert len(result["entries"]) == 2
-    assert all(entry["kind"] == "file" for entry in result["entries"])
-    with pytest.raises(ContractError, match="browse_reparse_point"):
-        setup_paths.browse(home, {}, "rel", str(alias))
-    with pytest.raises(ContractError, match="browse_reparse_point"):
-        with setup_paths.destination(home, {}, "rel", str(alias / "new.rel"), native=False):
+    valid = external / "owner.rel"
+    with setup_paths.destination(home, "rel", str(valid)) as path:
+        assert path == valid
+    with pytest.raises(ContractError, match="invalid_owner_path"):
+        with setup_paths.destination(home, "rel", str(home / "profiles/foreign/owner.rel")):
+            pytest.fail("accepted a destination in another Hermes profile")
+    with pytest.raises(ContractError, match="invalid_owner_path"):
+        with setup_paths.destination(home, "rel", str(alias / "new.rel")):
             pytest.fail("accepted creation through a directory link")
     assert not (external / "new.rel").exists()
 

@@ -97,7 +97,9 @@
         "src/reliquary_hermes/settings.py",
         "src/reliquary_hermes/setup.py",
         "src/reliquary_hermes/projects.py",
-        "src/reliquary_hermes/setup_paths.py"
+        "src/reliquary_hermes/setup_paths.py",
+        "src/reliquary_hermes/setup_dialog.py",
+        "src/reliquary_hermes/setup_dialog_locality.py"
       ],
       "docs": [
         "docs/local-service.md",

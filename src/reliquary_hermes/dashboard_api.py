@@ -15,7 +15,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from . import setup_dialog
 from .client import HostClient, HostUnavailable
+from .setup_dialog_locality import local_interactive_request
 from .settings import Settings, profile_home, profile_setup_lock, read_settings, read_token
 from .ui_contract import UIRequest, UIResponse, VerifiedUIContext
 from .ui_schema import MUTATIONS, OP_CAPABILITY
@@ -23,6 +25,7 @@ from .validation import ContractError, MAX_WIRE_BYTES, canonical, decode, requir
 
 router = APIRouter()
 _SETUP_BODY_BYTES = 65536
+_DIALOG_BODY_BYTES = 128
 _SETUP_REQUIRED_FIELDS = frozenset({"main_rel", "active_phy"})
 _SETUP_FIELDS = _SETUP_REQUIRED_FIELDS | {"projects", "config_path"}
 _SETUP_ERRORS = {
@@ -34,14 +37,6 @@ _SETUP_ERRORS = {
     "setup_request_too_large": (413, "setup_request_too_large"),
     "project_discovery_unavailable": (503, "project_discovery_unavailable"),
     "unknown_hermes_project": (409, "unknown_hermes_project"),
-    "invalid_browse_kind": (400, "invalid_browse_kind"),
-    "invalid_local_path": (400, "invalid_local_path"),
-    "browse_outside_roots": (403, "browse_outside_roots"),
-    "browse_reparse_point": (403, "browse_reparse_point"),
-    "browse_not_directory": (400, "browse_not_directory"),
-    "browse_not_found": (404, "browse_not_found"),
-    "browse_unreadable": (403, "browse_unreadable"),
-    "browse_timeout": (503, "browse_timeout"),
     "invalid_owner_path": (400, "invalid_owner_path"),
     "owner_already_exists": (409, "owner_already_exists"),
     "owner_creation_failed": (422, "owner_creation_failed"),
@@ -386,7 +381,7 @@ async def _setup_request(request: Request, operation: str, *read_args):
         except ContractError:
             raise HTTPException(status_code=400, detail="invalid_setup_request") from None
         args = (home, candidate)
-        kwargs = {"native": "origin" not in request.headers} if operation == "create" else {"project_aware": True}
+        kwargs = {} if operation == "create" else {"project_aware": True}
 
     try:
         from . import setup
@@ -399,7 +394,9 @@ async def _setup_request(request: Request, operation: str, *read_args):
         raise HTTPException(status_code=503, detail="setup_unavailable") from None
     if operation == "status":
         # Without an Origin, the existing guard only admits verified native requests.
-        result = {**result, "desktop_native_mutations": "origin" not in request.headers and _same_origin(request)}
+        result = {**result,
+                  "desktop_native_mutations": "origin" not in request.headers and _same_origin(request),
+                  "local_dialogs_available": await run_in_threadpool(_local_dialogs_available, request)}
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
@@ -413,9 +410,28 @@ async def setup_projects(request: Request):
     return await _setup_request(request, "projects")
 
 
-@router.get("/setup-v1/browse")
-async def setup_browse(request: Request, kind: str = "", path: str | None = None):
-    return await _setup_request(request, "browse", kind, path)
+def _local_dialogs_available(request: Request) -> bool:
+    return local_interactive_request(request) and setup_dialog.available()
+
+
+@router.post("/setup-v1/dialog")
+async def setup_pick_path(request: Request):
+    _require_hermes_auth(request, "setup_admission_failed")
+    _host_home(request)
+    if not _same_origin(request):
+        raise HTTPException(status_code=403, detail="same_origin_required")
+    if request.headers.get("content-type", "").partition(";")[0].strip().lower() != "application/json":
+        raise HTTPException(status_code=415, detail="setup_json_required")
+    try:
+        value = decode(await _read_bounded_body(request, limit=_DIALOG_BODY_BYTES, error="setup_request_too_large"))
+        mode = value.get("mode")
+        require(set(value) == {"mode"} and isinstance(mode, str) and mode in setup_dialog.MODES, "invalid_dialog_mode")
+    except ContractError:
+        raise HTTPException(status_code=400, detail="invalid_dialog_mode") from None
+    result = {"status": "unavailable"}
+    if await run_in_threadpool(_local_dialogs_available, request):
+        result = await setup_dialog.choose(mode, request.is_disconnected)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/setup-v1/create")

@@ -32,7 +32,7 @@ Keep the current backend unchanged: `ReliquaryMemoryProvider.initialize` and `on
 
 Use the existing `projects.routing_available()` capability gate. When false:
 
-1. Normal setup still requires **General REL + PHY**, with working Select/Create, secure web browse and Desktop native picker.
+1. Normal setup still requires **General REL + PHY**, with working Select/Create, the [HU09 local Web picker](hu09-native-file-dialogs-onboarding-spec-2026-11-09.md) and Desktop native picker.
 2. Show Hermes projects if project discovery succeeds, but label dedicated routing **Unavailable on this Hermes build**. Saved project REL paths may be shown read-only so prior configuration is not lost.
 3. Disable or hide project-specific Select/Create/Use General and any action that would mutate a project REL assignment. Do not create misleading draft selections; do not block General setup because dedicated routing is unavailable.
 4. Explain compactly: **Project conversations use General memory on this Hermes version.** Do not imply dedicated REL routing or present a warning suggesting the user can fix it by selecting a project REL.

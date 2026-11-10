@@ -364,6 +364,7 @@ export interface SetupStatus {
   configured: boolean;
   runtime_detected: boolean;
   desktop_native_mutations: boolean;
+  local_dialogs_available: boolean;
   config_path: string | null;
   defaults: {
     main_rel: string | null;
@@ -412,9 +413,13 @@ export interface SetupCreateRequest {
   project_id?: string;
 }
 
+export type SetupDialogMode = "open_rel" | "open_phy" | "open_config" | "save_rel" | "save_phy";
+export type SetupDialogResult = { status: "selected"; path: string } | { status: "cancelled" } | { status: "unavailable" };
+
 export interface SetupClient {
   status(signal: AbortSignal): Promise<SetupStatus>;
   projects(signal: AbortSignal): Promise<SetupProjectInventory>;
+  dialog(mode: SetupDialogMode, signal: AbortSignal): Promise<SetupDialogResult>;
   create(value: SetupCreateRequest, signal: AbortSignal): Promise<SetupOwner & { path: string }>;
   validate(candidate: SetupCandidate, signal: AbortSignal): Promise<SetupReport>;
   apply(candidate: SetupCandidate, signal: AbortSignal): Promise<
@@ -422,7 +427,8 @@ export interface SetupClient {
   >;
 }
 
-export type SetupPicker = (kind: "REL" | "PHY" | "config") => Promise<string | null>;
+export type SetupPicker = (kind: "REL" | "PHY" | "config", signal?: AbortSignal) =>
+  Promise<string | null | SetupDialogResult>;
 
 export interface CreateReliquarySurface {
   (options: {
@@ -432,6 +438,7 @@ export interface CreateReliquarySurface {
     authedFetch: HermesDashboardSDK["authedFetch"];
     pickOpenPath?: SetupPicker;
     pickSavePath?: SetupPicker;
+    webDialogPicker?: boolean;
     mutationBlockReason?(status: SetupStatus): string | undefined;
     surfaceLabel: string;
   }): () => unknown;

@@ -355,14 +355,11 @@ The revised setup screen presents **General memory** (required General REL, Sele
 3. Each project card displays Dedicated REL or Using General memory. Provide Select REL, Create REL and Use General. The main UI has **no Project N ID text fields or unbound Add project REL rows**.
 4. Offer a distinct **Create Hermes project** action. It must use Hermes's own project-creation operation and obtain a real stable project ID before any REL binding. Do not create a phantom Reliquary project or write Hermes project DB directly. If the supported plugin surface cannot create a project, hand off to Hermes's existing project creation UI/CLI and refresh, rather than inventing an unsupported endpoint.
 
-#### Owner selection, creation and file browsing
+#### Owner selection and creation
 
-1. **Desktop:** reuse its existing native path picker to select existing REL/PHY/config files; add a destination choice for Create. Cancel does not modify state.
-2. **Web:** add a narrow authenticated, read-only **host-filesystem picker**, not a browser upload control. It lists directories and eligible REL/PHY/config candidates on the Hermes host machine. It does not preview or return arbitrary file bytes, recursively scan trees, or index repositories. Label clearly that it browses the machine hosting Hermes, not a remote browser's disk.
-3. Restrict listing to explicitly permitted roots: the current profile home, previously configured owner directories, relevant Hermes project folders, and operator-approved additional roots. Resolve/canonicalize every step and reject traversal outside these roots, symlink/reparse-point escapes, UNC/network locations and malformed paths. Cap listing sizes, depth, path length and time. Provide typed local errors. Advanced manual paths remain available for otherwise valid locations not exposed to the picker; their final selection must still pass host preflight.
-4. Authenticate every list request and bind it to the active Hermes profile. Creation requires the existing same-origin / verified native Desktop mutation admission, a profile setup lock and validated destination. Never interpret a browser-selected path, owner ID or project ID as an authorization grant.
-5. Add one small Rust-host owner-creation operation using public Root APIs: create non-project General REL, project-scoped REL or PHY, at a user-confirmed new path; **never overwrite an existing file**. Preflight after creation must confirm kind, scope, owner ID and ability to open. Do not require a separate installed Reliquary CLI, run arbitrary user-supplied commands or copy Root storage internals into JS/Python. Created owner files remain real files even when later setup fails; report that rather than deleting them silently.
-6. The current host setup-validate mode remains the canonical final owner check. Browsing alone is not validation or acceptance.
+1. Desktop uses its SDK picker. Local Web uses the plugin-local dialog defined by [HU09](hu09-native-file-dialogs-onboarding-spec-2026-11-09.md). Both surfaces preserve explicit path entry and use existing setup preflight for selected files.
+2. Authenticate setup requests and bind them to the active Hermes profile. Creation requires the existing same-origin or verified native Desktop admission, a profile setup lock and a validated destination. A selected path, owner ID or project ID confers no authorization.
+3. Use the Rust host's public Root operation to create a General REL, dedicated project REL or PHY at an explicitly confirmed new path. Preflight confirms kind, scope, ID and ability to open the file. Created owners stay on disk if later setup fails.
 
 #### Memory routing rules
 
@@ -377,7 +374,7 @@ The revised setup screen presents **General memory** (required General REL, Sele
 #### Persisted format and API ownership
 
 - Preserve the existing owners.json projects map (Hermes project ID -> REL path), plus existing provider.json, processing.json, topology and session-route formats where possible. An absent project key means General fallback. Do not introduce a parallel project identity or memory routing database.
-- Extend the existing profile-scoped setup-v1 surface for project discovery, bounded host directory listing and explicitly admitted owner creation. Reuse the existing Rust verification and setup service; do not add an independent setup orchestrator.
+- Extend the existing profile-scoped setup-v1 surface for project discovery and explicitly admitted owner creation. Reuse the existing Rust verification and setup service; do not add an independent setup orchestrator.
 - The shared web/Desktop view owns interaction and display, not filesystem or routing authority. Desktop picker and web browser differ only at the host adapter. Use existing Hermes-native controls and structural-only CSS.
 - Setup must distinguish validated/accepted, creation success but connection failure, requires-restart, topology conflict and unauthorized access. Never claim the new topology is active when the host still uses an older route.
 
@@ -398,7 +395,7 @@ A first-time user can select or create General REL, PHY and optional project REL
 This is a staged hard cut of the **onboarding UI**, with small focused backend additions:
 
 1. Verify supported Hermes project-list, project-create and **session attribution** interfaces. Implement the trusted active-profile project adapter and first-attachment mapping without exposing project IDs as user inputs.
-2. Add the canonical Rust owner-create action and the securely scoped web filesystem browser. Reuse Desktop picker and existing setup-validate preflight.
+2. Add the canonical Rust owner-create action and the local Web dialog specified by HU09. Reuse Desktop picker and existing setup-validate preflight.
 3. Replace onboarding form rows with General/PHY Select/Create, Hermes project cards, Advanced, and one non-blocking fallback confirmation. Keep shared UI and native components.
 4. Address append-only project topology registration/restart behavior while keeping accepted session routes immutable.
 5. Validate complete web/Desktop first-run and previously configured profiles, then remove obsolete normal-UI manual project ID controls and compatibility CSS if any. Retain backend ID validation for persisted and headless inputs.
@@ -408,7 +405,7 @@ This is a staged hard cut of the **onboarding UI**, with small focused backend a
 Test through existing Rust host, Python setup/API, JS dashboard/Desktop and installed Hermes seams.
 
 - Project inventory: multiple projects, a multi-folder project, missing REL, archived project, refresh after new Hermes project, unavailable registry, foreign-profile and stale project selection.
-- Web browser: correct host filesystem vs remote browser, allowed roots, traversal and symlink/reparse escapes, UNC, unreadable directory, output caps, unauthorized request, cancel and valid final owner.
+- Web dialog: verify local Windows invocation, remote refusal, cancellation, a valid selected candidate and checked owner creation.
 - Owner create: correct General/project scopes and PHY kind, occupied path fails without overwrite, interrupted creation, reselect existing owner, successful creation followed by failed connect leaves owner intact.
 - Setup: required General and PHY; project REL optional; fallback warning gives correct count and has explicit Continue/Cancel; existing selected owners persist after reopen.
 - Routing: new mapped project session selects project REL; unmapped or non-project session selects General; ingestion and recall use the same signed durable route; two concurrent projects remain isolated; restart preserves mapping; change of a project's REL does not move existing attached sessions.

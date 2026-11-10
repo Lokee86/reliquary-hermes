@@ -219,12 +219,8 @@ with ExitStack() as stack:
             fixture["owners"][profile] = created
             existing = client.post(setup_api + "/create", headers=writer(profile), params=params, json=project_body)
             assert existing.status_code == 409 and existing.json()["detail"] == "owner_already_exists"
-            candidates = reply(client.get(setup_api + "/browse", headers=auth,
-                                          params={**params, "path": str(selected), "kind": "rel"}))
-            assert {entry["name"] for entry in candidates["entries"] if entry["kind"] == "file"} == {
-                "main.rel", "project.rel"}
             assert client.get(setup_api + "/browse", headers=auth,
-                              params={"path": str(selected), "kind": "rel"}).status_code == 403
+                              params=params).status_code == 404
             candidate["projects"] = {dedicated: str(project_file)}
         web_validation = reply(client.post(setup_api + "/validate", headers=same_origin, params=params, json=candidate))
         assert web_validation["valid"], web_validation

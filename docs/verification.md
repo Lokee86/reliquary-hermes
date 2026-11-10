@@ -352,7 +352,7 @@ Electron 44.9.3 passed the stock Hermes `b766b76988449e15e3914037d3e03fb96af7277
 
 ## HU05 project-aware onboarding amendment
 
-The authenticated setup checks exercise active-profile Hermes inventory, multi-folder project grouping, archived project exclusion, bounded host path browsing, and browser and verified native creation admission. Run `tests/test_setup_api.py` with the pinned Hermes checkout and `tests/test_hosted_desktop_api.py` with the installed host matrix. The hosted probe creates General, project and PHY owners in an isolated profile and verifies their signed topology and existing management operations. The Rust `setup_validation` and registry suites cover exclusive creation, owner preflight and durable binding through restart.
+The authenticated setup checks exercise active-profile Hermes inventory, multi-folder project grouping, archived project exclusion, browser and verified native creation admission, and destination validation. Run `tests/test_setup_api.py` with the pinned Hermes checkout and `tests/test_hosted_desktop_api.py` with the installed host matrix. The hosted probe creates General, project and PHY owners in an isolated profile and verifies their signed topology and existing management operations. The Rust `setup_validation` and registry suites cover exclusive creation, owner preflight and durable binding through restart.
 
 The stock and installed hosts expose the project registry but lack authoritative project attribution in the provider lifecycle. Their project lists and owner selection are available. New sessions attach to General memory and the UI reports the missing routing capability. Live project-specific routing requires the host contract recorded in the [host audit](host-audit.md).
 
@@ -376,17 +376,17 @@ The probes use synthetic profiles and deterministic local processing. They cover
 
 Manual history export v2 removes the whole-conversation message/byte cap while retaining bounded, overlapping source windows and the existing native import/processing boundary. Version 1 remains sufficient for automatic new-session capture but **not** unrestricted manual history import. Verify a 300-message ordered/restartable outbox and the signed-host test that inspects the oldest and newest original Root turns after sequential extensions (`tests/test_hu08_long_history.py`, `tests/test_hu08_manual_processing.py`). Do not claim that compressed or copied-branch lineages are importable until their original source history can be exported and verified. No installed plugin or upstream PR is updated by these local tests.
 
-## HU09 native-dialog feasibility and acceptance
+## HU09 plugin-local file dialogs
 
-**Blocked on the installed Web host.** The local Windows dashboard at `127.0.0.1:9119` runs in Windows Session 1 on Hermes `458829681db8761e50b8242aa034d23ae9bcdcd5`. The dashboard served the installed Reliquary bundle and returned authenticated setup status with the runtime detected and General unconfigured. The Web SDK in `web/src/plugins/registry.ts` exposes authenticated browser transport without a native picker. A server running in Session 1 does not establish the locality of the browser caller.
+The Windows feasibility check used the running dashboard's Python 3.14.9 executable in Windows Session 1. Tcl/Tk 9.0.4 opened a real Windows Open File dialog, which was canceled without choosing a path.
 
-Hermes' private native HTTP admission in `hermes_cli/dashboard_auth/native_http.py` rejects requests carrying a browser Origin. The gateway's `gateway/local_desktop_ui.py` routes requests for attached viewer turns and has no file picker operation. Desktop Open File and Save As go through the Electron preload exposed to the Desktop SDK in `apps/desktop/src/contrib/plugin.ts`.
+Use an isolated profile with the installed Hermes runtime on a standalone `127.0.0.1` dashboard. The request must have the existing Hermes authentication and profile scope. The local guard checks that Windows attributes both ends of the connection to the Hermes listener and a supported installed browser running as the same OS user in the same active desktop session. Hosted workers, reverse proxies, public dashboards and unsupported or headless environments use explicit manual paths. No macOS or Linux UI acceptance is recorded here.
 
-The missing Hermes contract is a supported Web capability that binds an authenticated local user action to the active profile and backend and invokes the picker in that user's interactive Windows session. It needs only `open_rel`, `open_phy`, `open_config`, `save_rel` and `save_phy`, with a selected absolute host path, cancellation or unavailable result. The selected path remains a candidate. The existing setup endpoints own validation, confirmation and non-overwriting creation.
+Use the four Web controls to verify real Windows dialogs, cancellation, unchanged selected files, overwrite refusal, and confirmed creation and connection of synthetic owners. Check that switching profile or backend discards a pending result. The Desktop picker is a separate Electron path.
 
-The installed Web form reports native dialogs unavailable and offers explicit manual paths. The isolated Web acceptance exercised this fallback, including confirmation, overwrite rejection, wrong-kind rejection, cancellation and connection with synthetic REL and PHY files. Packaged Desktop opened and canceled all four genuine Windows dialogs. These are separate checks from the outstanding Web gate.
+The isolated dashboard on port 9130 used the installed Hermes runtime and the final rebuilt integration. All four Web controls opened genuine Windows dialogs and canceled. The Open File dialogs returned the existing synthetic REL and PHY paths. A same-origin non-browser connection with spoofed forwarding headers reported unavailable, and the retired listing route returned HTTP 404. The setup and Rust tests covered confirmation and refusal to overwrite.
 
-Once the trusted host capability exists, run the Web and Desktop builds, Node tests and TypeScript check above, plus the setup API tests. In an isolated profile on the installed Web dashboard, observe the four real Windows dialogs, verify cancellation and scope changes, select existing synthetic owners without changing their bytes, and confirm creation and connection of a new pair through the existing setup service.
+ Run the Web and Desktop builds, Node tests, TypeScript, the setup API and locality tests, and the documentation policy checks.
 
 ## Related docs
 

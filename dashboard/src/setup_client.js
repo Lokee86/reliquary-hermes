@@ -13,7 +13,7 @@
     ["setup_unavailable", "Could not reach Reliquary setup. Try again."],
     ["source_capture_setup_required", "Check this profile's Reliquary capture enrollment file, then retry setup."],
     ["invalid_setup_response", "Reliquary returned an invalid setup response."],
-    ["picker_failed", "Hermes Desktop could not open the file picker."],
+    ["dialog_unavailable", "Native file dialogs are unavailable for this connection. Enter the path manually."],
     ["main_path", "Enter an absolute local path for the main REL."],
     ["phy_path", "Enter an absolute local path for the active PHY."],
     ["config_path", "Enter an absolute local path for the Reliquary config."],
@@ -76,7 +76,8 @@
     /**
      * @param {string} operation
      * @param {AbortSignal} signal
-     * @param {import("../types").SetupCandidate | import("../types").SetupCreateRequest} [value]
+     * @param {import("../types").SetupCandidate | import("../types").SetupCreateRequest |
+     *   {mode: import("../types").SetupDialogMode}} [value]
      */
     async function request(operation, signal, value) {
       signal.throwIfAborted();
@@ -113,7 +114,20 @@
         const data = await request("status", signal);
         if (typeof data?.configured !== "boolean" || typeof data.runtime_detected !== "boolean" ||
             !data.defaults?.projects) throw new Error("invalid_setup_response");
-        return { ...data, desktop_native_mutations: data.desktop_native_mutations === true };
+        return { ...data, desktop_native_mutations: data.desktop_native_mutations === true,
+          local_dialogs_available: data.local_dialogs_available === true };
+      },
+      /** @param {import("../types").SetupDialogMode} mode @param {AbortSignal} signal */
+      async dialog(mode, signal) {
+        if (!["open_rel", "open_phy", "open_config", "save_rel", "save_phy"].includes(mode)) {
+          throw new Error("invalid_setup_response");
+        }
+        const data = await request("dialog", signal, { mode });
+        if (data?.status === "cancelled" || data?.status === "unavailable") return data;
+        if (data?.status !== "selected" || typeof data.path !== "string" || !data.path || data.path.includes("\0")) {
+          throw new Error("invalid_setup_response");
+        }
+        return data;
       },
       async projects(signal) {
         const data = await request("projects", signal);

@@ -1470,7 +1470,7 @@ function createReliquarySurface(options) {
     ["setup_unavailable", "Could not reach Reliquary setup. Try again."],
     ["source_capture_setup_required", "Check this profile's Reliquary capture enrollment file, then retry setup."],
     ["invalid_setup_response", "Reliquary returned an invalid setup response."],
-    ["picker_failed", "Hermes Desktop could not open the file picker."],
+    ["dialog_unavailable", "Native file dialogs are unavailable for this connection. Enter the path manually."],
     ["main_path", "Enter an absolute local path for the main REL."],
     ["phy_path", "Enter an absolute local path for the active PHY."],
     ["config_path", "Enter an absolute local path for the Reliquary config."],
@@ -1533,7 +1533,8 @@ function createReliquarySurface(options) {
     /**
      * @param {string} operation
      * @param {AbortSignal} signal
-     * @param {import("../types").SetupCandidate | import("../types").SetupCreateRequest} [value]
+     * @param {import("../types").SetupCandidate | import("../types").SetupCreateRequest |
+     *   {mode: import("../types").SetupDialogMode}} [value]
      */
     async function request(operation, signal, value) {
       signal.throwIfAborted();
@@ -1570,7 +1571,20 @@ function createReliquarySurface(options) {
         const data = await request("status", signal);
         if (typeof data?.configured !== "boolean" || typeof data.runtime_detected !== "boolean" ||
             !data.defaults?.projects) throw new Error("invalid_setup_response");
-        return { ...data, desktop_native_mutations: data.desktop_native_mutations === true };
+        return { ...data, desktop_native_mutations: data.desktop_native_mutations === true,
+          local_dialogs_available: data.local_dialogs_available === true };
+      },
+      /** @param {import("../types").SetupDialogMode} mode @param {AbortSignal} signal */
+      async dialog(mode, signal) {
+        if (!["open_rel", "open_phy", "open_config", "save_rel", "save_phy"].includes(mode)) {
+          throw new Error("invalid_setup_response");
+        }
+        const data = await request("dialog", signal, { mode });
+        if (data?.status === "cancelled" || data?.status === "unavailable") return data;
+        if (data?.status !== "selected" || typeof data.path !== "string" || !data.path || data.path.includes("\0")) {
+          throw new Error("invalid_setup_response");
+        }
+        return data;
       },
       async projects(signal) {
         const data = await request("projects", signal);
@@ -1745,8 +1759,12 @@ function createReliquarySurface(options) {
       if (!picker) return;
       return run(async (signal) => {
         try {
-          const path = await picker(target.kind);
-          if (path && !signal.aborted) acceptPath(target, creating, path);
+          const result = await picker(target.kind, signal);
+          if (signal.aborted || !result) return;
+          if (typeof result === "object") {
+            if (result.status === "selected") acceptPath(target, creating, result.path);
+            else if (result.status === "unavailable") setError("Native file dialogs are unavailable for this connection. Try again or enter the path manually.");
+          } else acceptPath(target, creating, result);
         } catch {
           if (!signal.aborted) setError("Could not open the native file dialog. Try again or enter the path manually.");
         }
@@ -1922,8 +1940,10 @@ function createReliquarySurface(options) {
 (function (root) {
   "use strict";
 
+  /** @typedef {import("../types").SetupPicker} SetupPicker */
+
   /** @type {import("../types").CreateReliquarySurface} */
-  function createSurface({ authedFetch, pickOpenPath, pickSavePath, mutationBlockReason, surfaceLabel }) {
+  function createSurface({ authedFetch, pickOpenPath, pickSavePath, webDialogPicker, mutationBlockReason, surfaceLabel }) {
     const { React, hooks, components } = root.ReliquaryDashboardHost;
     const h = React.createElement;
     const { Button, Input } = components;
@@ -2074,6 +2094,18 @@ function createReliquarySurface(options) {
       if (current?.status?.configured && !managing) return h(DashboardTab, {
         client, configPath: current.status.config_path, blockReason, onManageSetup: () => setManaging(true),
       });
+      /** @type {SetupPicker | undefined} */
+      const webOpenPath = webDialogPicker && current?.status?.local_dialogs_available
+        ? (kind, signal) => signal
+          ? setup.dialog(kind === "REL" ? "open_rel" : kind === "PHY" ? "open_phy" : "open_config", signal)
+          : Promise.resolve({ status: "unavailable" })
+        : undefined;
+      /** @type {SetupPicker | undefined} */
+      const webSavePath = webDialogPicker && current?.status?.local_dialogs_available
+        ? (kind, signal) => signal
+          ? setup.dialog(kind === "REL" ? "save_rel" : "save_phy", signal)
+          : Promise.resolve({ status: "unavailable" })
+        : undefined;
       return h("section", { className: "rly-dashboard", "aria-label": current?.status ? "Reliquary setup" : "Reliquary" },
         h("header", { className: "rly-header" }, h("div", null,
           h("p", { className: "rly-eyebrow" }, surfaceLabel),
@@ -2082,7 +2114,9 @@ function createReliquarySurface(options) {
           current?.status && h("p", { className: "rly-subtitle" }, "Select or create Reliquary owners for this Hermes profile.")),
           current?.status?.configured && h(Button, { type: "button", onClick: () => setManaging(false) }, "Back to dashboard")),
         blockReason && h("p", { className: "rly-live-notice", role: "note" }, blockReason),
-        current?.status ? h(Onboarding, { status: current.status, setup, pickOpenPath, pickSavePath,
+        current?.status ? h(Onboarding, { key: String(attempt), status: current.status, setup,
+          pickOpenPath: webDialogPicker ? webOpenPath : pickOpenPath,
+          pickSavePath: webDialogPicker ? webSavePath : pickSavePath,
           mutationsEnabled: !blockReason, onConnected: () => { setManaging(false); refresh(); } }) :
           current?.error ? h("div", { role: "alert" },
             h("p", null, current.error), h(Button, { type: "button", onClick: refresh }, "Retry setup status")) :

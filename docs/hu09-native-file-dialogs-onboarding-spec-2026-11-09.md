@@ -1,10 +1,10 @@
 # HU09 — Plugin-local file dialogs and removal of obsolete browsing
 
 **Date:** 2026-11-09
-**Status:** Approved target; not implemented
+**Status:** Implemented; see verification for acceptance evidence
 **Scope:** Existing HU09 only. This replaces the earlier Web broker/upstream design.
 
-## Problem statement
+## Purpose
 
 The installed Hermes Desktop plugin already opens native Open/Save dialogs. The Web dashboard still disables Select REL/PHY and Create REL/PHY, even when the user operates Hermes locally on Windows. The custom "Permitted folders" interface has been removed from the UI by `daa07c6`, but its backend enumeration/allowlist machinery remains. The subsequent `eb08046` recorded an upstream Hermes dependency instead of testing a plugin-local native dialog.
 
@@ -21,7 +21,7 @@ The installed Hermes Desktop plugin already opens native Open/Save dialogs. The 
 
 Existing optional configuration selection can use `askopenfilename` with `*.cfg`. Both selections and cancellations have no effects on disk. Save As must not create or truncate anything; the Rust host's existing create-without-overwrite behavior remains authoritative.
 
-## Target architecture
+## Overview
 
 `Web button → existing authenticated profile-scoped setup API → tiny plugin-local Python tkinter dialog helper → chosen path/cancel → existing create/validate/apply`
 
@@ -70,7 +70,7 @@ This is not a second file browser. Remove the old infrastructure once the tkinte
 
 New Hermes upstream PRs, another HU phase, general-purpose OS dialog services, external desktop brokers, browser uploads, a new authentication system, storage changes, project routing work, and further UI redesign.
 
-## Related documents
+## Related docs
 
 - [HU05 onboarding](hu05-cross-surface-onboarding-desktop-spec-2026-11-08.md)
 - [HU06 native admission](hu06-stock-hermes-desktop-mutation-compat-spec-2026-11-09.md)
@@ -78,4 +78,4 @@ New Hermes upstream PRs, another HU phase, general-purpose OS dialog services, e
 
 ## Notes
 
-This specification is **proposal only**. No Python, UI, desktop, host or installed runtime implementation has changed in this revision. Current `eb08046` remains the deployed code until a separate implementation task completes.
+Commit `1c6c4c4` approved this design. The [verification guide](verification.md#hu09-plugin-local-file-dialogs) records the implemented boundary and installed checks.

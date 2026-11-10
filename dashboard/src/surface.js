@@ -1,8 +1,10 @@
 (function (root) {
   "use strict";
 
+  /** @typedef {import("../types").SetupPicker} SetupPicker */
+
   /** @type {import("../types").CreateReliquarySurface} */
-  function createSurface({ authedFetch, pickOpenPath, pickSavePath, mutationBlockReason, surfaceLabel }) {
+  function createSurface({ authedFetch, pickOpenPath, pickSavePath, webDialogPicker, mutationBlockReason, surfaceLabel }) {
     const { React, hooks, components } = root.ReliquaryDashboardHost;
     const h = React.createElement;
     const { Button, Input } = components;
@@ -153,6 +155,18 @@
       if (current?.status?.configured && !managing) return h(DashboardTab, {
         client, configPath: current.status.config_path, blockReason, onManageSetup: () => setManaging(true),
       });
+      /** @type {SetupPicker | undefined} */
+      const webOpenPath = webDialogPicker && current?.status?.local_dialogs_available
+        ? (kind, signal) => signal
+          ? setup.dialog(kind === "REL" ? "open_rel" : kind === "PHY" ? "open_phy" : "open_config", signal)
+          : Promise.resolve({ status: "unavailable" })
+        : undefined;
+      /** @type {SetupPicker | undefined} */
+      const webSavePath = webDialogPicker && current?.status?.local_dialogs_available
+        ? (kind, signal) => signal
+          ? setup.dialog(kind === "REL" ? "save_rel" : "save_phy", signal)
+          : Promise.resolve({ status: "unavailable" })
+        : undefined;
       return h("section", { className: "rly-dashboard", "aria-label": current?.status ? "Reliquary setup" : "Reliquary" },
         h("header", { className: "rly-header" }, h("div", null,
           h("p", { className: "rly-eyebrow" }, surfaceLabel),
@@ -161,7 +175,9 @@
           current?.status && h("p", { className: "rly-subtitle" }, "Select or create Reliquary owners for this Hermes profile.")),
           current?.status?.configured && h(Button, { type: "button", onClick: () => setManaging(false) }, "Back to dashboard")),
         blockReason && h("p", { className: "rly-live-notice", role: "note" }, blockReason),
-        current?.status ? h(Onboarding, { status: current.status, setup, pickOpenPath, pickSavePath,
+        current?.status ? h(Onboarding, { key: String(attempt), status: current.status, setup,
+          pickOpenPath: webDialogPicker ? webOpenPath : pickOpenPath,
+          pickSavePath: webDialogPicker ? webSavePath : pickSavePath,
           mutationsEnabled: !blockReason, onConnected: () => { setManaging(false); refresh(); } }) :
           current?.error ? h("div", { role: "alert" },
             h("p", null, current.error), h(Button, { type: "button", onClick: refresh }, "Retry setup status")) :

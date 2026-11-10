@@ -6,9 +6,9 @@
   if (!sdk || !registry || sdk.sdkVersion !== "1.1.0" || typeof sdk.authedFetch !== "function") {
     throw new Error("Reliquary requires the Hermes web dashboard plugin SDK 1.1.0.");
   }
-  // The Web SDK has no trusted bridge to the interactive host desktop.
+  // Web dialogs use the authenticated profile-scoped setup API.
   registry.register("reliquary-hermes", createReliquarySurface({
     React: sdk.React, hooks: sdk.hooks, components: webComponents(sdk),
-    authedFetch: sdk.authedFetch, surfaceLabel: "HERMES WEB DASHBOARD PLUGIN",
+    authedFetch: sdk.authedFetch, webDialogPicker: true, surfaceLabel: "HERMES WEB DASHBOARD PLUGIN",
   }));
 })(window);

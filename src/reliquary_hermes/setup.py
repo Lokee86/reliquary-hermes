@@ -164,13 +164,7 @@ def projects(home):
     return inventory(profile_home(home))
 
 
-def browse(home, kind, path):
-    home = profile_home(home)
-    _, _, _, defaults = _defaults(home)
-    return setup_paths.browse(home, defaults, kind, path)
-
-
-def create(home, candidate, *, native):
+def create(home, candidate):
     from hermes_cli.config import is_managed
 
     kind = candidate.get("kind")
@@ -180,11 +174,11 @@ def create(home, candidate, *, native):
     home = profile_home(home)
     require(not is_managed(), "managed_setup")
     with profile_setup_lock(home):
-        _, _, binary, defaults = _defaults(home)
+        _, _, binary, _ = _defaults(home)
         if kind == "project_rel":
             require(identifier(candidate["project_id"]) in active_projects(home), "unknown_hermes_project")
         file_kind = "phy" if kind == "phy" else "rel"
-        with setup_paths.destination(home, defaults, file_kind, candidate["path"], native=native) as path:
+        with setup_paths.destination(home, file_kind, candidate["path"]) as path:
             try:
                 result = _host_setup(home, binary, "setup-create",
                                      {"role": _CREATE_ROLES[kind], "path": str(path)})
