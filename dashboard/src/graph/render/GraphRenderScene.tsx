@@ -174,11 +174,22 @@ function GraphScene(props: GraphRenderSceneProps) {
   const interaction = useGraphRenderInteraction(props);
   const frame = interaction.frame;
   const loadedNodeCount = frame?.nodeChunks.reduce((total, chunk) => total + chunk.nodeCount, 0) ?? 0;
+  const unassignedCount = client.manifest.hierarchy.find(item =>
+    item.kind === "territory" && item.territory?.kind === "unassigned",
+  )?.nodeCount ?? 0;
   const [resetVersion, setResetVersion] = useState(0);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const telemetryRef = useRef<HTMLDivElement | null>(null);
   const center = useMemo(() => boundsCenter(client.manifest.globalBounds), [client]);
   const extent = useMemo(() => framingExtent(client.manifest), [client]);
+  const edgeLodByChunk = useMemo(
+    () => new Map(client.manifest.edgeChunks.map(({ chunkId, lod }) => [chunkId, lod])),
+    [client],
+  );
+  const renderedEdgeLods = new Set((frame?.edgeChunks ?? []).map(chunk => edgeLodByChunk.get(chunk.chunkId)).filter(Boolean));
+  const renderedEdgeLod = renderedEdgeLods.size === 0 ? "none"
+    : renderedEdgeLods.size === 1 ? [...renderedEdgeLods][0]!
+      : "mixed";
   const camera = useMemo(() => ({
     position: [center[0], center[1], center[2] + extent * 2.4] as [number, number, number],
     fov: 50,
@@ -201,7 +212,8 @@ function GraphScene(props: GraphRenderSceneProps) {
       data-resident-node-chunks={frame?.nodeChunks.length ?? 0}
       data-expected-node-chunks={client.manifest.nodeChunks.length}
       data-downsampled={!client.nodeOverviewFits}
-      data-edge-lod={frame?.lod ?? "pending"}
+      data-camera-lod={frame?.lod ?? "pending"}
+      data-edge-lod={renderedEdgeLod}
       style={{ position: "relative", width: "100%", height: "100%", minHeight: 360 }}
     >
       <Canvas
@@ -232,6 +244,11 @@ function GraphScene(props: GraphRenderSceneProps) {
       {frame && !client.nodeOverviewFits && (
         <div className="graph-render-telemetry" role="status" aria-live="polite">
           Showing {frame.nodeChunks.reduce((total, chunk) => total + chunk.nodeCount, 0).toLocaleString()} of {client.manifest.totalNodeCount.toLocaleString()} memories
+        </div>
+      )}
+      {unassignedCount > 0 && (
+        <div className="graph-render-unassigned-legend" role="group" aria-label="Graph legend">
+          Unassigned · {unassignedCount.toLocaleString()} memories
         </div>
       )}
     </div>

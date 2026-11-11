@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import * as THREE from "three";
 import { GRAPH_RENDER_LABEL_BUDGET } from "./lod";
-import type { GraphRenderHierarchyDescriptor, GraphRenderTerritory } from "./types";
+import type { GraphRenderHierarchyDescriptor } from "./types";
 import { selectCommunityShells, territoryShellOpacity } from "./displayHelpers";
 
 // Warlock Territories.tsx at d9e38cb. The view maps only the active hierarchy.
@@ -9,7 +9,7 @@ interface GraphTerritory {
   id: number;
   label: string;
   nodeCount: number;
-  kind: GraphRenderTerritory["kind"];
+  kind: "community";
   communityId: string | null;
   radius: number;
   x: number;
@@ -54,13 +54,12 @@ function TerritoryLabel({ territory, isolated }: { territory: GraphTerritory; is
   const label = useMemo(() => labelTexture(text, territory.color), [territory.color, text]);
   useEffect(() => () => label?.texture.dispose(), [label]);
   if (!label) return null;
-  const unassigned = territory.kind === "unassigned";
   const originalHeight = Math.max(12, Math.min(28, territory.radius * 0.16));
   // Keep compact Rust layouts legible, and keep labels inside the initial frame
   // when a single sphere fills it. Multiple real communities retain Warlock placement.
   const worldHeight = Math.min(originalHeight, territory.radius * 0.16);
-  const labelY = territory.radius * (unassigned ? 0.66 : 0.82) + worldHeight;
-  const labelZ = territory.radius * (unassigned || isolated ? 0 : 0.62);
+  const labelY = territory.radius * 0.82 + worldHeight;
+  const labelZ = territory.radius * (isolated ? 0 : 0.62);
   return (
     <sprite
       position={[territory.x, territory.y + labelY, territory.z + labelZ]}
@@ -68,7 +67,7 @@ function TerritoryLabel({ territory, isolated }: { territory: GraphTerritory; is
       renderOrder={30}
       frustumCulled={false}
     >
-      <spriteMaterial map={label.texture} transparent opacity={territory.kind === "unassigned" ? 0.65 : 0.94} depthWrite={false} depthTest={false} toneMapped={false} />
+      <spriteMaterial map={label.texture} transparent opacity={0.94} depthWrite={false} depthTest={false} toneMapped={false} />
     </sprite>
   );
 }
@@ -91,7 +90,7 @@ export function RenderTerritories({ hierarchy, isolated, territoryOpacity, commu
     if (territory.kind === "unassigned") return [];
     const [x, y, z] = territory.center;
     return [{
-      id, label: territory.label, nodeCount, kind: territory.kind, communityId: territory.communityId, radius: territory.radius,
+      id, label: territory.label, nodeCount, kind: "community" as const, communityId: territory.communityId, radius: territory.radius,
       x, y, z, color: `#${new THREE.Color().setRGB(...territory.color, THREE.SRGBColorSpace).getHexString()}`,
     }];
   }), [hierarchy]);

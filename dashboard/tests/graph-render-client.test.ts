@@ -279,6 +279,107 @@ const selectedXs = oversizedPlan.nodeChunks.map(chunk => (chunk.bounds.min[0] + 
 assert.ok(Math.max(...selectedXs) - Math.min(...selectedXs) > 80,
   "oversized overview samples chunks across the spatial extent");
 
+const panChunks: GraphRenderManifest["nodeChunks"] = Array.from({ length: 40 }, (_, chunkId) => {
+  const x = chunkId < 20 ? -80 : 80;
+  return {
+    chunkId, parentHierarchyId: 1,
+    bounds: { min: [x - 1, -1, -1] as const, max: [x + 1, 1, 1] as const },
+    nodeCount: 1, byteLen: 56, labelCandidates: [],
+  };
+});
+let panFetches = 0;
+let panActive = 0;
+let panPeakActive = 0;
+const panReleases: Array<() => void> = [];
+const panClient = await GraphRenderClient.prepare("owner", {
+  ...transport,
+  async prepare() { return { ...manifest, totalNodeCount: 40, nodeChunks: panChunks, edgeChunks: [] }; },
+  async nodeChunk(_generationId, chunkId) {
+    panFetches += 1;
+    panActive += 1;
+    panPeakActive = Math.max(panPeakActive, panActive);
+    return await new Promise<Uint8Array>(resolve => {
+      panReleases.push(() => { panActive -= 1; resolve(nodePayload(chunkId, 1)); });
+    });
+  },
+});
+const stalePan = panClient.loadViewport({ center: [-80, 0, 0], radius: 5 });
+await waitUntil(() => panFetches === 8);
+assert.equal(panClient.activeChunkRequestCount, 8);
+assert.equal(panClient.queuedChunkRequestCount, 12);
+const currentPan = panClient.loadViewport({ center: [80, 0, 0], radius: 5 });
+const stalePanResult = assert.rejects(stalePan, /superseded/);
+assert.equal(panClient.queuedChunkRequestCount, 20, "old queued chunks are replaced by the newest viewport plan");
+await releasePanBatch();
+await waitUntil(() => panFetches === 16);
+await releasePanBatch();
+await waitUntil(() => panFetches === 24);
+await releasePanBatch();
+await waitUntil(() => panFetches === 28);
+await releasePanBatch();
+await stalePanResult;
+const currentPanFrame = await currentPan;
+assert.equal(currentPanFrame.nodeChunks.length, 20);
+assert.ok(currentPanFrame.nodeChunks.every(chunk => chunk.chunkId >= 20), "only the latest viewport frame survives");
+assert.ok(panPeakActive <= 8, "shared transport concurrency stays bounded during rapid pans");
+assert.equal(panFetches, 28, "stale queued requests are discarded before transport fetch");
+
+const reuseChunks = Array.from({ length: 13 }, (_, chunkId) => ({
+  chunkId, parentHierarchyId: 1, bounds, nodeCount: 2, byteLen: 80, labelCandidates: [],
+}));
+let reuseFetches = 0;
+const reuseReleases: Array<() => void> = [];
+const reuseClient = await GraphRenderClient.prepare("owner", {
+  ...transport,
+  async prepare() { return { ...manifest, totalNodeCount: 26, nodeChunks: reuseChunks, edgeChunks: [] }; },
+  async nodeChunk(_generationId, chunkId) {
+    reuseFetches += 1;
+    return await new Promise<Uint8Array>(resolve => {
+      reuseReleases.push(() => resolve(nodePayload(chunkId)));
+    });
+  },
+});
+const firstReuseLoad = reuseClient.loadViewport({ center: [0, 0, 0], radius: 100 });
+await waitUntil(() => reuseFetches === 8);
+const secondReuseLoad = reuseClient.loadViewport({ center: [0, 0, 0], radius: 100 });
+assert.equal(reuseClient.queuedChunkRequestCount, 5, "same chunks reuse active and queued requests across viewport versions");
+await releaseReuseBatch();
+await waitUntil(() => reuseFetches === 13);
+await releaseReuseBatch();
+assert.equal((await firstReuseLoad).nodeChunks.length, 13);
+assert.equal((await secondReuseLoad).nodeChunks.length, 13);
+assert.equal(reuseFetches, 13, "viewport refresh does not duplicate chunk fetches");
+
+const cacheChunkBytes = 8 * 1024 * 1024;
+const cacheNodeCount = (cacheChunkBytes - 32) / 24;
+const cacheChunks: GraphRenderManifest["nodeChunks"] = Array.from({ length: 5 }, (_, chunkId) => {
+  const x = -80 + chunkId * 40;
+  return {
+    chunkId, parentHierarchyId: 1,
+    bounds: { min: [x - 1, -1, -1] as const, max: [x + 1, 1, 1] as const },
+    nodeCount: cacheNodeCount, byteLen: cacheChunkBytes, labelCandidates: [],
+  };
+});
+const cacheFetches = new Map<number, number>();
+const cacheClient = await GraphRenderClient.prepare("owner", {
+  ...transport,
+  async prepare() {
+    return { ...manifest, totalNodeCount: cacheNodeCount * cacheChunks.length, nodeChunks: cacheChunks, edgeChunks: [] };
+  },
+  async nodeChunk(_generationId, chunkId) {
+    cacheFetches.set(chunkId, (cacheFetches.get(chunkId) ?? 0) + 1);
+    return emptyNodePayload(chunkId, cacheNodeCount);
+  },
+});
+for (let chunkId = 0; chunkId < cacheChunks.length; chunkId += 1) {
+  const x = -80 + chunkId * 40;
+  await cacheClient.loadViewport({ center: [x, 0, 0], radius: 1 });
+  assert.ok(cacheClient.residentNodeByteCount <= 32 * 1024 * 1024,
+    "resident node cache obeys its byte cap as chunks accumulate");
+}
+await cacheClient.loadViewport({ center: [-80, 0, 0], radius: 1 });
+assert.equal(cacheFetches.get(0), 2, "the oldest byte-evicted node chunk is fetched again on demand");
+
 console.log("Hermes graph render client checks passed");
 
 function nodePayload(chunkId = 0, count = 2) {
@@ -296,6 +397,13 @@ function nodePayload(chunkId = 0, count = 2) {
     sizes[index] = index + 1.5;
     renderIds[index] = index + 10;
   }
+  return raw;
+}
+
+function emptyNodePayload(chunkId:number, count:number) {
+  const raw = new Uint8Array(32 + count * 24);
+  writeMagic(raw, "WRNODE");
+  writeHeader(new DataView(raw.buffer), chunkId, count);
   return raw;
 }
 
@@ -321,5 +429,24 @@ function writeHeader(view:DataView, payloadId:number, count:number) {
   view.setBigUint64(16, BigInt(generationId), true);
   view.setUint32(24, payloadId, true);
   view.setUint32(28, count, true);
+}
+async function waitUntil(predicate: () => boolean) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
+  assert.fail("timed out waiting for bounded graph chunk requests");
+}
+
+async function releasePanBatch() {
+  const batch = panReleases.splice(0);
+  for (const release of batch) release();
+  await new Promise(resolve => setTimeout(resolve, 2));
+}
+
+async function releaseReuseBatch() {
+  const batch = reuseReleases.splice(0);
+  for (const release of batch) release();
+  await new Promise(resolve => setTimeout(resolve, 2));
 }
 });

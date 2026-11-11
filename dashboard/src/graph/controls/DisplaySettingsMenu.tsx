@@ -150,7 +150,7 @@ export function DisplaySettingsMenu({
           />
           <SliderRow
             label="Territory shells"
-            hint="Transparency of community and unassigned shells"
+            hint="Transparency of community shells"
             value={settings.territoryOpacity}
             min={DISPLAY_LIMITS.territoryOpacity.min}
             max={DISPLAY_LIMITS.territoryOpacity.max}

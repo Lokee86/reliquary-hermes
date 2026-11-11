@@ -38,6 +38,9 @@ import type {
 const RESOLUTION_CACHE_LIMIT = 128;
 const INCIDENT_EDGE_LIMIT = 128;
 const RESIDENT_CHUNK_LIMIT = 2 * GRAPH_RENDER_DETAIL_CHUNK_BUDGET;
+const RESIDENT_NODE_BYTE_LIMIT = 32 * 1024 * 1024;
+const RESIDENT_EDGE_BYTE_LIMIT = 32 * 1024 * 1024;
+export const GRAPH_RENDER_CHUNK_REQUEST_CONCURRENCY = 8;
 // Overview may eagerly admit modest complete point clouds, independently of edge LOD.
 // The cap bounds raw chunk residency even if a future host changes chunk sizing.
 export const GRAPH_RENDER_NODE_OVERVIEW_BYTE_BUDGET = 16 * 1024 * 1024;
@@ -53,6 +56,36 @@ function retain<T>(cache: Map<number, T>, id: number, value: T, limit = RESIDENT
   return value;
 }
 
+function retainChunk<T extends { raw: Uint8Array }>(
+  cache: Map<number, T>, id: number, value: T, byteLimit: number,
+) {
+  cache.delete(id);
+  cache.set(id, value);
+  let bytes = 0;
+  for (const chunk of cache.values()) bytes += chunk.raw.byteLength;
+  while (cache.size > RESIDENT_CHUNK_LIMIT || bytes > byteLimit) {
+    const oldest = cache.keys().next();
+    if (oldest.done) break;
+    const removed = cache.get(oldest.value);
+    cache.delete(oldest.value);
+    bytes -= removed?.raw.byteLength ?? 0;
+  }
+  return value;
+}
+
+interface ScheduledChunkRequest<T> {
+  key: string;
+  version: number;
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(reason: Error): void;
+  run(isCurrent: () => boolean): Promise<T>;
+}
+
+class StaleGraphRenderRequestError extends Error {
+  constructor() { super("graph render viewport request was superseded"); }
+}
+
 export class GraphRenderClient {
   readonly manifest: GraphRenderManifest;
 
@@ -66,8 +99,10 @@ export class GraphRenderClient {
   private pickIndex = new GraphRenderBoundsIndex<GraphRenderNodeChunkDescriptor>([]);
   private readonly nodeResidents = new Map<number, GraphRenderNodeChunk>();
   private readonly edgeResidents = new Map<number, GraphRenderEdgeChunk>();
-  private readonly nodeRequests = new Map<number, Promise<GraphRenderNodeChunk>>();
-  private readonly edgeRequests = new Map<number, Promise<GraphRenderEdgeChunk>>();
+  private readonly chunkRequests = new Map<string, ScheduledChunkRequest<unknown>>();
+  private readonly pendingChunkRequests: ScheduledChunkRequest<unknown>[] = [];
+  private activeChunkRequests = 0;
+  private viewportRequestVersion = 0;
   private readonly resolutions = new Map<number, GraphRenderNodeResolution>();
   private readonly inspections = new Map<number, GraphRenderNodeInspection>();
   private loadVersion = 0;
@@ -133,17 +168,26 @@ export class GraphRenderClient {
         viewport.radius,
         edgeBudget(lod),
       );
-    return { lod, hierarchy, nodeChunks, edgeChunks };
+    return {
+      lod,
+      hierarchy,
+      nodeChunks,
+      edgeChunks: selectBoundedEdgeChunks(
+        edgeChunks,
+        this.detailEdgesFit ? GRAPH_RENDER_DETAIL_CHUNK_BUDGET : edgeBudget(lod),
+      ),
+    };
   }
 
   async loadViewport(viewport: GraphRenderViewport): Promise<GraphRenderFrame> {
     const version = ++this.loadVersion;
+    this.viewportRequestVersion = version;
     const plan = this.planViewport(viewport);
     this.viewport = viewport;
-    const [nodeChunks, edgeChunks] = await Promise.all([
-      Promise.all(plan.nodeChunks.map((descriptor) => this.ensureNodeChunk(descriptor))),
-      Promise.all(plan.edgeChunks.map((descriptor) => this.ensureEdgeChunk(descriptor))),
-    ]);
+    const nodeRequest = Promise.all(plan.nodeChunks.map((descriptor) => this.ensureNodeChunk(descriptor, version)));
+    const edgeRequest = Promise.all(plan.edgeChunks.map((descriptor) => this.ensureEdgeChunk(descriptor, version)));
+    this.discardStaleQueuedRequests(version);
+    const [nodeChunks, edgeChunks] = await Promise.all([nodeRequest, edgeRequest]);
     if (version === this.loadVersion) {
       this.pickIndex = new GraphRenderBoundsIndex(
         plan.nodeChunks.map((value) => ({ bounds: value.bounds, value })),
@@ -157,6 +201,15 @@ export class GraphRenderClient {
       edgeChunks,
       labels: plan.lod === "detail" ? selectFrameLabels(nodeChunks) : [],
     };
+  }
+
+  get activeChunkRequestCount() { return this.activeChunkRequests; }
+  get queuedChunkRequestCount() { return this.pendingChunkRequests.length; }
+  get residentNodeByteCount() {
+    return [...this.nodeResidents.values()].reduce((total, chunk) => total + chunk.raw.byteLength, 0);
+  }
+  get residentEdgeByteCount() {
+    return [...this.edgeResidents.values()].reduce((total, chunk) => total + chunk.raw.byteLength, 0);
   }
 
   pickNodeChunkIds(
@@ -229,49 +282,83 @@ export class GraphRenderClient {
     return isU32(renderId) && renderId < this.manifest.totalNodeCount;
   }
 
-  private ensureNodeChunk(descriptor: GraphRenderNodeChunkDescriptor) {
+  private ensureNodeChunk(descriptor: GraphRenderNodeChunkDescriptor, version: number) {
     const resident = this.nodeResidents.get(descriptor.chunkId);
-    if (resident) return Promise.resolve(retain(this.nodeResidents, descriptor.chunkId, resident));
-    const requested = this.nodeRequests.get(descriptor.chunkId);
-    if (requested) return requested;
-
-    const request = this.transport
-      .nodeChunk(this.manifest.generationId, descriptor.chunkId)
-      .then((raw) => {
-        if (raw.byteLength !== descriptor.byteLen) throw new Error("graph render node chunk byte length mismatch");
-        const chunk = decodeNodeChunk(
-          raw,
-          this.manifest.generationId,
-          descriptor,
-        );
-        return retain(this.nodeResidents, descriptor.chunkId, chunk);
-      })
-      .finally(() => this.nodeRequests.delete(descriptor.chunkId));
-    this.nodeRequests.set(descriptor.chunkId, request);
-    return request;
+    if (resident) return Promise.resolve(retainChunk(this.nodeResidents, descriptor.chunkId, resident, RESIDENT_NODE_BYTE_LIMIT));
+    return this.scheduleChunkRequest(`node:${descriptor.chunkId}`, version, async isCurrent => {
+      const raw = await this.transport.nodeChunk(this.manifest.generationId, descriptor.chunkId);
+      if (!isCurrent()) throw new StaleGraphRenderRequestError();
+      if (raw.byteLength !== descriptor.byteLen) throw new Error("graph render node chunk byte length mismatch");
+      const chunk = decodeNodeChunk(
+        raw,
+        this.manifest.generationId,
+        descriptor,
+      );
+      return retainChunk(this.nodeResidents, descriptor.chunkId, chunk, RESIDENT_NODE_BYTE_LIMIT);
+    });
   }
 
-  private ensureEdgeChunk(descriptor: GraphRenderEdgeChunkDescriptor) {
+  private ensureEdgeChunk(descriptor: GraphRenderEdgeChunkDescriptor, version: number) {
     const resident = this.edgeResidents.get(descriptor.chunkId);
-    if (resident) return Promise.resolve(retain(this.edgeResidents, descriptor.chunkId, resident));
-    const requested = this.edgeRequests.get(descriptor.chunkId);
-    if (requested) return requested;
+    if (resident) return Promise.resolve(retainChunk(this.edgeResidents, descriptor.chunkId, resident, RESIDENT_EDGE_BYTE_LIMIT));
+    return this.scheduleChunkRequest(`edge:${descriptor.chunkId}`, version, async isCurrent => {
+      const raw = await this.transport.edgeChunk(this.manifest.generationId, descriptor.chunkId);
+      if (!isCurrent()) throw new StaleGraphRenderRequestError();
+      if (raw.byteLength !== descriptor.byteLen) throw new Error("graph render edge chunk byte length mismatch");
+      const chunk = decodeEdgeChunk(
+        raw,
+        this.manifest.generationId,
+        descriptor.chunkId,
+        descriptor.segmentCount,
+      );
+      return retainChunk(this.edgeResidents, descriptor.chunkId, chunk, RESIDENT_EDGE_BYTE_LIMIT);
+    });
+  }
 
-    const request = this.transport
-      .edgeChunk(this.manifest.generationId, descriptor.chunkId)
-      .then((raw) => {
-        if (raw.byteLength !== descriptor.byteLen) throw new Error("graph render edge chunk byte length mismatch");
-        const chunk = decodeEdgeChunk(
-          raw,
-          this.manifest.generationId,
-          descriptor.chunkId,
-          descriptor.segmentCount,
-        );
-        return retain(this.edgeResidents, descriptor.chunkId, chunk);
-      })
-      .finally(() => this.edgeRequests.delete(descriptor.chunkId));
-    this.edgeRequests.set(descriptor.chunkId, request);
-    return request;
+  private scheduleChunkRequest<T>(key: string, version: number, run: (isCurrent: () => boolean) => Promise<T>) {
+    const existing = this.chunkRequests.get(key) as ScheduledChunkRequest<T> | undefined;
+    if (existing) {
+      existing.version = version;
+      return existing.promise;
+    }
+    let resolve!: (value: T) => void;
+    let reject!: (reason: Error) => void;
+    const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+    const task: ScheduledChunkRequest<T> = { key, version, promise, resolve, reject, run };
+    this.chunkRequests.set(key, task as ScheduledChunkRequest<unknown>);
+    this.pendingChunkRequests.push(task as ScheduledChunkRequest<unknown>);
+    this.drainChunkRequests();
+    return promise;
+  }
+
+  private discardStaleQueuedRequests(version: number) {
+    for (let index = this.pendingChunkRequests.length - 1; index >= 0; index -= 1) {
+      const task = this.pendingChunkRequests[index];
+      if (task.version === version) continue;
+      this.pendingChunkRequests.splice(index, 1);
+      if (this.chunkRequests.get(task.key) === task) this.chunkRequests.delete(task.key);
+      task.reject(new StaleGraphRenderRequestError());
+    }
+  }
+
+  private drainChunkRequests() {
+    while (this.activeChunkRequests < GRAPH_RENDER_CHUNK_REQUEST_CONCURRENCY
+        && this.pendingChunkRequests.length > 0) {
+      const task = this.pendingChunkRequests.shift()!;
+      if (task.version !== this.viewportRequestVersion) {
+        if (this.chunkRequests.get(task.key) === task) this.chunkRequests.delete(task.key);
+        task.reject(new StaleGraphRenderRequestError());
+        continue;
+      }
+      this.activeChunkRequests += 1;
+      task.run(() => task.version === this.viewportRequestVersion)
+        .then(value => task.resolve(value), error => task.reject(error instanceof Error ? error : new Error(String(error))))
+        .finally(() => {
+          this.activeChunkRequests -= 1;
+          if (this.chunkRequests.get(task.key) === task) this.chunkRequests.delete(task.key);
+          this.drainChunkRequests();
+        });
+    }
   }
 }
 
@@ -282,6 +369,19 @@ function selectBoundedNodeChunks(candidates: GraphRenderNodeChunkDescriptor[]) {
     if (selected.length >= GRAPH_RENDER_DETAIL_CHUNK_BUDGET) break;
     if (chunk.byteLen > GRAPH_RENDER_NODE_OVERVIEW_BYTE_BUDGET
         || bytes + chunk.byteLen > GRAPH_RENDER_NODE_OVERVIEW_BYTE_BUDGET) continue;
+    selected.push(chunk);
+    bytes += chunk.byteLen;
+  }
+  return selected;
+}
+
+function selectBoundedEdgeChunks(candidates: GraphRenderEdgeChunkDescriptor[], chunkBudget: number) {
+  const selected: GraphRenderEdgeChunkDescriptor[] = [];
+  let bytes = 0;
+  for (const chunk of candidates) {
+    if (selected.length >= chunkBudget) break;
+    if (chunk.byteLen > GRAPH_RENDER_DETAIL_EDGE_BYTE_BUDGET
+        || bytes + chunk.byteLen > GRAPH_RENDER_DETAIL_EDGE_BYTE_BUDGET) continue;
     selected.push(chunk);
     bytes += chunk.byteLen;
   }

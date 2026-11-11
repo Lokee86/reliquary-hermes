@@ -101,6 +101,24 @@
   pointer-events: none;
 }
 
+.graph-render-unassigned-legend {
+  position: absolute;
+  z-index: 2;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--reliquary-border);
+  border-radius: 7px;
+  padding: 7px 10px;
+  color: var(--reliquary-muted-foreground);
+  background: color-mix(in srgb, var(--reliquary-popover) 90%, transparent);
+  font-size: 0.72rem;
+  pointer-events: none;
+}
+
+
 .graph-render-telemetry span {
   color: var(--reliquary-muted-foreground);
 }
