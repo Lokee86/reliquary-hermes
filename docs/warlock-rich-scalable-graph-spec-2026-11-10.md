@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-10
 
-**Status:** Implemented and verified locally in Hermes Web and Desktop. The verification guide records the acceptance and benchmark evidence.
+**Historical status (2026-11-10):** Reported implemented/verified locally. **2026-11-11 correction:** real 2,191-node REL testing disproved global-graph visual/interaction parity. The 256-node opening-LOD gate hides individual Memories, and grid-based node positions form visible layers; completion is **reopened** under [P0 global-graph remediation](warlock-global-graph-layout-overview-remediation-spec-2026-11-11.md). Previous smoke/benchmark evidence does not close the correction.
 
 **Owner:** Reliquary Hermes plugin's existing graph rendering subsystem, with reusable design/contract anchored in Warlock.
 
