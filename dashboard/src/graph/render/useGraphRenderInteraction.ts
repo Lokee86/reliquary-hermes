@@ -49,7 +49,9 @@ export function useGraphRenderInteraction({
       if (version !== requestVersion.current) return;
       setFrame(next);
       setError(null);
-      onReady.current?.();
+      // Empty graphs have no drawable node object to signal readiness. For a
+      // populated graph, the first node chunk reports readiness after render.
+      if (client.manifest.totalNodeCount === 0) onReady.current?.();
     } catch (reason) {
       if (version === requestVersion.current) setError(String(reason));
     }

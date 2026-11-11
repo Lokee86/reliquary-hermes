@@ -16,6 +16,7 @@ import { useGraphRenderInteraction, type GraphRenderSceneProps as InteractionPro
 import { GraphCameraBridge } from "./GraphCameraBridge";
 import { GraphAnimationController } from "./GraphAnimationController";
 import { CameraCenterPseudoNode } from "./CameraCenterPseudoNode";
+import { createDrawReadyReporter } from "./drawReadiness";
 import type { GraphPresentation } from "./presentation";
 import type { GraphRenderManifest, GraphRenderNodeInspection, GraphRenderVec3 } from "./types";
 import "./graph-render-scene.css";
@@ -32,6 +33,7 @@ type SceneProps = ReturnType<typeof useGraphRenderInteraction> & {
   presentation: GraphPresentation;
   tooltipRef: RefObject<HTMLDivElement | null>;
   telemetryRef: RefObject<HTMLDivElement | null>;
+  onFrameReady?: () => void;
 };
 
 // Warlock GraphScene.tsx at d9e38cb. Only node metadata and its size come from
@@ -73,11 +75,15 @@ function TooltipAnchor({ node, tooltipRef }: {
 function Scene({
   client, frame, center, extent, selectedRenderId, hoveredRenderId, hoverNode, selectedTitle,
   neighborhood, focusRequest, resetVersion, pick, publishHover, loadViewport, tooltipRef, telemetryRef, presentation,
+  onFrameReady,
 }: SceneProps) {
   const controlsRef = useRef<TrackballControlsImpl | null>(null);
   const animationActivity = useRef(false);
   const pointsByChunk = useRef(new Map<number, THREE.Points | THREE.InstancedMesh>());
   const drawnChunks = useRef(new Map<number, number>());
+  const readyCallback = useRef(onFrameReady);
+  readyCallback.current = onFrameReady;
+  const reportDrawReady = useRef(createDrawReadyReporter(() => readyCallback.current?.()));
   const { camera } = useThree();
   useFrame(() => {
     drawnChunks.current.clear();
@@ -87,11 +93,13 @@ function Scene({
   const recordDrawnChunk = useCallback((chunkId: number, nodeCount: number) => {
     drawnChunks.current.set(chunkId, nodeCount);
     const telemetry = telemetryRef.current;
-    if (!telemetry) return;
-    telemetry.setAttribute("data-drawn-node-chunks", String(drawnChunks.current.size));
-    telemetry.setAttribute("data-drawn-node-count", String(
-      [...drawnChunks.current.values()].reduce((total, count) => total + count, 0),
-    ));
+    if (telemetry) {
+      telemetry.setAttribute("data-drawn-node-chunks", String(drawnChunks.current.size));
+      telemetry.setAttribute("data-drawn-node-count", String(
+        [...drawnChunks.current.values()].reduce((total, count) => total + count, 0),
+      ));
+    }
+    reportDrawReady.current();
   }, [telemetryRef]);
   const registerChunk = useCallback((chunkId: number, pickable: THREE.Points | THREE.InstancedMesh | null) => {
     if (pickable) pointsByChunk.current.set(chunkId, pickable);
@@ -227,7 +235,8 @@ function GraphScene(props: GraphRenderSceneProps) {
         }}
       >
         <Scene {...interaction} client={client} center={center} extent={extent}
-          resetVersion={resetVersion} tooltipRef={tooltipRef} telemetryRef={telemetryRef} presentation={props.presentation} />
+          resetVersion={resetVersion} tooltipRef={tooltipRef} telemetryRef={telemetryRef}
+          onFrameReady={props.onFrameReady} presentation={props.presentation} />
       </Canvas>
       {interaction.hoverNode && <Tooltip node={interaction.hoverNode} tooltipRef={tooltipRef} />}
       <button className="graph-render-reset" type="button" onClick={() => setResetVersion((value) => value + 1)}>

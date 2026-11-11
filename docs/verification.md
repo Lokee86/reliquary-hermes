@@ -620,6 +620,16 @@ The five installed files and the running Web route’s JS/CSS match these exact 
 
 Temporary fixture generators, copied RELs, browser profiles, caches and the three merged execution worktrees/branches were removed after retaining the compact verification receipt and representative screenshots. No pre-existing worktree, unrelated work, configuration or live REL/PHY is part of that cleanup.
 
+## Global graph overview remediation candidate (2026-11-11)
+
+The client now treats node and edge LOD independently. `GraphRenderClient` admits all node chunks at every camera zoom when both the 32-chunk and 16 MiB encoded-byte budgets fit; for larger node sets, its bounded overview sample spreads selection across the global spatial buckets and applies the same chunk and byte limits. Detail edges are independently admitted up to 32 chunks / 16 MiB, otherwise the existing overview/intermediate edge LOD applies. The client bounds chunk fetch concurrency at eight, drops queued requests from obsolete viewport generations, aborts stale in-flight requests, deduplicates shared chunk work, and caps decoded node and edge caches separately at 64 chunks / 32 MiB. Focused client regressions cover full-fit versus overflow planning, separated spatial regions under a byte cap, stale viewport requests, cache eviction and resident byte accounting.
+
+The layout source trace starts with the frozen Warlock `clusteredLayout.ts` and `forceLayout.ts` weighted local/group placement behavior. The bounded Rust translation enters through `build_graph_render_layout_with_topology` and separates group-center and local-member passes in `host/src/graph_render_layout.rs`; spatial lookup limits candidate force work rather than imposing grid positions. This trace documents the implementation path; real-corpus relation-sensitive visual comparison remains part of pending acceptance.
+
+Canvas draw evidence is exposed as container data attributes: `data-drawn-node-count` and `data-drawn-node-chunks` are populated from node object `onAfterRender` callbacks; resident and planned counts remain separate attributes. The graph-ready status now waits for the first node draw signal (or the loaded empty-graph case), rather than treating decoded frame data as proof of rendered nodes. `data-edge-lod` reports the edge LODs actually included in the active frame. These counters indicate GPU-submitted chunk instances/points, not pixel-level visibility.
+
+Candidate status: local dashboard typecheck, 26 Node tests and bundle build pass on the UI worktree. Architecture guard: 23 production packages and 76 production dependency edges. The full Python suite last ran 379 passed, 26 skipped and one unrelated capture test skipped by an installed-Hermes mismatch; it is not a graph-specific acceptance result. A same-corpus reference harness recorded 2,191 nodes, 19,392 edges and 12 communities with no browser errors on original layout, original scene and port surfaces. That harness did not record the new first-frame draw attributes or exercise controls. The actual 28-day REL browser frame count and direct visual signoff remain pending; no deployment or completion claim follows from fixture counts or build checks.
+
 ## Related docs
 
 - [HU09 native file-dialog specification](hu09-native-file-dialogs-onboarding-spec-2026-11-09.md)

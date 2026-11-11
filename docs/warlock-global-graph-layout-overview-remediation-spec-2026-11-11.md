@@ -1,9 +1,17 @@
 # P0 correction: Restore Warlock's global graph, not a tiered territory browser
 
 **Date:** 2026-11-11  
-**Status:** Approved implementation target / not yet implemented  
+**Status:** Implemented candidate; visual acceptance pending
 **Repository:** `C:\!bin\workspace\reliquary-hermes`  
 **Scope:** Hermes Knowledge graph renderer (Rust layout + shared Web/Desktop React client); not Reliquary storage or community detection.
+
+## Purpose
+
+Define the remediation and acceptance criteria for restoring a continuously visible, relationship-laid-out Memory graph at the Knowledge overview while retaining bounded retrieval and rendering.
+
+## Overview
+
+The client now admits complete node residency when chunk count and byte limits fit, otherwise keeps a spatially distributed bounded sample visible. Node and edge LOD are evaluated independently, and unassigned population remains a truthful count rather than a synthetic shell. This is an implementation candidate only: actual REL browser review and visual signoff remain open, especially for spatial layout and camera framing.
 
 ## Required outcome
 
@@ -98,3 +106,15 @@ The November 11 `RELCMP01` fix is correct and must be preserved. The installed h
 ## Handoff instruction
 
 Repair the **installed Hermes graph** using this spec, original Warlock source and the 28-day active REL. First make all 2,191 nodes visible at overview; then replace the visibly layered grid with bounded relation-directed placement and remove compulsory community drill-down. Preserve the existing binary renderer and working community decoder. Do not report completion without live browser screenshots and initial-frame count verification on the actual REL.
+
+## Related docs
+
+- [Verification record](verification.md)
+- [Local service graph operation](local-service.md#graph-rendering-and-bounds)
+- [Original Warlock graph audit](warlock-graph-original-vs-scalable-audit-2026-11-10.md)
+- [Rich scalable graph requirements](warlock-rich-scalable-graph-spec-2026-11-10.md)
+- [Original React component port](warlock-original-react-graph-component-hard-cut-spec-2026-11-10.md)
+
+## Notes
+
+Passing focused client tests or matching fixture counts does not satisfy the real-browser visual gate. Keep the status at “Implemented candidate; visual acceptance pending” until direct browser review of the actual 28-day REL records first-frame drawn counts and the required visual comparison.
