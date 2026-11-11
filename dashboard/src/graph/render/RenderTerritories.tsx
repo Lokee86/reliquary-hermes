@@ -55,9 +55,7 @@ function TerritoryLabel({ territory, isolated }: { territory: GraphTerritory; is
   useEffect(() => () => label?.texture.dispose(), [label]);
   if (!label) return null;
   const originalHeight = Math.max(12, Math.min(28, territory.radius * 0.16));
-  // Keep compact Rust layouts legible, and keep labels inside the initial frame
-  // when a single sphere fills it. Multiple real communities retain Warlock placement.
-  const worldHeight = Math.min(originalHeight, territory.radius * 0.16);
+  const worldHeight = originalHeight;
   const labelY = territory.radius * 0.82 + worldHeight;
   const labelZ = territory.radius * (isolated ? 0 : 0.62);
   return (
