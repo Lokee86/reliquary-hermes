@@ -110,6 +110,9 @@ from hermes_cli.dashboard_auth.native_http import HEADER
 from hermes_state import SessionDB
 
 fixture = json.load(sys.stdin)
+sys.path[:0] = [fixture["tests_root"], fixture["source_root"]]
+from test_hp04_host import TEXT, _loopback_model, _processing_config
+
 native_mutations = fixture["native_mutations"]
 home = Path(os.environ["HERMES_HOME"]).resolve()
 homes = {"default": home, "secondary": home / "profiles/secondary"}
@@ -150,6 +153,7 @@ if history_supported:
             db.append_message(session_id, "user", "Saved synthetic preference " + history_secret)
             db.append_message(session_id, "assistant", "Authorization: Bearer " + history_secret)
             history_rows[name] = db.get_messages(session_id)
+            TEXT.update({row["message_uid"]: row["content"] for row in history_rows[name]})
 auth = {web._SESSION_HEADER_NAME: web._SESSION_TOKEN}
 same_origin = {**auth, "Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
 cross_origin = {**auth, "Origin": "http://other.test", "Sec-Fetch-Site": "cross-site"}
@@ -159,7 +163,13 @@ def reply(response):
     return response.json()
 
 with ExitStack() as stack:
+    model_url = stack.enter_context(_loopback_model())
     stack.callback(plugins._reset_plugin_managers_for_tests)
+    # Root must process the first history window before the following manual window is delivered.
+    for selected in homes.values():
+        processing_home = selected / "reliquary"
+        processing_home.mkdir(parents=True, exist_ok=True)
+        _processing_config(Path(fixture["cli"]), processing_home, model_url)
     client = stack.enter_context(TestClient(loopback))
     for profile, selected in homes.items():
         params = {} if profile == "default" else {"profile": profile}
@@ -372,7 +382,7 @@ with ExitStack() as stack:
             deadline = monotonic() + 20
             while monotonic() < deadline:
                 result = reply(client.post(sources_api + "/status", headers=grant(profile), params=params, json=check))
-                if result["sessions"][0]["status"] in {"staged", "processing", "complete"}:
+                if result["sessions"][0]["status"] == "complete":
                     break
                 sleep(0.1)
             assert result["sessions"][0]["status"] in {"staged", "processing", "complete"}, result
@@ -399,7 +409,10 @@ with ExitStack() as stack:
                                     stdout=output, stderr=subprocess.STDOUT,
                                     input=json.dumps({"owners": owners, "request": _request(),
                                                       "native_mutations": native_mutations,
-                                                      "community_seeded": bool(community_rel)}), timeout=150)
+                                                      "community_seeded": bool(community_rel),
+                                                      "tests_root": str(Path(__file__).parent.resolve()),
+                                                      "source_root": str(Path(__file__).parent.parent / "src"),
+                                                      "cli": str(cli.resolve())}), timeout=150)
         assert result.returncode == 0, log.read_text(encoding="utf-8", errors="replace")
     finally:
         for home in homes.values():

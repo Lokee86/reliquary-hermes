@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { exerciseKnowledge, verifyLocalFixture } from "../../dashboard/tests/knowledge-live.mjs";
+import { exerciseKnowledge, verifyLocalFixture, verifyOwnerScope } from "../../dashboard/tests/knowledge-live.mjs";
 
 const [fixturePath] = process.argv.slice(2);
 assert(fixturePath, "Pass an isolated Desktop smoke profile fixture.");
@@ -113,11 +113,10 @@ try {
 }
 
 async function exerciseGraphSelection(page, fixture, surface) {
-  const app = page.locator(".rly-app");
+  const app = page.getByRole("region", { name: "Reliquary", exact: true });
   const sections = app.getByRole("navigation", { name: "Reliquary sections" });
   await sections.getByRole("button", { name: "Knowledge", exact: true }).click();
-  await app.getByRole("complementary", { name: "Owner scope" })
-    .getByRole("button", { name: /^REL\b/ }).click();
+  await verifyOwnerScope(app, fixture.ownerIds.main, "REL");
   await app.getByRole("button", { name: "Graph", exact: true }).click();
   const graph = app.locator(".knowledge-graph-wrap");
   await graph.locator('[data-graph-ready="true"]').waitFor({ timeout: 40000 });
@@ -142,7 +141,7 @@ async function exerciseGraphSelection(page, fixture, surface) {
     for (const fx of xSamples) {
       await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
       try {
-        await inspector.getByText("Lifecycle", { exact: true }).waitFor({ timeout: fixture.community ? 250 : 500 });
+        await inspector.getByText("State", { exact: true }).waitFor({ timeout: fixture.community ? 250 : 500 });
         selected = true;
         break;
       } catch { /* Try the next visible point location. */ }
@@ -154,5 +153,5 @@ async function exerciseGraphSelection(page, fixture, surface) {
   await app.locator(".knowledge-memory-row[aria-pressed='true']").waitFor({ timeout: 30000 });
   await app.getByRole("button", { name: "Graph", exact: true }).click();
   await graph.locator('[data-graph-ready="true"]').waitFor({ timeout: 40000 });
-  await inspector.getByText("Lifecycle", { exact: true }).waitFor({ timeout: 30000 });
+  await inspector.getByText("State", { exact: true }).waitFor({ timeout: 30000 });
 }

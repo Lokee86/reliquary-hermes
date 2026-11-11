@@ -1,9 +1,13 @@
 # Warlock UI — consolidated integration and installation specification
 
 **Date:** 2026-11-10
-**Status:** Integration-ready plan; **no merges, deployment, resets, or branch deletion performed**.
+**Status:** Source integration verified; deployment and cleanup follow the accepted-source merge into main. See [verification](verification.md#consolidated-warlock-ui-acceptance--november-10-2026).
 **Repository:** `C:\!bin\workspace\reliquary-hermes`.
+## Purpose
+
 **Goal:** One tested, committed, source-derived Warlock Knowledge interface in `main`, with original graph appearance, bounded Rust renderer, non-graph Knowledge shell, Inspector, Setup and Sources; the same verified build installed in Hermes Web and Desktop.
+
+## Overview
 
 This is an **execution/integration plan**, not a new UI design. The product and implementation specifications remain [full UI hard cut](warlock-ui-hard-cut-rebuild-spec-2026-11-10.md) and [original React graph component port](warlock-original-react-graph-component-hard-cut-spec-2026-11-10.md), with the [rich/scalable graph requirements](warlock-rich-scalable-graph-spec-2026-11-10.md). Where historical source references differ, the original React checkout at `d9e38cb9` controls appearance and the bounded Rust implementation controls data scaling.
 
@@ -70,6 +74,14 @@ The installed Web JS, Web CSS and Desktop module matched the files from `C:\!bin
 
 Record the integration branch and final `main` commit, each input branch tip, dirty-worktree preservation result, semantic conflict decisions, missing/retained features, exact test pass/skip counts, screenshot evidence, Root dependency status, old code deletion and installed byte hashes. **A branch being merged does not itself establish acceptance.** The goal is one verifiably coherent, deployed, Git-backed UI implementation, not additional specification branches.
 
-## Scope boundaries
+## Related docs
+
+- [Canonical UI specification](warlock-ui-hard-cut-rebuild-spec-2026-11-10.md)
+- [Original graph component specification](warlock-original-react-graph-component-hard-cut-spec-2026-11-10.md)
+- [Integration reconciliation](warlock-ui-integration-reconciliation-2026-11-10.md)
+
+## Notes
+
+### Scope boundaries
 
 This plan consolidates **the current Warlock UI work** only. It does not authorize rewriting REL/PHY storage, changing source-import policy, adding unrelated UI features, merging all historical HU05/HU08 branches, pushing to remote, or pruning worktrees without verifying their unique work. Do not automatically start another UI redesign or change graph visual components beyond a specific parity defect.

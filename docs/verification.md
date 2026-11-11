@@ -361,6 +361,8 @@ Window testing stopped before live Save As selection, separate creation confirma
 
 ## Warlock Knowledge verification
 
+The [non-graph source parity ledger](warlock-nongraph-ui-parity.md) records the original component and CSS inventory, host adaptations and verification of the shared Knowledge, Setup and Sources presentation.
+
 The source inventory is Warlock `cf41c6690e089cab4a00950d6048ad6828eaeab7` and Hermes baseline `7ccc429e51e37bb731313dc6184f426f527d34ce`. The Warlock worktree had local Cargo manifest and lockfile edits. The port used the tracked source at the frozen revision and pinned the renderer dependencies in `dashboard/package-lock.json`. The public Root graph source landed at `fa574eec`.
 
 The Web and Desktop bundles share the React UI, renderer and host theme mapping. The live runs used Chrome with Hermes Web SDK 1.1.0 and Electron 44.9.3 with the Hermes Desktop byte bridge on `458829681db8761e50b8242aa034d23ae9bcdcd5`. The Web smoke checks the authenticated chunk media type and length, rejects forged owner and principal selectors and stale generation and render IDs, and checks that the current chunk remains usable. The Desktop canvas uses the same binary decoder through the SDK's authenticated byte IPC. The final Desktop smoke exercised native Save As, separate creation confirmation and native owner selection before connecting. Stock Desktop exposes List and the inspector with an explanation of the required graph capability.
@@ -400,7 +402,7 @@ The Warlock September 28 baseline assembled whole-graph JavaScript objects and u
 
 ## Rich Warlock graph verification
 
-The rich renderer requires Reliquary Root at `fa574eec` with the [filtered semantic graph projection patch](../patches/reliquary-fa574eec-filtered-graph-projection.patch) applied. The checkout layout stays the same. The Hermes host resolves `../../Reliquary` from its Cargo manifest. The patch adds authorized, exact-cut reads and reuses the List predicate for title or body search, community, lifecycle, category and Memory type.
+The rich renderer requires the committed Reliquary Root API at `538d22bdbe5040e3ba7fe69d31677425dcb7fc7e`. The Hermes host keeps its canonical `../../Reliquary` path dependency; a clean reproduction checks out that revision in the sibling. The public API provides authorized exact-cut projection and reuses the List predicate for title or body search, community, lifecycle, category and Memory type. The former migration patch is superseded by this committed API and is retained only in Git history.
 
 Run the existing Rust, Python and dashboard suites from the integration checkout. Run the Root test `hp02_memory_graph_expands_active_neighbors_at_one_cut` in `oc06_inspection` to check List parity, induced relationships, early stop and stale cuts. The Web and Electron probes use independent copies of the November 8 REL and PHY. The active-only graph should show 11 REL Memories and four PHY Memories. Turning on Show non-active memories should show 13 REL Memories. Record the input and browsed file hashes separately for each host.
 
@@ -488,6 +490,67 @@ Both release-gated tiers stayed below the time and memory ceilings. The million-
 | --- | ---: | ---: |
 | 100k / 1M | 277.8 / 270.9 ms | 9.91 / 9.77 MB |
 | 1M / 10M | 319.4 / 326.4 ms | 10.66 / 16.80 MB |
+
+## Consolidated Warlock UI acceptance — November 10, 2026
+
+The integration reconciles graph input `05d8749`, non-graph input `4bf34e4`, current main `685b0df`, and the exact 70-path dirty snapshot `9327601926d64524e319f875d553528f22bd2970`. The [reconciliation matrix](warlock-ui-integration-reconciliation-2026-11-10.md) records every dirty input and its disposition. The original checkout and index stayed untouched during assembly. Generated Web/Desktop files came from one canonical build, reproduced byte for byte.
+
+The shared Knowledge surface has one navigation, one Graph/List switch and one inspector. It retains the original non-graph presentation and the original React graph renderer on the bounded Rust transport. The obsolete GraphSelectionInspector, duplicate owner rail and tooltip CSS are absent; source searches found no Tauri imports or second renderer. The old Root migration patch is superseded by committed Root `538d22bd`.
+
+### Combined checks
+
+| Check | Result |
+| --- | --- |
+| Dashboard check | TypeScript passed; 4 Node tests passed; Web and Desktop built together |
+| Reproducible build | All five UI artifacts reproduced byte for byte |
+| Locked offline Rust host | 95 passed, 1 ignored scale test; formatting passed |
+| Root exact-cut projection regression | 1 passed; 660 Root compile inputs match the committed deployed source |
+| Stable HP01 Python pin | 391 passed, 14 optional skips, 1 HU08-specific deselection |
+| Separate HU08 six-module run | 23 passed, 1 optional stock-checkout skip |
+| Focused replay/manual/native cases | 24 passed, including shutdown retries and mismatched receipt/owner/digest denial |
+| Architecture and documentation | 23 production packages / 76 edges; service docs and Git whitespace passed |
+
+The stable suite used audited Hermes `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19` first on PYTHONPATH. The separate HU08 interpreter used `458829681db8761e50b8242aa034d23ae9bcdcd5` and its history-export v2 contract. Python ran with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`, `PYTHONDONTWRITEBYTECODE=1`, `python -B -m pytest -q`, and worktree-local `.pytest/_tmp`. Fresh host binary `C7058D9C...511909` and the existing tested CLI were used in the final process checks. No test assertion or timeout was relaxed.
+
+The 14 stable-pin skips were 9 cases requiring the separate HU08 pin, 2 hosted stock/native optional profiles, and 3 optional HU04 installed/live probes. The HU08-specific deselection and corresponding HU08/native cases passed in the separate run. The stock-checkout parameter remained explicitly skipped. Independently, actual hosted Web and Electron acceptance used copied owners rather than the optional historical HU04 fixture.
+
+### Visual and interaction evidence
+
+Hosted Chrome, Electron Desktop, and the separate Desktop community fixture passed both owner canvases, authenticated binary reads and denials, search, inspector/history/provenance, Sources browsing, scope switching and Graph/List selection continuity. Read-only reference and copied owners retained their SHA-256 values. A separate fresh-owner Web test passed creation, association link/unlink, immutable replacement and terminal retirement; its REL changed intentionally and its PHY did not.
+
+Native Chrome used NVIDIA GeForce RTX 3060 Laptop GPU / Direct3D11. It verified hover title and short ID, pointer/keyboard selection, neighborhood, settled right-pan and Reset. The 1440×920 graph-source comparison used the same 11-node corpus and exact 663×596 canvas bounds for selected and unselected reset states. Only the visual fixture overrode candidate sizing; no tracked CSS changed. Long-label overlap appears in both reset baselines and is inherited graph behavior. Candidate natural allocation is narrower because it now contains the required three-panel shell.
+
+At 600 and 390 pixels there was no horizontal overflow. At 390, actual wheel scrolling exposed the inspector and its State label passed a hit-test inside every clipping ancestor. Navigation, center and inspector retained independent scrolling. Electron captures verified the responsive composition. Software-rendered smoke results are not GPU performance evidence.
+
+### Renderer characterization
+
+All 27 production renderer source files matched the prebuilt release harness. Each row below is one fresh serial baseline/candidate pair; these are not statistical medians. The timer covers renderer preparation, not Root mounting, network transfer or GPU work.
+
+| Nodes / input edges | Baseline / candidate prepare | Baseline / candidate peak working set |
+| --- | --- | --- |
+| 25k / 2.5M | 1,619 / 3,438 ms | 257,609,728 / 377,339,904 bytes |
+| 100k / 1M | 514 / 830 ms | 149,520,384 / 195,043,328 bytes |
+| 1M / 10M | 4,706 / 7,817 ms | 1,447,067,648 / 1,910,575,104 bytes |
+
+The million-node result was 1.66× baseline time and 1.32× baseline memory, below the 2.5× / 2× regression limits and the 30-second preparation ceiling. It packed 32,129,472 chunk bytes and a 26,562-byte manifest.
+
+### Sources replay correction
+
+Combined verification exposed a completed-import race: the manual worker could detach and stop its host between owner authorization and the saved receipt read. The manual-delivery seam now reconnects for completed local receipts and retries bounded transient shutdown/transport failures. Exact owner, snapshot digest and receipt checks remain mandatory; mismatches and pending work do not gain a new import path. The regression first failed on the prior implementation and passed after the fix, with no added queue row.
+
+The hosted test fixture now configures its existing deterministic loopback processor before setup validation. Root must process each prior historical window before accepting the following one. The poll waits for Complete before exercising the unchanged already-imported assertion, with the original 20-second deadline and authorization assertions preserved. No production processing configuration was modified.
+
+### Accepted UI artifacts
+
+The plugin manifest remains version 0.1.0; the integration Git commit identifies the release. Deployment receipt and final main revision are recorded after installation.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Web JavaScript | `cc1c060fa70041be0ac997d3aeb2a22b7fd266b0ffa845a041d8d5396610531e` |
+| Web stylesheet | `04f5ef5cdd1d27850f8e657478722b54619acbe936b72bdd434a3e935e98eb64` |
+| Web legal notice | `8e8d25fd9cf497a25efb043111b56df8b0278ea2b38a5e7b2cd200cbc3a443d7` |
+| Desktop module | `72e7e1adf4f9d62327d1d6d5072f70613eaf793c7e708063ebbf629583ad543f` |
+| Desktop legal notice | `58a6ef9bd0ac264cc1c582e4bc4200f1d70394ff3cddaebf2b78d809ac8b177e` |
 
 ## Related docs
 

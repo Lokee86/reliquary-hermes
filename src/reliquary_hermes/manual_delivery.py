@@ -1,6 +1,7 @@
 """Explicit selected-session delivery through the signed host source lane."""
 
 from threading import Lock
+from time import sleep
 
 from .client import HostUnavailable
 from .outbox import SourceOutbox, SourceOutboxError
@@ -11,6 +12,10 @@ from .validation import ContractError, identifier, require, sequence
 
 _MAX_IMPORTS = 16
 _MAX_WORKERS = 8
+_TRANSIENT_HOST_ERRORS = frozenset({
+    "host_closing", "host_unavailable", "invalid_host_response", "host_connection_refused",
+    "host_timeout", "host_incomplete_response",
+})
 _WORKERS = {}
 _WORKERS_LOCK = Lock()
 
@@ -42,13 +47,26 @@ def _remote_status(client, session_id, *, reconnect=False):
     try:
         return client.read_source_status(session_id)
     except HostUnavailable:
-        if reconnect:
+        if not reconnect:
+            return None
+
+    # Manual workers may detach immediately after their final receipt. Reconnect
+    # with the profile's signed dashboard handshake, retrying shutdown races only.
+    for attempt in range(4):
+        try:
+            client.connect_dashboard(None)
+        except HostUnavailable as error:
+            if str(error) not in _TRANSIENT_HOST_ERRORS:
+                return None
+        else:
             try:
-                client.connect_dashboard(None)
                 return client.read_source_status(session_id)
-            except HostUnavailable:
-                pass
-        return None
+            except HostUnavailable as error:
+                if str(error) not in _TRANSIENT_HOST_ERRORS:
+                    return None
+        if attempt < 3:
+            sleep(0.15 * (attempt + 1))
+    return None
 
 
 def queue_imports(settings, client, owner_id: str,
@@ -71,7 +89,7 @@ def queue_imports(settings, client, owner_id: str,
             require(all(window.profile_id == settings.profile_id for window in batch),
                     "source_scope_mismatch")
             prior = outbox.manual_status(session)
-            remote = _remote_status(client, session)
+            remote = _remote_status(client, session, reconnect=prior is not None and prior["receipt"] is not None)
             if remote is not None and remote["state"] == "tombstoned":
                 results[session] = _result(session, "unavailable", "source_terminal")
                 continue

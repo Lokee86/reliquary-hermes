@@ -227,3 +227,142 @@ def test_missing_native_history_is_unavailable_even_with_a_local_receipt(tmp_pat
     assert result[selected.session_id]["reason"] == "source_status_unavailable"
     assert feed.manual_status(selected.session_id)["receipt"] == RECEIPT
     assert not feed.has_pending_manual()
+
+
+@pytest.mark.parametrize("initial_error", ["host_unavailable", "host_connection_refused", "host_incomplete_response"])
+def test_completed_manual_receipt_reconnects_before_idempotent_replay(tmp_path, monkeypatch, initial_error):
+    settings = SimpleNamespace(state_dir=tmp_path, profile_id="profile-a", principal_id="principal-a")
+    selected = snapshot("history-selected")
+    feed = queue(tmp_path)
+    feed.enqueue_manual(selected, owner_id="rel-a")
+    assert feed.acknowledge(feed.next_job(manual_only=True), RECEIPT)
+
+    class DetachedClient:
+        def __init__(self):
+            self.status_reads = 0
+            self.reconnects = []
+
+        def read_source_status(self, session_id):
+            assert session_id == selected.session_id
+            self.status_reads += 1
+            if self.status_reads == 1:
+                raise manual_delivery.HostUnavailable(initial_error)
+            return {"state": "complete", "receipt": RECEIPT, "owner_id": "rel-a",
+                    "snapshot_digest": selected.snapshot_digest}
+
+        def connect_dashboard(self, session_id):
+            self.reconnects.append(session_id)
+            assert session_id is None
+
+    client = DetachedClient()
+    monkeypatch.setattr(manual_delivery, "ensure_manual_worker", lambda *_: None)
+    result = manual_delivery.queue_imports(settings, client, "rel-a", [selected])
+
+    assert result[selected.session_id]["status"] == "already_imported"
+    assert client.reconnects == [None] and client.status_reads == 2
+    assert feed.manual_status(selected.session_id)["receipt"] == RECEIPT
+    assert not feed.has_pending_manual()
+    assert feed.next_job() is None
+    with closing(sqlite3.connect(tmp_path / "source-outbox-v1.sqlite3")) as db:
+        assert db.execute("SELECT COUNT(*) FROM source_jobs").fetchone() == (1,)
+
+
+def test_completed_manual_receipt_retries_host_closing_during_reconnect(tmp_path, monkeypatch):
+    settings = SimpleNamespace(state_dir=tmp_path, profile_id="profile-a", principal_id="principal-a")
+    selected = snapshot("history-selected")
+    feed = queue(tmp_path)
+    feed.enqueue_manual(selected, owner_id="rel-a")
+    assert feed.acknowledge(feed.next_job(manual_only=True), RECEIPT)
+
+    class ClosingClient:
+        def __init__(self):
+            self.status_reads = 0
+            self.reconnects = 0
+
+        def read_source_status(self, session_id):
+            assert session_id == selected.session_id
+            self.status_reads += 1
+            if self.status_reads == 1:
+                raise manual_delivery.HostUnavailable("host_unavailable")
+            if self.status_reads == 2:
+                raise manual_delivery.HostUnavailable("host_closing")
+            return {"state": "complete", "receipt": RECEIPT, "owner_id": "rel-a",
+                    "snapshot_digest": selected.snapshot_digest}
+
+        def connect_dashboard(self, session_id):
+            assert session_id is None
+            self.reconnects += 1
+            if self.reconnects == 1:
+                raise manual_delivery.HostUnavailable("host_closing")
+
+    client = ClosingClient()
+    monkeypatch.setattr(manual_delivery, "ensure_manual_worker", lambda *_: None)
+    result = manual_delivery.queue_imports(settings, client, "rel-a", [selected])
+
+    assert result[selected.session_id]["status"] == "already_imported"
+    assert client.reconnects == 3 and client.status_reads == 3
+    assert feed.manual_status(selected.session_id)["receipt"] == RECEIPT
+    assert not feed.has_pending_manual()
+    assert feed.next_job() is None
+    with closing(sqlite3.connect(tmp_path / "source-outbox-v1.sqlite3")) as db:
+        assert db.execute("SELECT COUNT(*) FROM source_jobs").fetchone() == (1,)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("owner_id", "rel-b"),
+    ("snapshot_digest", "b" * 64),
+    ("receipt", "b" * 64),
+])
+def test_completed_manual_receipt_rejects_mismatched_remote_identity(tmp_path, monkeypatch, field, value):
+    settings = SimpleNamespace(state_dir=tmp_path, profile_id="profile-a", principal_id="principal-a")
+    selected = snapshot("history-selected")
+    feed = queue(tmp_path)
+    feed.enqueue_manual(selected, owner_id="rel-a")
+    assert feed.acknowledge(feed.next_job(manual_only=True), RECEIPT)
+    remote = {"state": "complete", "receipt": RECEIPT, "owner_id": "rel-a",
+              "snapshot_digest": selected.snapshot_digest}
+    remote[field] = value
+    reads = []
+
+    class MismatchedClient:
+        def read_source_status(self, session_id):
+            reads.append(session_id)
+            return remote
+
+        def connect_dashboard(self, session_id):
+            raise AssertionError("matching signed status should not need reconnect")
+
+    monkeypatch.setattr(manual_delivery, "ensure_manual_worker", lambda *_: None)
+    result = manual_delivery.queue_imports(settings, MismatchedClient(), "rel-a", [selected])
+
+    assert result[selected.session_id]["status"] == "unavailable"
+    assert result[selected.session_id]["reason"] == "source_receipt_mismatch"
+    assert reads == [selected.session_id]
+    assert feed.manual_status(selected.session_id)["receipt"] == RECEIPT
+    assert not feed.has_pending_manual()
+    assert feed.next_job() is None
+    with closing(sqlite3.connect(tmp_path / "source-outbox-v1.sqlite3")) as db:
+        assert db.execute("SELECT COUNT(*) FROM source_jobs").fetchone() == (1,)
+
+
+def test_pending_manual_queue_does_not_reconnect_on_host_unavailable(tmp_path, monkeypatch):
+    settings = SimpleNamespace(state_dir=tmp_path, profile_id="profile-a", principal_id="principal-a")
+    selected = snapshot("history-pending")
+    feed = queue(tmp_path)
+    feed.enqueue_manual(selected, owner_id="rel-a")
+
+    class DetachedClient:
+        def read_source_status(self, session_id):
+            assert session_id == selected.session_id
+            raise manual_delivery.HostUnavailable("host_unavailable")
+
+        def connect_dashboard(self, session_id):
+            raise AssertionError("pending work must not reconnect through queue replay")
+
+    monkeypatch.setattr(manual_delivery, "ensure_manual_worker", lambda *_: None)
+    result = manual_delivery.queue_imports(settings, DetachedClient(), "rel-a", [selected])
+
+    assert result[selected.session_id]["status"] == "queued"
+    assert feed.manual_status(selected.session_id)["receipt"] is None
+    assert feed.has_pending_manual()
+    assert feed.next_job(manual_only=True).snapshot == selected
