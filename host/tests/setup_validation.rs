@@ -1,5 +1,5 @@
 use reliquary_memory::{
-    CredentialId, Gateway, OwnerScope, Phylactery, Rel, ReliquaryConfig, SecretString,
+    Gateway, OwnerScope, Phylactery, Rel,
 };
 use serde_json::{Value, json};
 use std::{
@@ -27,16 +27,11 @@ impl Fixture {
         let main = scratch.path().join("main.owner");
         let phy = scratch.path().join("person.owner");
         let project = scratch.path().join("project.owner");
-        let config = scratch.path().join("processing.cfg");
+        let config = scratch.path().join("processing-routes.json");
         Rel::create(&main, OwnerScope::Organization).unwrap();
         Phylactery::create(&phy).unwrap();
         Rel::create(&project, OwnerScope::Project).unwrap();
-        let mut processing = ReliquaryConfig::new_blank(&config);
-        processing.add_api_key(
-            CredentialId::new("fixture-key").unwrap(),
-            SecretString::new("synthetic-setup-test-key").unwrap(),
-        );
-        processing.save().unwrap();
+        fs::write(&config, b"{}").unwrap();
         Self {
             scratch,
             state,

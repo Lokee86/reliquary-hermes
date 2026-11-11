@@ -13,7 +13,7 @@ const route = "/reliquary";
 const pickers = {
   REL: { title: "Choose a Reliquary REL", filters: [{ name: "Reliquary REL", extensions: ["rel"] }] },
   PHY: { title: "Choose a Reliquary PHY", filters: [{ name: "Reliquary PHY", extensions: ["phy"] }] },
-  config: { title: "Choose a Reliquary configuration", filters: [{ name: "Reliquary configuration", extensions: ["cfg"] }] },
+  config: { title: "Choose processing routes", filters: [{ name: "Processing routes", extensions: ["json"] }] },
 };
 
 const controls: HostControls = {
@@ -101,7 +101,7 @@ function ReliquaryPane({ ctx }: { ctx: PluginContext }) {
 }
 
 export default {
-  id: "reliquary-hermes",
+  id: "reliquary",
   name: "Reliquary",
   description: "Browse and manage Reliquary Memories in the active Hermes profile",
   register(ctx: PluginContext) {

@@ -2,6 +2,8 @@
 
 ## Purpose
 
+The 0.1.0 catalog entry adds root directory registration for `reliquary`, including its source lifecycle observer. Credentials use `agent.secret_scope.get_secret` with profile fencing, rather than reading `.env` directly. Generic plugin discovery has no memory-provider registration method; the entry registers that slot when Hermes' provider collector supplies it, and registers the hook through the public plugin context. Historical pinned-host evidence below remains scoped to the stated revisions.
+
 Record the pinned Hermes lifecycle, source identity, privacy and plugin surfaces used by the Reliquary integration.
 
 ## Overview

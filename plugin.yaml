@@ -1,0 +1,20 @@
+name: reliquary
+version: "0.1.0"
+description: "Local Reliquary memory, source provenance, and an interactive relationship graph."
+author: Lokee86
+kind: exclusive
+requires_hermes: ">=0.23.0"
+provides_tools: []
+provides_hooks:
+  - on_session_delete
+provides_middleware: []
+requires_env: []
+config_schema:
+  RELIQUARY_HERMES_TOKEN:
+    type: secret
+    env: RELIQUARY_HERMES_TOKEN
+    description: "Profile-scoped local host token, provisioned during memory setup."
+  RELIQUARY_PROVIDER_API_KEY:
+    type: secret
+    env: RELIQUARY_PROVIDER_API_KEY
+    description: "Optional OpenAI-compatible API key used by explicitly configured processing routes."

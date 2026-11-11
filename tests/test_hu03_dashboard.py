@@ -21,17 +21,17 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 def _stage_plugin(home, enabled=True):
-    dashboard = home / "plugins/reliquary-hermes/dashboard"
+    dashboard = home / "plugins/reliquary/dashboard"
     dashboard.mkdir(parents=True)
     for name in ("manifest.json", "plugin_api.py"):
         shutil.copyfile(REPO / "dashboard" / name, dashboard / name)
     provider = home / "plugins/reliquary"
-    provider.mkdir(parents=True)
+    provider.mkdir(parents=True, exist_ok=True)
     for module in (REPO / "src/reliquary_hermes").glob("*.py"):
         shutil.copyfile(module, provider / module.name)
     (provider / "plugin.yaml").write_text("name: reliquary\nkind: standalone\n", encoding="utf-8")
     consent = "enabled" if enabled else "disabled"
-    (home / "config.yaml").write_text(f"plugins:\n  {consent}: [reliquary-hermes]\n", encoding="utf-8")
+    (home / "config.yaml").write_text(f"plugins:\n  {consent}: [reliquary]\n", encoding="utf-8")
 
 
 def _start_profile(home, profile_id, binaries, cleanup, *, project):
@@ -75,7 +75,7 @@ import sys
 from fastapi.testclient import TestClient
 from hermes_cli import web_server
 
-route = "/api/plugins/reliquary-hermes/dashboard-v1"
+route = "/api/plugins/reliquary/dashboard-v1"
 headers = {web_server._SESSION_HEADER_NAME: web_server._SESSION_TOKEN}
 responses = {}
 with TestClient(web_server.app) as client:

@@ -4,4 +4,9 @@ __pycache__/
 *.pyc
 host/target/
 host/.test-tmp/
+host/reliquary-hermes-host.exe
+.cargo-home/
 dashboard/node_modules/
+dashboard/.npm-cache/
+.catalog-*/
+.cache/

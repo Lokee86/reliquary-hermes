@@ -205,7 +205,7 @@ export function Setup({ host, status, readOnly, onConnected }: {
       {readOnly && <p role="note" className="knowledge-muted">{readOnly}</p>}
       <p className="knowledge-muted">{status.runtime_detected ? "Reliquary runtime detected" : "Reliquary runtime unavailable"}</p>
       {!webDialogs && !host.pickOpenPath && <p role="note" className="knowledge-muted">Native file dialogs are unavailable for this connection.</p>}
-      <p className="knowledge-muted">Choose the General REL, active PHY, and configuration used by this Hermes profile.</p>
+      <p className="knowledge-muted">Choose the General REL, active PHY, and optional processing routes JSON used by this Hermes profile.</p>
       <Button type="button" className="add-scope warlock-workflow-toggle" aria-expanded={manual} disabled={busy || !!confirm}
         onClick={() => setManual(value => !value)}>{manual ? "Hide manual paths" : "Enter path manually"}</Button>
       {status.configured && <p className="knowledge-muted">Existing sessions keep their accepted memory routes.</p>}
@@ -217,7 +217,7 @@ export function Setup({ host, status, readOnly, onConnected }: {
           <div className="knowledge-memory-rows">
             {pathField({ kind: "REL", label: "General memory", value: main, change: setMain, createKind: "general_rel" }, report?.main_rel)}
             {pathField({ kind: "PHY", label: "Active identity", value: phy, change: setPhy, createKind: "phy" }, report?.active_phy)}
-            {pathField({ kind: "config", label: "Reliquary configuration", value: config, change: setConfig }, report?.config)}
+            {pathField({ kind: "config", label: "Processing routes JSON", value: config, change: setConfig }, report?.config)}
             {status.configured && <details className="knowledge-create warlock-projects">
               <summary>Project memories</summary>
               <p>Create or manage projects in Hermes, then refresh this list.</p>

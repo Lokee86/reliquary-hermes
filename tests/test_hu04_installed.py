@@ -61,7 +61,7 @@ def _install(home, checkout, binary, rel, phy, project, ids):
         if module.name != "__init__.py":
             copyfile(module, installed / module.name)
     installed_host = install_setup_host(home, binary)
-    copytree(REPO / "dashboard/dist", home / "plugins/reliquary-hermes/dashboard/dist")
+    copytree(REPO / "dashboard/dist", home / "plugins/reliquary/dashboard/dist")
     env = {key: value for key, value in os.environ.items()
            if key.upper() in {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR"}}
     env.update(

@@ -2,6 +2,8 @@
 
 ## Purpose
 
+Catalog packaging is owned by the integration maintainers: root `plugin.yaml`, `__init__.py`, and `dashboard_api.py` unify provider and UI discovery; `host/src/catalog_processing.rs` owns nonsecret JSON routes and in-memory credential binding; native source provenance and the public build workflow own reproducibility. Current installation and risk disclosures live in [README](../README.md).
+
 Route integration changes to the owning contract, implementation boundary and verification suite.
 
 ## Overview

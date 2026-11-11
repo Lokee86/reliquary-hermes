@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from .authority import Discovery
 from .protocol import Request, Response
+from .settings import PROVIDER_API_KEY_VAR, _profile_secret
 from .validation import (ContractError, MAX_WIRE_BYTES, canonical, decode, digest,
                          identifier, integer, obj, require, text)
 
@@ -306,6 +307,9 @@ class HostClient:
             raise HostUnavailable("host_not_configured")
         environment = {name: os.environ[name] for name in ("SystemRoot", "WINDIR") if name in os.environ}
         environment.update({name: str(self._state_dir) for name in ("TEMP", "TMP", "TMPDIR")})
+        provider_key = _profile_secret(self._state_dir.parent, PROVIDER_API_KEY_VAR, optional=True)
+        if provider_key is not None:
+            environment[PROVIDER_API_KEY_VAR] = provider_key
         platform = ({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt"
                     else {"start_new_session": True})
         try:

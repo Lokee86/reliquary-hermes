@@ -1,0 +1,61 @@
+name: Native host
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out the pinned source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install the stable Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - name: Cache locked Cargo dependencies and compiler output
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .cargo-home
+            host/target
+          key: windows-native-${{ hashFiles('host/Cargo.lock', 'vendor/reliquary/**/*.rs', 'vendor/reliquary/**/Cargo.toml') }}
+      - name: Test and build the Windows host
+        shell: pwsh
+        run: |
+          $repo = $env:GITHUB_WORKSPACE
+          $env:CARGO_HOME = Join-Path $repo '.cargo-home'
+          $env:CARGO_TARGET_DIR = Join-Path $repo 'host\target'
+          $env:CARGO_PROFILE_DEV_DEBUG = '0'
+          $env:CARGO_PROFILE_TEST_DEBUG = '0'
+          $scratch = Join-Path $repo 'host\.test-tmp\native-ci'
+          New-Item -ItemType Directory -Force -Path $env:CARGO_HOME, $scratch | Out-Null
+          $env:TEMP = $scratch
+          $env:TMP = $scratch
+          $env:TMPDIR = $scratch
+          cargo test --manifest-path host/Cargo.toml --locked -j 1 -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw "Cargo test failed with exit code $LASTEXITCODE." }
+          cargo build --manifest-path host/Cargo.toml --locked --release -j 1
+          if ($LASTEXITCODE -ne 0) { throw "Cargo build failed with exit code $LASTEXITCODE." }
+      - name: Upload the Windows host
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reliquary-hermes-host-windows-x86_64
+          path: host/target/release/reliquary-hermes-host.exe
+          if-no-files-found: error
+          retention-days: 14
+      - name: Attest the Windows host build
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: host/target/release/reliquary-hermes-host.exe

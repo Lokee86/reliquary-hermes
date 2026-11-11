@@ -1,0 +1,16 @@
+{
+  "general": {
+    "model": "your-chat-model",
+    "url": "https://openrouter.ai/api/v1/chat/completions"
+  },
+  "embedding": {
+    "model": "your-compatible-embedding-model",
+    "url": "https://openrouter.ai/api/v1/embeddings",
+    "dimensions": 1024,
+    "normalization": "l2"
+  },
+  "decision": {
+    "model": "your-decision-model",
+    "url": "https://openrouter.ai/api/alpha/decisions"
+  }
+}

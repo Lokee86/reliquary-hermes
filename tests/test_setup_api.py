@@ -46,7 +46,7 @@ with projects_db.connect_closing(db_path=home / "projects.db") as db:
     projects_db.archive_project(db, archive)
 setup = import_provider_module("reliquary", "setup")
 inventory = setup.projects
-path = "/api/plugins/reliquary-hermes/setup-v1"
+path = "/api/plugins/reliquary/setup-v1"
 candidate = {"main_rel": "C:/owners/main.rel", "active_phy": "C:/owners/user.phy"}
 defaults = {"main_rel": None, "active_phy": None, "projects": {}, "config_path": None}
 owner = {"accepted": True, "opened": True, "error": None}

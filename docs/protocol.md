@@ -2,6 +2,8 @@
 
 ## Purpose
 
+The 0.1.0 catalog package retains the wire protocol and uses profile-fenced Hermes secret reads. Its model routes are nonsecret JSON; `RELIQUARY_PROVIDER_API_KEY` is injected into the isolated child environment and Root binds an in-memory configuration. Opening CVCFG/OS-backed credentials is excluded from the catalog runtime. The unified package's root entry registers the provider and `on_session_delete` hook. See [current installation and disclosure](../README.md).
+
 Freeze the bounded HP01 transport, copied-source and server-owned authority DTOs for the standalone integration.
 
 ## Overview

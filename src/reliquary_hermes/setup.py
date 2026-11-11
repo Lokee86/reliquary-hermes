@@ -10,7 +10,8 @@ from .capture_policy import ENROLLMENT_FILE, capture_cutoff, history_supported
 from .client import HostClient, HostUnavailable
 from .projects import active_projects, inventory
 from .settings import (
-    _read_object, _state_dir, ensure_setup_token, profile_home, profile_setup_lock, read_settings, read_token,
+    PROVIDER_API_KEY_VAR, _profile_secret, _read_object, _state_dir, ensure_setup_token, profile_home,
+    profile_setup_lock, read_settings, read_token,
     save_settings,
 )
 from .validation import ContractError, MAX_WIRE_BYTES, canonical, decode, identifier, obj, require, text
@@ -41,7 +42,7 @@ def _defaults(home):
     processing = _read_optional(state / "processing.json")
     config = obj(processing, {"config_path"})["config_path"] if processing else None
     if config is None:
-        detected = os.environ.get("RELIQUARY_CONFIG_PATH") or str(state / "reliquary.cfg")
+        detected = str(state / "processing-routes.json")
         try:
             detected = _local_path(detected)
             if Path(detected).is_file():
@@ -138,6 +139,9 @@ def _host_setup(home, binary, operation, request):
     require(len(wire) <= MAX_WIRE_BYTES, "setup_request_too_large")
     environment = {name: os.environ[name] for name in ("SystemRoot", "WINDIR") if name in os.environ}
     environment.update({name: str(home) for name in ("TEMP", "TMP", "TMPDIR")})
+    provider_key = _profile_secret(home, PROVIDER_API_KEY_VAR, optional=True)
+    if provider_key is not None:
+        environment[PROVIDER_API_KEY_VAR] = provider_key
     flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     return subprocess.run([str(binary), operation, "--state-dir", str(_state_dir(home))],
                           input=wire, capture_output=True, cwd=home, env=environment,
@@ -269,9 +273,8 @@ def _activate(home):
     config = _activation(home)
     plugins = config.get("plugins") or {}
     enabled = list(plugins.get("enabled") or ())
-    # The directory package registers its own cold hook. The Python package uses an entry point.
-    directory_package = (home / "plugins/reliquary/host-pin.json").is_file()
-    observer = "reliquary" if directory_package else "reliquary-source-observer"
+    # The catalog directory package owns both the provider and the cold hook.
+    observer = "reliquary"
     if observer not in (plugins.get("disabled") or ()) and observer not in enabled:
         enabled.append(observer)
     save_config({"memory": {"provider": "reliquary"}, "plugins": {"enabled": enabled}}, merge_existing=True)

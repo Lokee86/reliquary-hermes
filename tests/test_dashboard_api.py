@@ -69,13 +69,13 @@ def install_route(monkeypatch):
     fake_web._require_token = lambda request: None
     monkeypatch.setitem(sys.modules, "hermes_cli.web_server", fake_web)
     app = FastAPI()
-    app.include_router(api.router, prefix="/api/plugins/reliquary-hermes")
+    app.include_router(api.router, prefix="/api/plugins/reliquary")
     return TestClient(app)
 
 
 def test_owner_sessions_rewrites_browser_identity_and_returns_server_topology(monkeypatch):
     client = install_route(monkeypatch)
-    response = client.post("/api/plugins/reliquary-hermes/dashboard-v1", json=request_payload())
+    response = client.post("/api/plugins/reliquary/dashboard-v1", json=request_payload())
     body = response.json()
     assert response.status_code == 200
     assert body["status"] == "ok"
@@ -85,7 +85,7 @@ def test_owner_sessions_rewrites_browser_identity_and_returns_server_topology(mo
 
 def test_unknown_session_is_a_typed_denial(monkeypatch):
     client = install_route(monkeypatch)
-    response = client.post("/api/plugins/reliquary-hermes/dashboard-v1",
+    response = client.post("/api/plugins/reliquary/dashboard-v1",
                            json=request_payload(session_id="not-configured"))
     body = response.json()
     assert body["status"] == "denied"
@@ -94,7 +94,7 @@ def test_unknown_session_is_a_typed_denial(monkeypatch):
 
 def test_owner_cursor_cannot_change_the_session_or_page_size(monkeypatch):
     client = install_route(monkeypatch)
-    route = "/api/plugins/reliquary-hermes/dashboard-v1"
+    route = "/api/plugins/reliquary/dashboard-v1"
     request = request_payload()
     request["arguments"]["limit"] = 1
     first = client.post(route, json=request)

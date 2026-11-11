@@ -16,6 +16,9 @@ from test_hp03_provider import pinned_provider
 
 @pytest.fixture
 def setup_profile(pinned_provider, monkeypatch, tmp_path):
+    from agent.secret_scope import reset_secret_scope, set_secret_scope
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
     home = tmp_path / "setup-profile"
     host = home / "plugins/reliquary/host/reliquary-hermes-host.exe"
     host.parent.mkdir(parents=True)
@@ -25,7 +28,7 @@ def setup_profile(pinned_provider, monkeypatch, tmp_path):
         path = home / name
         path.touch()
         candidate[field] = str(path)
-    monkeypatch.setenv("RELIQUARY_CONFIG_PATH", candidate["config_path"])
+    monkeypatch.delenv(TOKEN_VAR, raising=False)
     def preflight(home, binary, request):
         return {"valid": True, "main_rel": {"owner_id": "general"}, "active_phy": {"owner_id": "identity"},
                 "projects": {key: {"owner_id": key} for key in request["owners"]["projects"]}}
@@ -37,22 +40,30 @@ def setup_profile(pinned_provider, monkeypatch, tmp_path):
 
     monkeypatch.setattr(setup, "_preflight", preflight)
     monkeypatch.setattr(setup.HostClient, "connect_dashboard", connect)
-    return home, candidate
+    profile_scope = set_hermes_home_override(home)
+    secret_scope = set_secret_scope({}, profile_home=str(home))
+    try:
+        yield home, candidate
+    finally:
+        reset_secret_scope(secret_scope)
+        reset_hermes_home_override(profile_scope)
 
 
 def test_fresh_setup_derives_private_values_and_preserves_existing_processing(setup_profile):
+    from agent.secret_scope import get_secret
+
     home, candidate = setup_profile
     state = home / "reliquary"
     before = setup.status(home)
     assert not before["configured"] and before["runtime_detected"]
-    assert before["config_path"] == candidate["config_path"]
+    assert before["config_path"] is None
     assert setup.validate(home, candidate)["valid"]
-    assert not state.exists() and not (home / ".env").exists()
+    assert not state.exists() and get_secret(TOKEN_VAR) is None
 
     assert setup.apply(home, candidate)["configured"]
     assert setup.status(home)["configured"]
     token = read_token(home)
-    assert len(token) == 43 and token in (home / ".env").read_text(encoding="utf-8")
+    assert len(token) == 43 and get_secret(TOKEN_VAR) == token
     for name in ("owners.json", "provider.json", "processing.json"):
         assert token not in (state / name).read_text(encoding="utf-8")
     assert TOKEN_VAR not in (home / "config.yaml").read_text(encoding="utf-8")

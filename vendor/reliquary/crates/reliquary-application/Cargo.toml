@@ -1,0 +1,34 @@
+[package]
+name = "reliquary-application"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+reliquary-insomnia = { path = "../reliquary-insomnia" }
+reliquary-dream = { path = "../reliquary-dream" }
+reliquary-entity-resolution = { path = "../reliquary-entity-resolution" }
+reliquary-owner-session = { path = "../reliquary-owner-session" }
+reliquary-freshness = { path = "../reliquary-freshness" }
+reliquary-retrieval = { path = "../reliquary-retrieval" }
+reliquary-chronos = { path = "../reliquary-chronos" }
+reliquary-vectors = { path = "../reliquary-vectors" }
+reliquary-context-engine = { path = "../reliquary-context-engine" }
+reliquary-switchboard = { path = "../reliquary-switchboard" }
+reliquary-project-environment = { path = "../reliquary-project-environment" }
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+
+[dev-dependencies]
+lore = { git = "https://github.com/EpicGames/lore.git", rev = "c49390be048fa273ab47ff7d43bc4994ba7be8ce" }
+lodestone-packed = { git = "https://github.com/Lokee86/lodestone.git", rev = "7b4b3e02b2bd3f3e474fef1a31c8632f8bbea49f" }
+reliquary-insomnia-store = { path = "../reliquary-insomnia-store" }
+reliquary-freshness-store = { path = "../reliquary-freshness-store" }
+reliquary-perception-store = { path = "../reliquary-perception-store" }
+reliquary-vector-store = { path = "../reliquary-vector-store" }
+reliquary-memory-core = { path = "../reliquary-memory-core" }
+reliquary-graph = { path = "../reliquary-graph" }
+reliquary-ego-store = { path = "../reliquary-ego-store" }
+reliquary-archive = { path = "../reliquary-archive" }
+reliquary-container = { path = "../reliquary-container" }

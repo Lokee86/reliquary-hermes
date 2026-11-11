@@ -10,7 +10,7 @@ resolver = "3"
 [dependencies]
 getrandom = "0.4"
 httparse = "1"
-reliquary-memory = { path = "../../Reliquary" }
+reliquary-memory = { path = "../vendor/reliquary" }
 ring = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
@@ -18,4 +18,4 @@ sha2 = "0.10"
 tempfile = "3"
 
 [patch.crates-io]
-quinn-proto = { path = "../../Reliquary/vendor/quinn-proto" }
+quinn-proto = { path = "../vendor/reliquary/vendor/quinn-proto" }

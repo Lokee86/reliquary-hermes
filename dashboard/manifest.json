@@ -1,5 +1,5 @@
 {
-  "name": "reliquary-hermes",
+  "name": "reliquary",
   "label": "Reliquary",
   "api": "plugin_api.py",
   "description": "Browse and manage Reliquary Memories in Hermes",

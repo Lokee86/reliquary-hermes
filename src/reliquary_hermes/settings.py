@@ -8,6 +8,7 @@ from threading import local
 from .validation import MAX_WIRE_BYTES, canonical, decode, identifier, obj, require, text
 
 TOKEN_VAR = "RELIQUARY_HERMES_TOKEN"
+PROVIDER_API_KEY_VAR = "RELIQUARY_PROVIDER_API_KEY"
 _SETUP_LOCK_HOLDER = local()
 OWNER_FIELDS = {"profile_id", "principal_id", "main_rel", "projects", "active_phy"}
 
@@ -82,16 +83,25 @@ def read_settings(home: Path) -> Settings:
     return Settings(state, owners["profile_id"], owners["principal_id"], _existing_file(provider["binary"]))
 
 
-def _profile_secret(home: Path):
-    from agent.secret_scope import current_secret_scope, current_secret_scope_home, load_env_file
+def _profile_secret(home: Path, name: str = TOKEN_VAR, *, optional: bool = False):
+    """Read one secret through Hermes after fencing it to the requested profile."""
+    try:
+        from agent.secret_scope import current_secret_scope_home, get_secret
+        from hermes_constants import get_hermes_home, get_routing_process_hermes_home
+    except ModuleNotFoundError:
+        if optional:
+            return None
+        raise
 
+    secret = get_secret(name)
+    if optional and secret is None:
+        return None
     scoped_home = current_secret_scope_home()
-    if scoped_home is not None:
-        require(profile_home(scoped_home) == home, "profile_scope_mismatch")
-        token = (current_secret_scope() or {}).get(TOKEN_VAR)
-        if token is not None:
-            return token
-    return load_env_file(home / ".env").get(TOKEN_VAR)
+    if scoped_home is None:
+        require(profile_home(get_routing_process_hermes_home()) == home, "profile_scope_mismatch")
+    active_home = scoped_home if scoped_home is not None else get_hermes_home()
+    require(profile_home(active_home) == home, "profile_scope_mismatch")
+    return secret
 
 
 def read_token(home: Path) -> str:
@@ -135,6 +145,7 @@ def save_settings(home: Path, values: dict) -> None:
 def ensure_setup_token(home: Path) -> None:
     from secrets import token_urlsafe
 
+    from agent.secret_scope import refresh_installed_secret_scope
     from hermes_cli.config import require_env_writable, save_env_value
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
@@ -144,6 +155,7 @@ def ensure_setup_token(home: Path) -> None:
         try:
             require_env_writable(TOKEN_VAR, "set")
             save_env_value(TOKEN_VAR, token_urlsafe(32))
+            refresh_installed_secret_scope(home)
         finally:
             reset_hermes_home_override(scope)
     read_token(home)

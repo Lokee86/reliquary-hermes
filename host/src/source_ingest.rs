@@ -805,8 +805,5 @@ pub(crate) fn configured_runtime(
 }
 
 pub(crate) fn open_processing_runtime(path: &Path) -> Result<ConfiguredRuntime, &'static str> {
-    if !path.is_absolute() || !path.is_file() {
-        return Err("invalid_processing_config");
-    }
-    ConfiguredRuntime::from_path(path).map_err(|_| "invalid_processing_config")
+    crate::catalog_processing::open(path)
 }

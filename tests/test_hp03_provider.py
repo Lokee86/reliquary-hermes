@@ -78,9 +78,10 @@ def test_pinned_entry_point_produces_fresh_provider_instances(pinned_provider):
     assert first.recall_status() is None
 
 
-def test_pinned_setup_activates_and_keeps_token_in_profile_dotenv(
+def test_pinned_setup_activates_and_keeps_token_in_profile_secret_scope(
     pinned_provider, monkeypatch, tmp_path, capsys,
 ):
+    from agent.secret_scope import get_secret, reset_secret_scope, set_secret_scope
     from hermes_cli.config import load_config
     from hermes_cli.memory_setup import _post_setup_hook
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
@@ -118,6 +119,7 @@ def test_pinned_setup_activates_and_keeps_token_in_profile_dotenv(
     monkeypatch.setattr("builtins.input", lambda _: next(prompts))
     provider = pinned_provider.ReliquaryMemoryProvider()
     scope = set_hermes_home_override(home)
+    secrets = set_secret_scope({}, profile_home=str(home))
     try:
         assert _post_setup_hook(provider, {})
         assert load_config()["memory"]["provider"] == "reliquary"
@@ -125,7 +127,7 @@ def test_pinned_setup_activates_and_keeps_token_in_profile_dotenv(
         token = read_token(home)
         assert len(token) == 43
         assert token != "inherited-credential-must-not-be-used"
-        assert token in (home / ".env").read_text(encoding="utf-8")
+        assert get_secret(TOKEN_VAR) == token
         for path in (home / "config.yaml", *sorted((home / "reliquary").glob("*.json"))):
             assert token not in path.read_text(encoding="utf-8")
         captured = capsys.readouterr()
@@ -143,6 +145,7 @@ def test_pinned_setup_activates_and_keeps_token_in_profile_dotenv(
         assert read_token(home) == token
         assert json.loads(owner_config.read_text(encoding="utf-8")) == owner_values
     finally:
+        reset_secret_scope(secrets)
         reset_hermes_home_override(scope)
 
 
@@ -338,11 +341,11 @@ def test_availability_rejects_non_regular_config(pinned_provider, tmp_path):
 
 
 def test_shutdown_drops_an_in_flight_attachment(pinned_provider, monkeypatch, tmp_path):
+    from agent.secret_scope import reset_secret_scope, set_secret_scope
+
     home = tmp_path / "shutdown"
     save_settings(home, _profile(home, "shutdown-profile"))
-    (home / ".env").write_text(
-        f"{TOKEN_VAR}=isolated-shutdown-test-profile-token\n", encoding="utf-8",
-    )
+    scope = set_secret_scope({TOKEN_VAR: "isolated-shutdown-test-profile-token"}, profile_home=str(home))
     started, release = Event(), Event()
     workers = []
 
@@ -391,6 +394,7 @@ def test_shutdown_drops_an_in_flight_attachment(pinned_provider, monkeypatch, tm
         for worker in workers:
             worker.join(timeout=3)
             assert not worker.is_alive()
+        reset_secret_scope(scope)
     assert provider.lifecycle_status == "stopped"
     assert provider.binding is None
 
@@ -497,11 +501,12 @@ def test_hermes_manager_keeps_profile_workers_and_hooks_isolated(pinned_provider
 
 
 def test_inflight_prefetch_discards_old_session_result(pinned_provider, monkeypatch, tmp_path):
+    from agent.secret_scope import reset_secret_scope, set_secret_scope
     from reliquary_hermes.validation import canonical
 
     home = tmp_path / "recall"
     save_settings(home, _profile(home, "recall-profile"))
-    (home / ".env").write_text(f"{TOKEN_VAR}=isolated-recall-test-credential-value\n", encoding="utf-8")
+    scope = set_secret_scope({TOKEN_VAR: "isolated-recall-test-credential-value"}, profile_home=str(home))
     entered, release = Event(), Event()
 
     class Client:
@@ -545,5 +550,6 @@ def test_inflight_prefetch_discards_old_session_result(pinned_provider, monkeypa
         if recall.ident is not None:
             recall.join(3)
         provider.shutdown()
+        reset_secret_scope(scope)
     assert results == [""]
     assert provider.recall_status() is None

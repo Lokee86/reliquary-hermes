@@ -78,7 +78,7 @@ def test_hosted_desktop_compatibility(tmp_path, hosted_checkout, binaries, plugi
             installed = home / "plugins/reliquary/host/reliquary-hermes-host.exe"
             with installed.open("rb") as actual, binary.open("rb") as expected:
                 assert file_digest(actual, "sha256").digest() == file_digest(expected, "sha256").digest()
-            (home / "config.yaml").write_text("plugins:\n  enabled: [reliquary-hermes]\n", encoding="utf-8")
+            (home / "config.yaml").write_text("plugins:\n  enabled: [reliquary]\n", encoding="utf-8")
         if profile == "secondary":
             continue
         main, phy = home / "main.rel", home / "active.phy"
@@ -91,7 +91,7 @@ def test_hosted_desktop_compatibility(tmp_path, hosted_checkout, binaries, plugi
         else:
             main_id = owner(cli, "rel", main, "unspecified")
         owners[profile] = {"main": main_id, "phy": owner(cli, "phy", phy)}
-    (launch / "config.yaml").write_text("plugins:\n  enabled: [reliquary-hermes]\n  isolation: host\n", encoding="utf-8")
+    (launch / "config.yaml").write_text("plugins:\n  enabled: [reliquary]\n  isolation: host\n", encoding="utf-8")
 
     script = """
 from contextlib import ExitStack
@@ -138,9 +138,9 @@ def grant(name):
 def writer(name):
     return grant(name) if native_mutations else same_origin
 
-setup_api = "/api/plugins/reliquary-hermes/setup-v1"
-dashboard = "/api/plugins/reliquary-hermes/dashboard-v1"
-sources_api = "/api/plugins/reliquary-hermes/sources-v1"
+setup_api = "/api/plugins/reliquary/setup-v1"
+dashboard = "/api/plugins/reliquary/dashboard-v1"
+sources_api = "/api/plugins/reliquary/sources-v1"
 history_supported = getattr(SessionDB, "HISTORY_EXPORT_VERSION", None) == 2
 history_rows = {}
 history_secret = "opaque-hu08-test-only-71de8a"
