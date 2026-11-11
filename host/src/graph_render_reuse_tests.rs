@@ -69,7 +69,6 @@ fn topology_mutation_reencodes_layout_chunks_without_stale_positions() {
         .positions
         .clone();
     let old_first_detail = service.edge_chunk(first.generation_id, 0).unwrap().to_vec();
-    let old_second_detail = service.edge_chunk(first.generation_id, 1).unwrap().to_vec();
 
     let second_relations = vec![
         relation(0, 1, RelationKind::Causal),
