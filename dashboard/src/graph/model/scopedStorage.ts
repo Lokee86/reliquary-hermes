@@ -27,10 +27,13 @@ export function createPreferenceSessionStore(): StorageLike {
 }
 
 const STORAGE_PREFIX = "reliquary.graph.preferences.v1";
+const MAX_NAMESPACE_LENGTH = 1024;
 
+function isSafeNamespace(value: string | null): value is string {
+  return typeof value === "string" && value.trim() !== "" && value.length <= MAX_NAMESPACE_LENGTH;
+}
 function namespacePart(value: string | null): string | null {
-  if (typeof value !== "string" || value.trim() === "" || value.length > 256) return null;
-  return encodeURIComponent(value);
+  return isSafeNamespace(value) ? encodeURIComponent(value) : null;
 }
 
 function browserStorage(): StorageLike | null {
@@ -78,6 +81,11 @@ export function writePreference(scope: ProfilePreferenceScope, name: string, val
   try {
     if (!resolved.storage) throw new Error("Preference storage unavailable");
     resolved.storage.setItem(key, value);
+    try { resolved.fallback?.removeItem(key); }
+    catch {
+      // If the old overlay could not be removed, replace it with the committed value.
+      try { resolved.fallback?.setItem(key, value); } catch { /* Nonfatal. */ }
+    }
     return;
   } catch { /* Fall back to this host mount's explicit session store. */ }
   try { resolved.fallback?.setItem(key, value); } catch { /* Nonfatal. */ }
@@ -86,15 +94,25 @@ export function writePreference(scope: ProfilePreferenceScope, name: string, val
 export function removePreference(scope: ProfilePreferenceScope, name: string, session?: StorageLike): void {
   const resolved = resolveStorage(scope, session);
   const key = resolved.key(name);
-  try { resolved.storage?.removeItem(key); } catch { /* Nonfatal. */ }
-  try { resolved.fallback?.removeItem(key); } catch { /* Nonfatal. */ }
+  let primaryRemoved = false;
+  try {
+    if (!resolved.storage) throw new Error("Preference storage unavailable");
+    resolved.storage.removeItem(key);
+    primaryRemoved = true;
+  } catch { /* Preserve a session tombstone so older primary values stay hidden. */ }
+
+  if (!resolved.fallback) return;
+  try {
+    if (primaryRemoved) resolved.fallback.removeItem(key);
+    else resolved.fallback.setItem(key, "null");
+  } catch {
+    // Keep a clearing tombstone if possible, even when fallback removal fails.
+    try { resolved.fallback.setItem(key, "null"); } catch { /* Nonfatal. */ }
+  }
 }
 
 export function graphViewPreferenceScopeKey(scope: GraphViewPreferenceScope): string | null {
-  const profile = namespacePart(scope?.profileKey ?? null);
-  const owner = namespacePart(scope?.ownerKey ?? null);
-  return profile && owner ? `${profile}:${owner}` : null;
+  if (!isSafeNamespace(scope?.profileKey ?? null) || !isSafeNamespace(scope?.ownerKey ?? null)) return null;
+  const composite = JSON.stringify([scope.profileKey, scope.ownerKey]);
+  return isSafeNamespace(composite) ? composite : null;
 }
-
-
-
