@@ -2,6 +2,7 @@ import { useEffect, useMemo } from "react";
 import * as THREE from "three";
 import { GRAPH_RENDER_LABEL_BUDGET } from "./lod";
 import type { GraphRenderHierarchyDescriptor, GraphRenderTerritory } from "./types";
+import { selectCommunityShells, territoryShellOpacity } from "./displayHelpers";
 
 // Warlock Territories.tsx at d9e38cb. The view maps only the active hierarchy.
 interface GraphTerritory {
@@ -9,6 +10,7 @@ interface GraphTerritory {
   label: string;
   nodeCount: number;
   kind: GraphRenderTerritory["kind"];
+  communityId: string | null;
   radius: number;
   x: number;
   y: number;
@@ -71,15 +73,22 @@ function TerritoryLabel({ territory, isolated }: { territory: GraphTerritory; is
   );
 }
 
-export function RenderTerritories({ hierarchy, isolated }: {
+export function RenderTerritories({ hierarchy, isolated, territoryOpacity, communityShellLimit, selectedCommunityId = null }: {
   hierarchy: readonly GraphRenderHierarchyDescriptor[];
   isolated: boolean;
+  territoryOpacity: number;
+  communityShellLimit: number;
+  selectedCommunityId?: string | null;
 }) {
+  const shellIds = useMemo(
+    () => new Set(selectCommunityShells(hierarchy, communityShellLimit)),
+    [communityShellLimit, hierarchy],
+  );
   const territories = useMemo(() => hierarchy.flatMap(({ id, kind, nodeCount, territory }) => {
     if (kind !== "territory" || !territory) return [];
     const [x, y, z] = territory.center;
     return [{
-      id, label: territory.label, nodeCount, kind: territory.kind, radius: territory.radius,
+      id, label: territory.label, nodeCount, kind: territory.kind, communityId: territory.communityId, radius: territory.radius,
       x, y, z, color: `#${new THREE.Color().setRGB(...territory.color, THREE.SRGBColorSpace).getHexString()}`,
     }];
   }), [hierarchy]);
@@ -87,17 +96,24 @@ export function RenderTerritories({ hierarchy, isolated }: {
     <group>
       {territories.map((territory, index) => (
         <group key={territory.id}>
-          <mesh position={[territory.x, territory.y, territory.z]} raycast={() => null}>
-            <sphereGeometry args={[Math.max(0.1, territory.radius), 28, 18]} />
-            <meshBasicMaterial
-              color={territory.color}
-              transparent
-              opacity={territory.kind === "unassigned" ? 0.03 : 0.075}
-              wireframe
-              depthWrite={false}
-              toneMapped={false}
-            />
-          </mesh>
+          {territoryOpacity > 0 && shellIds.has(territory.id) && (
+            <mesh position={[territory.x, territory.y, territory.z]} raycast={() => null}>
+              <sphereGeometry args={[Math.max(0.1, territory.radius), 28, 18]} />
+              <meshBasicMaterial
+                color={territory.color}
+                transparent
+                opacity={territoryShellOpacity(
+                  territory.kind,
+                  territoryOpacity,
+                  territory.kind === "community" && territory.communityId !== null
+                    && territory.communityId === selectedCommunityId,
+                )}
+                wireframe
+                depthWrite={false}
+                toneMapped={false}
+              />
+            </mesh>
+          )}
           {index < GRAPH_RENDER_LABEL_BUDGET && <TerritoryLabel territory={territory} isolated={isolated} />}
         </group>
       ))}
