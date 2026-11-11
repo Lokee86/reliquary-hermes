@@ -10,6 +10,11 @@ host acceptance.
 
 ## Overview
 
+Packaging changes replace the vector-store's private Lodestone Git reference with
+the approved local `vendor/lodestone/crates/packed` source subset. The corresponding
+Lodestone Git source entries are removed from the Root and host lockfiles; other
+dependency versions retain their pins. See [Lodestone provenance](../lodestone/SOURCE-PROVENANCE.md).
+
 The snapshot contains the Root Cargo workspace manifests and lockfile, Rust
 sources (including test modules), the Rust workspace crate manifests and sources,
 the referenced G4 JSON test fixture, and the patched `quinn-proto` source. It

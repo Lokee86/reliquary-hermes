@@ -2,6 +2,16 @@
 
 ## Purpose
 
+### Catalog release preparation, 2026-11-11
+
+The catalog source package unifies directory discovery under `reliquary`, vendors the accepted Root revision, adds a public attested Windows build, and changes processing credentials to Hermes-managed API-key injection with nonsecret JSON routes. Existing deployed-host and real-corpus visual evidence below predates this packaging change and does not prove the new credential route's live-model behavior. The narrated demo labels imported-memory preview recall explicitly.
+
+The rebuilt Web/Desktop bundle passed typechecking and 26 client tests. The complete Python run with isolated dependencies, the audited web dependency pins (FastAPI 0.133.1/Starlette 1.9.0), and both pinned/trusted-history source fixtures passed: 387 passed, 23 skipped, one dependency deprecation warning. The skipped gates require external native binaries, installed-host fixtures, or explicit live acceptance. The shared service documentation check passed. The initial staged-file scan found no executable payloads, Python bytecode, `.env` files, or credential-shaped secrets in 920 tracked files. Catalog dependency validation and the public Native host workflow remain release gates; their final results belong in the submission PR rather than being inferred from earlier installed-host evidence.
+
+The first public Native host run at source commit `d04ddf716524a7028c0f7f09036ff878617e4c0c` failed before compilation because its pinned `lodestone-packed` dependency is hosted in a private repository. No native build or attestation success is claimed for that run. A minimal source-publication review is being prepared separately; private dependency source is not part of this published commit.
+
+The rights holder then approved publishing the four required Lodestone source/license files. The follow-up package includes only that subset, verifies its pinned Git blobs, records its original hashes, and changes Root to a local path dependency. Cargo metadata with `--locked --offline --no-deps` passes. Full offline dependency resolution stops on an uncached public crate; the public workflow supplies the clean native build gate. Python dependencies are declared in `plugin.yaml`; `pyproject.toml` contains only test tooling so Hermes PM synthesizes a small dependency member instead of copying the nested native source tree into its Python workspace, avoiding Windows path-length failures.
+
 Record reproducible checks for the standalone provider and dashboard contracts.
 
 ## Overview

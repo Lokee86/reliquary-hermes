@@ -4,6 +4,8 @@ description: "Local Reliquary memory, source provenance, and an interactive rela
 author: Lokee86
 kind: exclusive
 requires_hermes: ">=0.23.0"
+python_dependencies:
+  - "jsonschema>=4,<5"
 provides_tools: []
 provides_hooks:
   - on_session_delete

@@ -364,7 +364,7 @@ def cli_setup(home):
         candidate = {}
         for key, prompt in (("main_rel", "Absolute path to the existing main REL"),
                             ("active_phy", "Absolute path to the existing active PHY"),
-                            ("config_path", "Reliquary config path (optional)")):
+                            ("config_path", "Processing routes JSON path (optional)")):
             default = defaults[key]
             label = f"{prompt} [{default}]" if default else prompt
             candidate[key] = input(f"{label}: ").strip() or default
