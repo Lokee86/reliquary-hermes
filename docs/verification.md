@@ -552,6 +552,23 @@ The plugin manifest remains version 0.1.0; the integration Git commit identifies
 | Desktop module | `72e7e1adf4f9d62327d1d6d5072f70613eaf793c7e708063ebbf629583ad543f` |
 | Desktop legal notice | `58a6ef9bd0ac264cc1c582e4bc4200f1d70394ff3cddaebf2b78d809ac8b177e` |
 
+### Installed release and cleanup receipt (2026-11-11)
+
+Source commit `8e8e94579671134db1f347403f06f31dcd456399` is installed in Hermes Web and the Desktop plugin directory. Read-only post-install verification matched all six release hashes below; the Web route returned HTTP 200 with JavaScript and CSS bytes matching those hashes. The new dashboard is PID `69624`; its Python Web listener is PID `66356`, and the old dashboard/backend exited. The Desktop plugin file hash matches the release, but no Hermes Desktop process was running during verification; the fresh candidate Electron smoke is separate-process evidence and does not establish that an open Desktop app loaded the installed file.
+
+Core config, owner/provider/processing files, host binary/pin, and active REL/PHY matched their recorded pre-install fingerprints. Optional capture-enrollment and the processing `config_path` target were fingerprinted after installation; both last-write times predate installation. Their pre-install hashes were not persisted, so these optional-file checks provide timestamp plus post-install-fingerprint evidence.
+
+Cleanup removed six UI worktrees (graph, old integration, baseline, details, host, candidate) and retired eight UI aliases (graph, integration, details, host, direct-port, knowledge, candidate, dirty snapshot). The Knowledge and direct-port directories remain detached to preserve all 764 and 2,332 original untracked parity paths, respectively; a final preservation check confirmed each path still exists. HU05, HU08, HU07 and codex-render-host worktrees remain. The Root verification worktree was removed; the `b56d46a3056d8f621e964f64ce3125ff3ef9048d` API snapshot ref remains, and the original Root dirty state is unchanged.
+
+| Installed artifact | SHA-256 |
+| --- | --- |
+| Web JavaScript | `CC1C060FA70041BE0AC997D3AEB2A22B7FD266B0FFA845A041D8D5396610531E` |
+| Web stylesheet | `04F5EF5CDD1D27850F8E657478722B54619ACBE936B72BDD434A3E935E98EB64` |
+| Web legal notice | `8E8D25FD9CF497A25EFB043111B56DF8B0278EA2B38A5E7B2CD200CBC3A443D7` |
+| Desktop plugin | `72E7E1ADF4F9D62327D1D6D5072F70613EAF793C7E708063EBBF629583AD543F` |
+| Desktop legal notice | `58A6EF9BD0AC264CC1C582E4BC4200F1D70394FF3CDDAEBF2B78D809AC8B177E` |
+| Shared `manual_delivery.py` | `0DB137E083F31EF899FB019C1A72E042D16DE0DDA04E9E3BCD372F7A22DF752B` |
+
 ## Related docs
 
 - [HU09 native file-dialog specification](hu09-native-file-dialogs-onboarding-spec-2026-11-09.md)

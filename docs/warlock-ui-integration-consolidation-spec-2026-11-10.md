@@ -1,7 +1,7 @@
 # Warlock UI — consolidated integration and installation specification
 
 **Date:** 2026-11-10
-**Status:** Source integration verified; deployment and cleanup follow the accepted-source merge into main. See [verification](verification.md#consolidated-warlock-ui-acceptance--november-10-2026).
+**Status:** Executed. Accepted source is deployed and post-install verified; scoped cleanup is complete. See [consolidated acceptance and deployment receipt](verification.md#consolidated-warlock-ui-acceptance--november-10-2026).
 **Repository:** `C:\!bin\workspace\reliquary-hermes`.
 ## Purpose
 
@@ -26,9 +26,9 @@ Inspection of the local repository showed `main` at `9aad117` (canonical UI docu
 
 **Observed overlap:** both primary branches touch `dashboard/src/knowledge/KnowledgePanel.tsx`, `dashboard/src/knowledge/knowledge.css`, `dashboard/src/host.ts`/related graph boundary, and built Web/Desktop output. Dirty `main` also overlaps both. A naive merge or copying one branch over another can silently discard graph/List selection, CSS, or Hermes authorization. **Prefer one deliberate integration worktree** built from a recorded snapshot and side-by-side source reconciliation. Do not mutate the original dirty checkout to stage the work.
 
-## Installation finding (verified)
+## Historical installation finding (pre-consolidation)
 
-The installed Web JS, Web CSS and Desktop module matched the files from `C:\!bin\workspace\reliquary-hermes-original-react-graph` byte-for-byte, and **did not** match either dirty `main` or the non-graph direct-port worktree. Therefore the original graph port is locally deployed, but **the unified non-graph UI is not deployed**. The agent's graph-only installation report is not a claim of consolidated UI acceptance.
+At the pre-integration audit, the installed Web JS, Web CSS and Desktop module matched `C:\!bin\workspace\reliquary-hermes-original-react-graph`, not dirty `main` or the non-graph direct-port worktree. This recorded the graph-only deployment baseline at that time; it is superseded by the final installed-release receipt in [verification](verification.md#consolidated-warlock-ui-acceptance--november-10-2026).
 
 ## Integration ownership and conflict rules
 
