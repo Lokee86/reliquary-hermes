@@ -99,14 +99,16 @@ export function createGraphTransport(
         method: "POST", body: { ...scope, filters: wireGraphFilters(filters) }, signal,
       }) as GraphRenderManifest;
     },
-    nodeChunk(generationId, chunkId) {
+    nodeChunk(generationId, chunkId, cancellation) {
       return bytes(graphPath + "node-chunk", {
-        method: "POST", body: { ...scope, generation_id: generationId, chunk_id: chunkId }, signal,
+        method: "POST", body: { ...scope, generation_id: generationId, chunk_id: chunkId },
+        signal: combineSignals(signal, cancellation),
       });
     },
-    edgeChunk(generationId, chunkId) {
+    edgeChunk(generationId, chunkId, cancellation) {
       return bytes(graphPath + "edge-chunk", {
-        method: "POST", body: { ...scope, generation_id: generationId, chunk_id: chunkId }, signal,
+        method: "POST", body: { ...scope, generation_id: generationId, chunk_id: chunkId },
+        signal: combineSignals(signal, cancellation),
       });
     },
     async resolveNode(generationId, renderId) {

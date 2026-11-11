@@ -9,8 +9,8 @@ import type {
 
 export interface GraphRenderTransport {
   prepare(ownerId: string, filters: GraphRenderFilterScope): Promise<GraphRenderManifest>;
-  nodeChunk(generationId: string, chunkId: number): Promise<Uint8Array>;
-  edgeChunk(generationId: string, chunkId: number): Promise<Uint8Array>;
+  nodeChunk(generationId: string, chunkId: number, signal?: AbortSignal): Promise<Uint8Array>;
+  edgeChunk(generationId: string, chunkId: number, signal?: AbortSignal): Promise<Uint8Array>;
   resolveNode(generationId: string, renderId: number): Promise<GraphRenderNodeResolution>;
   inspectNode(generationId: string, renderId: number, signal?: AbortSignal): Promise<GraphRenderNodeInspection>;
   neighborhood(generationId: string, renderId: number, signal?: AbortSignal): Promise<GraphRenderNeighborhood>;

@@ -257,7 +257,7 @@ assert.equal(relFrame.nodeChunks.length, 13, "all node chunks decode before any 
 assert.equal(relFrame.nodeChunks.reduce((count, chunk) => count + chunk.nodeCount, 0), 2_191);
 
 const oversizedChunks: GraphRenderManifest["nodeChunks"] = Array.from({ length: 32 }, (_, chunkId) => {
-  const x = -90 + chunkId * (180 / 31);
+  const x = chunkId < 16 ? -80 : 80;
   const chunkBounds = { min: [x - 1, -1, -1] as const, max: [x + 1, 1, 1] as const };
   return {
     chunkId, parentHierarchyId: 1, bounds: chunkBounds, nodeCount: 1,
@@ -278,6 +278,8 @@ assert.ok(oversizedPlan.nodeChunks.reduce((bytes, chunk) => bytes + chunk.byteLe
 const selectedXs = oversizedPlan.nodeChunks.map(chunk => (chunk.bounds.min[0] + chunk.bounds.max[0]) * 0.5);
 assert.ok(Math.max(...selectedXs) - Math.min(...selectedXs) > 80,
   "oversized overview samples chunks across the spatial extent");
+assert.ok(selectedXs.some(x => x < 0) && selectedXs.some(x => x > 0),
+  "byte truncation keeps representatives from both sides when chunk count itself fits");
 
 const panChunks: GraphRenderManifest["nodeChunks"] = Array.from({ length: 40 }, (_, chunkId) => {
   const x = chunkId < 20 ? -80 : 80;
@@ -294,12 +296,25 @@ const panReleases: Array<() => void> = [];
 const panClient = await GraphRenderClient.prepare("owner", {
   ...transport,
   async prepare() { return { ...manifest, totalNodeCount: 40, nodeChunks: panChunks, edgeChunks: [] }; },
-  async nodeChunk(_generationId, chunkId) {
+  async nodeChunk(_generationId, chunkId, signal) {
     panFetches += 1;
     panActive += 1;
     panPeakActive = Math.max(panPeakActive, panActive);
-    return await new Promise<Uint8Array>(resolve => {
-      panReleases.push(() => { panActive -= 1; resolve(nodePayload(chunkId, 1)); });
+    return await new Promise<Uint8Array>((resolve, reject) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return false;
+        settled = true;
+        panActive -= 1;
+        signal?.removeEventListener("abort", abort);
+        return true;
+      };
+      const abort = () => { if (finish()) reject(new DOMException("aborted", "AbortError")); };
+      if (signal?.aborted) abort();
+      else signal?.addEventListener("abort", abort, { once: true });
+      panReleases.push(() => {
+        if (finish()) resolve(nodePayload(chunkId, 1));
+      });
     });
   },
 });
@@ -310,8 +325,8 @@ assert.equal(panClient.queuedChunkRequestCount, 12);
 const currentPan = panClient.loadViewport({ center: [80, 0, 0], radius: 5 });
 const stalePanResult = assert.rejects(stalePan, /superseded/);
 assert.equal(panClient.queuedChunkRequestCount, 20, "old queued chunks are replaced by the newest viewport plan");
-await releasePanBatch();
 await waitUntil(() => panFetches === 16);
+assert.equal(panActive, 8, "the latest viewport starts as soon as stale active fetches abort");
 await releasePanBatch();
 await waitUntil(() => panFetches === 24);
 await releasePanBatch();
