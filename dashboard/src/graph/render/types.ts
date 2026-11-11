@@ -15,6 +15,16 @@ export interface GraphRenderHierarchyDescriptor {
   bounds: GraphRenderBounds;
   nodeCount: number;
   chunkId: number | null;
+  territory?: GraphRenderTerritory;
+}
+
+export interface GraphRenderTerritory {
+  kind: "community" | "unassigned";
+  communityId: string | null;
+  label: string;
+  color: GraphRenderVec3;
+  center: GraphRenderVec3;
+  radius: number;
 }
 
 export interface GraphRenderLabelCandidateDescriptor {
@@ -87,6 +97,8 @@ export interface GraphRenderLabel {
   label: string;
   importance: number;
   position: GraphRenderVec3;
+  size: number;
+  packedColor: number;
 }
 
 export interface GraphRenderFrame {
@@ -98,6 +110,31 @@ export interface GraphRenderFrame {
   labels: GraphRenderLabel[];
 }
 
-export type GraphRenderSource = { kind: "reliquary" };
+export interface GraphRenderFilterScope {
+  query?: string;
+  communityId?: string;
+  includeArchived: boolean;
+  category?: string;
+  memoryType?: string;
+}
 
 export type GraphRenderNodeResolution = { memoryId: string };
+export type GraphRenderNodeInspection = GraphRenderNodeResolution & {
+  title: string;
+  position: GraphRenderVec3;
+};
+export type GraphRenderNodeLocation = { renderId: number; position: GraphRenderVec3 };
+export interface GraphRenderIncidentEdge {
+  sourceRenderId: number;
+  targetRenderId: number;
+  sourcePosition: GraphRenderVec3;
+  targetPosition: GraphRenderVec3;
+  style: { packedColor: number; relationKind: string };
+  directed: boolean;
+  weight: number;
+}
+export interface GraphRenderNeighborhood {
+  edges: GraphRenderIncidentEdge[];
+  totalCount: number;
+  truncated: boolean;
+}

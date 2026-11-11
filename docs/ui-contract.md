@@ -62,7 +62,14 @@ The authenticated Sources API is scoped to the active Hermes plugin profile. `GE
 
 ## Prepared graph reads
 
-`POST /api/plugins/reliquary-hermes/graph-render-v1/prepare` takes `owner_id`, the mounted owner `generation`, its exact `cut`, and an optional `session_id` (null for owner scope). The route returns the Warlock v2 JSON manifest with render generation, global bounds, hierarchy, chunk descriptors and total node count. The `node-chunk` and `edge-chunk` operations additionally take `generation_id` and `chunk_id`. They return at most 1 MiB of `application/octet-stream` data per request. The `resolve` operation uses `generation_id` and `render_id` to return the authorized Memory ID. The plugin resolves profile and principal through the host and rejects stale cuts and mismatched generation access. All responses are private and marked `no-store`.
+Each `POST /api/plugins/reliquary-hermes/graph-render-v1/{operation}` takes `owner_id`, the mounted owner `generation`, its exact `cut`, and `session_id` (null for owner scope). The plugin derives profile and principal from the authenticated Hermes host. The signed host binds each render generation to that profile, principal, owner, cut, session, and filter scope. Responses use `Cache-Control: no-store`.
+
+- `prepare` takes `filters` with required `include_archived` and optional `query`, `community_id`, `category`, and `memory_type`. Root applies the List predicate and returns eligible Memory metadata and induced relationships to the host. With `include_archived: false` only Active Memories qualify. With `true` all lifecycle states may qualify. Query matches the title or body in Root. The v3 manifest adds a territory descriptor to each territory hierarchy node. It carries kind, nullable community ID, label, normalized RGB, center and radius. The enclosing node carries the filtered count and positioned bounds.
+- `node-chunk` and `edge-chunk` take `generation_id` and `chunk_id`. They retain the binary schema and 1 MiB response ceiling.
+- `resolve` takes `generation_id` and `render_id` and returns the authorized Memory ID. `inspect` also returns the readable title and position. `neighborhood` returns up to 128 directed incident links with typed styles, endpoint IDs and positions, the exact total count, and a truncation flag. `locate` takes `generation_id` and `memory_id` and returns the render ID and position or null for a Memory outside the generation.
+- `eligible` takes `memory_id` and the same `filters` as prepare. List uses this exact-cut read to revalidate its selection without preparing a graph or walking pages.
+
+Root bounds the source scan independently of the filtered result. A scan beyond the 2M retained Memory or membership limit, or the 20M relation-state limit, returns `413 graph_source_scan_limit`. The host publishes a generation only for a complete projection.
 
 `ui.graph_page` serves the inspector’s bounded relation editor. The editor reads nearby semantic relation endpoints with revision and cut and offers writes for authorized user associations. The spatial renderer consumes the separate prepared generation and its binary chunks.
 
@@ -71,6 +78,7 @@ The authenticated Sources API is scoped to the active Hermes plugin profile. `GE
 - [Host and web SDK audit](host-audit.md)
 - [Provider/service contract](protocol.md)
 - [Verification and real-service gates](verification.md)
+- [Rich Warlock graph specification](warlock-rich-scalable-graph-spec-2026-11-10.md)
 - [Documentation index](INDEX.md)
 
 ## Notes

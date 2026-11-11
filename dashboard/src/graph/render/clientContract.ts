@@ -8,6 +8,7 @@ import type {
   GraphRenderEdgeLod,
   GraphRenderManifest,
   GraphRenderViewport,
+  GraphRenderVec3,
 } from "./types";
 
 export function buildEdgeIndexes(manifest: GraphRenderManifest) {
@@ -27,7 +28,7 @@ export function buildEdgeIndexes(manifest: GraphRenderManifest) {
 }
 
 export function validateManifest(manifest: GraphRenderManifest) {
-  if (manifest.schemaVersion !== 2) {
+  if (manifest.schemaVersion !== 3) {
     throw new Error(`unsupported graph render manifest version ${manifest.schemaVersion}`);
   }
   if (!/^\d+$/.test(manifest.generationId)) {
@@ -35,6 +36,22 @@ export function validateManifest(manifest: GraphRenderManifest) {
   }
   if (!Number.isSafeInteger(manifest.totalNodeCount) || manifest.totalNodeCount < 0) {
     throw new Error("graph render manifest node count is invalid");
+  }
+
+  for (const node of manifest.hierarchy) {
+    const territory = node.territory;
+    if (node.kind !== "territory") {
+      if (territory !== undefined) throw new Error("unexpected graph render territory");
+      continue;
+    }
+    if (!territory || node.nodeCount <= 0 || !isGraphVec3(territory.center)
+        || !isGraphVec3(territory.color) || territory.color.some(value => value < 0 || value > 1)
+        || !Number.isFinite(territory.radius) || territory.radius <= 0
+        || typeof territory.label !== "string" || !territory.label.trim() || [...territory.label].length > 96
+        || (territory.kind === "community" ? !isMemoryId(territory.communityId)
+          : territory.kind !== "unassigned" || territory.communityId !== null)) {
+      throw new Error("invalid graph render territory");
+    }
   }
 
   for (const chunk of manifest.nodeChunks) {
@@ -72,6 +89,14 @@ export function validateRenderId(renderId: number | null) {
   return renderId;
 }
 
-function isU32(value: number) {
-  return Number.isInteger(value) && value >= 0 && value <= 0xffff_ffff;
+export function isU32(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0xffff_ffff;
+}
+
+export function isGraphVec3(value: unknown): value is GraphRenderVec3 {
+  return Array.isArray(value) && value.length === 3 && value.every(Number.isFinite);
+}
+
+export function isMemoryId(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 }

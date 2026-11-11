@@ -7,32 +7,33 @@ import type { GraphRenderNodeChunk } from "./types";
 interface Props {
   client: GraphRenderClient;
   chunks: readonly GraphRenderNodeChunk[];
-  markerScale: number;
-  pointsByChunk: Map<number, THREE.Points>;
-  onHover: (renderId: number | null) => void;
-  onPick: (renderId: number) => void;
+  pointsByChunk: Map<number, THREE.Points | THREE.InstancedMesh>;
+  onHover: (renderId: number | null, size?: number) => void;
+  onPick: (renderId: number, position: readonly [number, number, number]) => void;
+  selectedRenderId: number | null;
 }
 
 export function BoundedPicker({
   client,
   chunks,
-  markerScale,
   pointsByChunk,
   onHover,
   onPick,
+  selectedRenderId,
 }: Props) {
   const { camera, gl } = useThree();
   const raycaster = useMemo(() => {
     const value = new THREE.Raycaster();
-    value.params.Points = { threshold: 3 * markerScale };
+    value.params.Points = { threshold: 3 };
     return value;
-  }, [markerScale]);
+  }, []);
   const pointer = useMemo(() => new THREE.Vector2(), []);
   const chunkById = useMemo(
     () => new Map(chunks.map((chunk) => [chunk.chunkId, chunk])),
     [chunks],
   );
-  const pointerDown = useRef<{ x: number; y: number; button: number } | null>(null);
+  const pointerDown = useRef<{ x: number; y: number; button: number; moved: boolean } | null>(null);
+  const lastPrimaryPick = useRef<{ x: number; y: number; time: number } | null>(null);
   const hovered = useRef<number | null>(null);
   const pendingMove = useRef<PointerEvent | null>(null);
   const frameRequest = useRef<number | null>(null);
@@ -57,11 +58,13 @@ export function BoundedPicker({
       );
       const objects = candidateIds
         .map((chunkId) => pointsByChunk.get(chunkId))
-        .filter((value): value is THREE.Points => Boolean(value));
+        .filter((value): value is THREE.Points | THREE.InstancedMesh => Boolean(value));
       if (objects.length === 0) return null;
 
       const hit = raycaster.intersectObjects(objects, false)[0];
-      const itemIndex = hit?.index;
+      const itemIndex = hit?.object instanceof THREE.Points
+        ? hit.index
+        : (hit as THREE.Intersection<THREE.InstancedMesh> | undefined)?.instanceId;
       const chunkId = hit?.object.userData.graphRenderChunkId;
       if (
         itemIndex === undefined
@@ -70,17 +73,29 @@ export function BoundedPicker({
 
       const chunk = chunkById.get(chunkId);
       if (!chunk || itemIndex >= chunk.renderIds.length) return null;
-      return chunk.renderIds[itemIndex];
+      const positionOffset = itemIndex * 3;
+      return {
+        renderId: chunk.renderIds[itemIndex],
+        size: chunk.sizes[itemIndex],
+        position: [
+          chunk.positions[positionOffset],
+          chunk.positions[positionOffset + 1],
+          chunk.positions[positionOffset + 2],
+        ] as const,
+      };
     };
 
     const publishHover = (event: PointerEvent) => {
-      const renderId = pickAt(event);
+      const hit = pickAt(event);
+      const renderId = hit?.renderId ?? null;
       if (renderId === hovered.current) return;
       hovered.current = renderId;
-      onHover(renderId);
+      onHover(renderId, hit?.size);
     };
 
     const move = (event: PointerEvent) => {
+      const start = pointerDown.current;
+      if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 3) start.moved = true;
       pendingMove.current = event;
       if (frameRequest.current !== null) return;
       frameRequest.current = requestAnimationFrame(() => {
@@ -100,31 +115,60 @@ export function BoundedPicker({
     };
 
     const down = (event: PointerEvent) => {
-      pointerDown.current = { x: event.clientX, y: event.clientY, button: event.button };
+      pointerDown.current = { x: event.clientX, y: event.clientY, button: event.button, moved: false };
     };
 
     const up = (event: PointerEvent) => {
       const start = pointerDown.current;
       pointerDown.current = null;
-      if (!start || start.button !== 0 || event.button !== 0) return;
+      if (!start || start.button !== 0 || event.button !== 0 || start.moved) return;
       if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 3) return;
-      const renderId = pickAt(event);
-      if (renderId !== null) onPick(renderId);
+      const last = lastPrimaryPick.current;
+      // Focus can move a different node under the second click of a double-click.
+      if (last && event.timeStamp - last.time <= 350
+          && Math.hypot(event.clientX - last.x, event.clientY - last.y) <= 3) return;
+      const hit = pickAt(event);
+      if (hit) {
+        lastPrimaryPick.current = { x: event.clientX, y: event.clientY, time: event.timeStamp };
+        onPick(hit.renderId, hit.position);
+      }
+    };
+
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const target = hovered.current ?? selectedRenderId;
+      if (target === null) return;
+      const chunk = chunks.find((value) => value.renderIds.includes(target));
+      if (!chunk) return;
+      const itemIndex = chunk.renderIds.indexOf(target);
+      const offset = itemIndex * 3;
+      onPick(target, [chunk.positions[offset], chunk.positions[offset + 1], chunk.positions[offset + 2]]);
+      event.preventDefault();
     };
 
     canvas.addEventListener("pointermove", move);
     canvas.addEventListener("pointerleave", leave);
     canvas.addEventListener("pointerdown", down);
     canvas.addEventListener("pointerup", up);
+    canvas.addEventListener("keydown", keydown);
     return () => {
       canvas.removeEventListener("pointermove", move);
       canvas.removeEventListener("pointerleave", leave);
       canvas.removeEventListener("pointerdown", down);
       canvas.removeEventListener("pointerup", up);
-      if (frameRequest.current !== null) cancelAnimationFrame(frameRequest.current);
-      if (hovered.current !== null) onHover(null);
+      canvas.removeEventListener("keydown", keydown);
+      if (frameRequest.current !== null) {
+        cancelAnimationFrame(frameRequest.current);
+        frameRequest.current = null;
+      }
+      pendingMove.current = null;
+      pointerDown.current = null;
+      if (hovered.current !== null) {
+        hovered.current = null;
+        onHover(null);
+      }
     };
-  }, [camera, chunkById, client, gl, onHover, onPick, pointer, pointsByChunk, raycaster]);
+  }, [camera, chunkById, chunks, client, gl, onHover, onPick, pointer, pointsByChunk, raycaster, selectedRenderId]);
 
   return null;
 }

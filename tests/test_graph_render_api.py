@@ -13,6 +13,7 @@ from reliquary_hermes.validation import ContractError, canonical
 SCOPE = {
     "owner_id": "rel-a", "generation": "mount-a", "cut": "cut-a", "session_id": None,
 }
+FILTERS = {"include_archived": False, "query": "lantern", "category": "Reference"}
 
 
 @pytest.mark.parametrize("selector", [
@@ -23,7 +24,22 @@ SCOPE = {
 ])
 def test_render_prepare_selectors_cannot_carry_authority(selector):
     with pytest.raises(ContractError):
-        graph_selector(canonical(selector), "prepare")
+        graph_selector(canonical({"filters": FILTERS, **selector}), "prepare")
+
+
+def test_render_filters_and_inspection_selectors_are_operation_bound():
+    assert graph_selector(canonical({**SCOPE, "filters": FILTERS}), "prepare")["filters"] == FILTERS
+    inspection = {**SCOPE, "generation_id": "1", "render_id": 4}
+    for operation in ("inspect", "neighborhood"):
+        assert graph_selector(canonical(inspection), operation) == inspection
+        with pytest.raises(ContractError):
+            graph_selector(canonical({**inspection, "filters": FILTERS}), operation)
+    assert graph_selector(canonical({**SCOPE, "memory_id": "a" * 64, "filters": FILTERS}),
+                          "eligible")["memory_id"] == "a" * 64
+    for invalid in ({**FILTERS, "principal_id": "forged"}, {**FILTERS, "include_archived": 0},
+                    {**FILTERS, "community_id": "not-a-digest"}):
+        with pytest.raises(ContractError):
+            graph_selector(canonical({**SCOPE, "filters": invalid}), "prepare")
 
 
 def test_render_scope_uses_active_profile_principal_and_cut(monkeypatch):
@@ -56,7 +72,7 @@ def test_render_scope_uses_active_profile_principal_and_cut(monkeypatch):
     assert read_render(home, "node-chunk", selector) == b"\x00\xff\xfe"
     assert calls == [("node-chunk", {
         "owner_id": "rel-a", "generation": "mount-a", "cut": "cut-a",
-        "generation_id": "1", "chunk_id": 0, "principal_id": "phy-a",
+        "generation_id": "1", "chunk_id": 0, "principal_id": "phy-a", "session_id": None,
     })]
     for foreign in ({"owner_id": "foreign"}, {"owner_id": "phy-b"}, {"session_id": "different-session"}):
         with pytest.raises(HostUnavailable, match="host_denied"):

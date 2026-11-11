@@ -2,8 +2,8 @@ use crate::graph_render_contract::GraphRenderManifest;
 use crate::graph_render_error::GraphRenderError;
 use crate::graph_render_generation::{GraphRenderGeneration, GraphRenderGenerationSummary};
 use crate::graph_render_hierarchy_model::GraphRenderHierarchy;
-use crate::graph_render_identity::GraphRenderNodeTarget;
 use crate::graph_render_identity::RenderNodeId;
+use crate::graph_render_identity::{GraphRenderNodeKey, GraphRenderNodeTarget};
 use crate::graph_render_layout_model::GraphRenderLayout;
 use crate::graph_render_prepare::build_graph_render_generation;
 use crate::graph_render_source::GraphRenderSource;
@@ -26,6 +26,19 @@ impl Default for GraphRenderService {
 }
 
 impl GraphRenderService {
+    pub(crate) fn locate_node(
+        &self,
+        generation_id: u64,
+        key: &GraphRenderNodeKey,
+    ) -> Result<Option<RenderNodeId>, GraphRenderError> {
+        Ok(self
+            .generation(generation_id)?
+            .node_keys
+            .binary_search(key)
+            .ok()
+            .map(|index| RenderNodeId::new(index as u32)))
+    }
+
     pub(crate) fn clear(&mut self) {
         self.latest_by_owner.clear();
         self.generations.clear();

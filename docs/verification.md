@@ -361,6 +361,8 @@ Window testing stopped before live Save As selection, separate creation confirma
 
 ## Warlock Knowledge verification
 
+The [non-graph source parity ledger](warlock-nongraph-ui-parity.md) records the original component and CSS inventory, host adaptations and verification of the shared Knowledge, Setup and Sources presentation.
+
 The source inventory is Warlock `cf41c6690e089cab4a00950d6048ad6828eaeab7` and Hermes baseline `7ccc429e51e37bb731313dc6184f426f527d34ce`. The Warlock worktree had local Cargo manifest and lockfile edits. The port used the tracked source at the frozen revision and pinned the renderer dependencies in `dashboard/package-lock.json`. The public Root graph source landed at `fa574eec`.
 
 The Web and Desktop bundles share the React UI, renderer and host theme mapping. The live runs used Chrome with Hermes Web SDK 1.1.0 and Electron 44.9.3 with the Hermes Desktop byte bridge on `458829681db8761e50b8242aa034d23ae9bcdcd5`. The Web smoke checks the authenticated chunk media type and length, rejects forged owner and principal selectors and stale generation and render IDs, and checks that the current chunk remains usable. The Desktop canvas uses the same binary decoder through the SDK's authenticated byte IPC. The final Desktop smoke exercised native Save As, separate creation confirmation and native owner selection before connecting. Stock Desktop exposes List and the inspector with an explanation of the required graph capability.
@@ -397,6 +399,45 @@ The release characterization compiled the exact renderer modules in isolation wi
 Peak process working set across both tiers was 1.35 GiB. The largest node and edge chunks were 786,464 and 262,176 bytes. The signed host caps chunk responses at 1 MiB and manifests at 4 MiB. The client retains bounded LRU chunk caches and applies the Warlock viewport and picking budgets. Small graphs that fit those detail budgets show their nodes and edges at the initial camera distance.
 
 The Warlock September 28 baseline assembled whole-graph JavaScript objects and uploaded their geometry. The Hermes measurements cover Rust projection and binary packing. GPU timings and million-node transport throughput in Hermes are unmeasured. The live Web and Desktop checks used the copied 13-node REL and 4-node PHY.
+
+## Rich Warlock graph verification
+
+The rich renderer requires Reliquary Root at `fa574eec` with the [filtered semantic graph projection patch](../patches/reliquary-fa574eec-filtered-graph-projection.patch) applied. The checkout layout stays the same. The Hermes host resolves `../../Reliquary` from its Cargo manifest. The patch adds authorized, exact-cut reads and reuses the List predicate for title or body search, community, lifecycle, category and Memory type.
+
+Run the existing Rust, Python and dashboard suites from the integration checkout. Run the Root test `hp02_memory_graph_expands_active_neighbors_at_one_cut` in `oc06_inspection` to check List parity, induced relationships, early stop and stale cuts. The Web and Electron probes use independent copies of the November 8 REL and PHY. The active-only graph should show 11 REL Memories and four PHY Memories. Turning on Show non-active memories should show 13 REL Memories. Record the input and browsed file hashes separately for each host.
+
+The paired renderer benchmark uses the baseline at `8136458` and the candidate under the same release profile and graph generator. For the 100k-node/1M-edge and 1M-node/10M-edge tiers, the release gate allows up to 2.5 times the baseline preparation time and twice its peak working set. The million-node preparation must also fit the 30-second host response window before host and transport overhead. Report a dense moderate tier separately. Hosted timings must record browser heap, frame timing and p95 hover and selected-neighborhood response time. Record the sample count and build for every reported timing.
+
+The isolated release benchmark compiled the production renderer modules for each revision. The table records the final paired sample for each tier on the same Windows host. The timer covers generation preparation, and peak working set includes creation of the synthetic source. Root mounting, network transfer and GPU work are outside these measurements.
+
+| Nodes / input edges | Baseline prepare | Candidate prepare | Baseline peak working set | Candidate peak working set |
+| --- | ---: | ---: | ---: | ---: |
+| 25k / 2.5M | 0.75 s | 1.07 s | 258 MB | 377 MB |
+| 100k / 1M | 0.74 s | 0.58 s | 149 MB | 195 MB |
+| 1M / 10M | 6.99 s | 6.78 s | 1,447 MB | 1,911 MB |
+
+All three tiers retained the baseline packed chunk size. The 1M tier used 32,129,472 packed bytes and a 26,562-byte manifest. The two release-gated tiers met both ceilings. The standalone release harness passed 15 layout and hierarchy tests, including weight-sensitive distance across territories, exact deterministic positions, and minimum node clearance across local population boundaries.
+
+The matched browser comparison served those same binary chunks over loopback to each revision's production React renderer in Chrome with SwiftShader at 1280×900. Overview used the manifest center. Detail centered on the nearest leaf, kept the manifest's extent for LOD thresholds, and zoomed through the normal controls. The harness sampled six seconds at overview and eight seconds at detail.
+
+| Nodes / input edges | Renderer | Overview p95 / frames | Detail p95 / frames | Used JS heap overview / detail | Detail node bytes fetched |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 100k / 1M | Baseline | 173.6 ms / 42 | 253.5 ms / 33 | 9.0 / 15.6 MB | 786,464 |
+| 100k / 1M | Rich | 187.6 ms / 37 | 263.9 ms / 34 | 8.7 / 9.8 MB | 40,736 |
+| 1M / 10M | Baseline | 284.7 ms / 38 | 270.8 ms / 32 | 9.1 / 16.0 MB | 786,464 |
+| 1M / 10M | Rich | 173.7 ms / 39 | 319.5 ms / 29 | 9.1 / 10.5 MB | 786,464 |
+
+The candidate selected a smaller leaf in the 100k sample. At 1M both renderers fetched one full node chunk and the same edge bytes at detail. The rich renderer used less JS heap and had a longer p95 detail frame interval in this software-rendered sample. All four browser runs reached both LODs without page errors. The hosted corpus run below measures the new inspect and neighborhood routes, which were absent from the frozen baseline.
+
+The locked offline host suite passed 95 tests. All four Root inspection tests passed. The graph projection case verified the same result as List for combined query, category, type and lifecycle filters, induced links, early visitor stop, and stale-cut denial. The pinned Python API, setup and source lifecycle run passed 19 tests. The installed-source run passed six capture, history and manual processing tests. The shared dashboard passed typecheck and four TypeScript tests and produced both bundles.
+
+The signed loopback smoke used independent copies of the November 8 owners. It verified 11 active and 13 total REL Memories, v3 descriptors, binary framing, title inspection, incident counts, locate, filter exclusion, and stale and cross-owner denial. For 20 sequential reads each on the final debug host, signed loopback p95 was 100.77 ms for inspection and 100.81 ms for the neighborhood. These samples cover the signed host round trip.
+
+Hosted Hermes Web passed the copied-corpus smoke in Chrome with SwiftShader. It covered both owner canvases, authenticated binary responses, owner and generation denial, graph click through to full detail, Graph and List selection continuity, search, provenance, history and Sources. The lifecycle control moved the REL graph from 11 to 13 and back to 11 Memories. The final interaction run verified five visible hover tooltips and five selected neighborhoods, single-selection double-click, keyboard selection and a settled right-drag with selection retained. During a concurrent Desktop smoke, the final Web run measured request p95 of 592.7 ms for inspect and 570.7 ms for neighborhood, 18.2 MB of used JS heap, and p95 frame interval of 105 ms over 23 animation frames.
+
+Hosted Hermes Desktop passed the copied-corpus Electron smoke with both owner canvases, full Memory inspection, Sources, and Graph and List selection continuity. A second isolated REL had six Memories in two accepted communities and one cross-community relation. The Desktop smoke filtered to the selected community's three-node canvas, selected a Memory, and retained the selection through List and Graph. The profile exposed community browsing under its read-only grant.
+
+The original November 8 REL and PHY and both final hosted copies matched the initial SHA-256 hashes after verification.
 
 ## Related docs
 

@@ -6,10 +6,12 @@ use crate::{
     runtime::{HEARTBEAT_SECONDS, ReconciliationScope, RuntimeRegistry},
     service_http::{
         ATTACH, DASHBOARD_READ, DASHBOARD_TOPOLOGY, FORBIDDEN, GRAPH_RENDER_EDGE_CHUNK,
-        GRAPH_RENDER_NODE_CHUNK, GRAPH_RENDER_PREPARE, GRAPH_RENDER_RESOLVE, HttpError,
-        HttpRequest, HttpResponse, INVALID, MAX_WIRE_BYTES, RETRIEVAL_PREPARE, RETRIEVAL_TOOL,
-        RUNTIME_ATTACH, RUNTIME_DETACH, RUNTIME_HEARTBEAT, RUNTIME_SCOPE, SOURCE, SOURCE_STATUS,
-        TransportKey, UNAVAILABLE, hex, read_request, write_response,
+        GRAPH_RENDER_ELIGIBLE, GRAPH_RENDER_INSPECT, GRAPH_RENDER_LOCATE,
+        GRAPH_RENDER_NEIGHBORHOOD, GRAPH_RENDER_NODE_CHUNK, GRAPH_RENDER_PREPARE,
+        GRAPH_RENDER_RESOLVE, HttpError, HttpRequest, HttpResponse, INVALID, MAX_WIRE_BYTES,
+        RETRIEVAL_PREPARE, RETRIEVAL_TOOL, RUNTIME_ATTACH, RUNTIME_DETACH, RUNTIME_HEARTBEAT,
+        RUNTIME_SCOPE, SOURCE, SOURCE_STATUS, TransportKey, UNAVAILABLE, hex, read_request,
+        write_response,
     },
     service_protocol::{
         AttachRequest, Discovery, HERMES_REVISION, Operation, PROTOCOL_VERSION, ProviderRequest,
@@ -106,10 +108,14 @@ impl Service {
                 &request.body,
             ),
             DASHBOARD_TOPOLOGY => self.dashboard_topology(&request.body),
-            GRAPH_RENDER_PREPARE => self.graph_render(GRAPH_RENDER_PREPARE, &request.body),
-            GRAPH_RENDER_NODE_CHUNK => self.graph_render(GRAPH_RENDER_NODE_CHUNK, &request.body),
-            GRAPH_RENDER_EDGE_CHUNK => self.graph_render(GRAPH_RENDER_EDGE_CHUNK, &request.body),
-            GRAPH_RENDER_RESOLVE => self.graph_render(GRAPH_RENDER_RESOLVE, &request.body),
+            path @ (GRAPH_RENDER_PREPARE
+            | GRAPH_RENDER_NODE_CHUNK
+            | GRAPH_RENDER_EDGE_CHUNK
+            | GRAPH_RENDER_RESOLVE
+            | GRAPH_RENDER_INSPECT
+            | GRAPH_RENDER_NEIGHBORHOOD
+            | GRAPH_RENDER_LOCATE
+            | GRAPH_RENDER_ELIGIBLE) => self.graph_render(path, &request.body),
             RETRIEVAL_PREPARE => self.prepare_retrieval(&request.body),
             RUNTIME_ATTACH => self.runtime_attach(&request.body),
             RUNTIME_HEARTBEAT => self.runtime_heartbeat(&request.body),
@@ -126,6 +132,10 @@ impl Service {
             GRAPH_RENDER_NODE_CHUNK => "node-chunk",
             GRAPH_RENDER_EDGE_CHUNK => "edge-chunk",
             GRAPH_RENDER_RESOLVE => "resolve",
+            GRAPH_RENDER_INSPECT => "inspect",
+            GRAPH_RENDER_NEIGHBORHOOD => "neighborhood",
+            GRAPH_RENDER_LOCATE => "locate",
+            GRAPH_RENDER_ELIGIBLE => "eligible",
             _ => return Err(INVALID),
         };
         self.graph_render.lock().map_err(|_| UNAVAILABLE)?.handle(

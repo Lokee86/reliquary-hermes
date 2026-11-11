@@ -5,6 +5,7 @@ use crate::graph_render_identity::RenderNodeId;
 pub(crate) struct GraphRenderHierarchy {
     pub(crate) nodes: Vec<GraphRenderHierarchyNode>,
     pub(crate) leaves: Vec<GraphRenderLeaf>,
+    pub(crate) community_names: std::collections::BTreeMap<[u8; 32], String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -1,12 +1,12 @@
 //! Profile-authenticated HTTP boundary for the Warlock-compatible renderer.
+#[path = "graph_render_root_projection.rs"]
+mod root_projection;
+
+use self::root_projection::{GraphInspection, read_source};
 use crate::{
     graph_render::GraphRenderService,
-    graph_render_identity::{GraphRenderNodeKey, GraphRenderNodeTarget, RenderNodeId},
-    graph_render_source::{
-        GraphRenderCommunitySource, GraphRenderNodeSource, GraphRenderRelationSource,
-        GraphRenderSource,
-    },
-    graph_render_source_style::style_for_relation,
+    graph_render_contract::GraphRenderVec3,
+    graph_render_identity::{GraphRenderNodeKey, RenderNodeId},
     registry::{Registry, RegistryError},
     service_http::{
         FORBIDDEN, HttpError, HttpResponse, INVALID, MAX_GRAPH_CHUNK_BYTES,
@@ -15,8 +15,8 @@ use crate::{
     service_protocol::decode,
 };
 use reliquary_memory::{
-    CommunityId, InspectionCut, Instance, MemoryId, NodeRef, OwnerId, OwnerKind, ProductError,
-    ProductErrorKind, Relation, SemanticGraphCut,
+    InspectionCut, Instance, MemoryId, MemoryListFilters, MemoryListLifecycle, OwnerId, OwnerKind,
+    ProductError, ProductErrorKind,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -24,10 +24,43 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const GENERATION_TTL: Duration = Duration::from_secs(300);
-const SOURCE_PAGE_LIMIT: usize = 128;
-const MAX_RENDER_NODES: usize = 1_000_000;
-const MAX_RENDER_RELATIONS: usize = 10_000_000;
 const MAX_CACHED_CHUNK_BYTES: usize = 512 * 1024 * 1024;
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FilterScope {
+    include_archived: bool,
+    query: Option<String>,
+    community_id: Option<String>,
+    category: Option<String>,
+    memory_type: Option<String>,
+}
+
+impl FilterScope {
+    fn root_filters(self) -> Result<MemoryListFilters, HttpError> {
+        let query = self.query.unwrap_or_default();
+        if query.len() > 4096
+            || [&self.category, &self.memory_type]
+                .into_iter()
+                .flatten()
+                .any(|value| value.trim().is_empty() || value.len() > 128)
+        {
+            return Err(INVALID);
+        }
+        Ok(MemoryListFilters {
+            query: query.trim().to_owned(),
+            category: self.category,
+            memory_type: self.memory_type,
+            lifecycle: (!self.include_archived).then_some(MemoryListLifecycle::Active),
+            community_id: self
+                .community_id
+                .as_deref()
+                .map(decode_memory_id)
+                .transpose()?
+                .map(|id| id.0),
+        })
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,6 +69,12 @@ struct RenderRequest {
     principal_id: String,
     generation: String,
     cut: String,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    filters: Option<FilterScope>,
+    #[serde(default)]
+    memory_id: Option<String>,
     #[serde(default)]
     generation_id: Option<String>,
     #[serde(default)]
@@ -59,19 +98,53 @@ impl RenderRequest {
         {
             return false;
         }
+        if self
+            .session_id
+            .as_deref()
+            .is_some_and(|id| !bounded(id, 128))
+        {
+            return false;
+        }
+        let has_generation = self.generation_id.as_deref().is_some_and(valid_u64_decimal);
+        let has_memory = self
+            .memory_id
+            .as_deref()
+            .is_some_and(|id| decode_memory_id(id).is_ok());
         match operation {
             "prepare" => {
-                self.generation_id.is_none() && self.chunk_id.is_none() && self.render_id.is_none()
+                self.filters.is_some()
+                    && self.generation_id.is_none()
+                    && self.chunk_id.is_none()
+                    && self.render_id.is_none()
+                    && self.memory_id.is_none()
             }
-            "node-chunk" | "edge-chunk" => {
-                self.generation_id.as_deref().is_some_and(valid_u64_decimal)
-                    && self.chunk_id.is_some()
+            "eligible" => {
+                self.filters.is_some()
+                    && has_memory
+                    && self.generation_id.is_none()
+                    && self.chunk_id.is_none()
                     && self.render_id.is_none()
             }
-            "resolve" => {
-                self.generation_id.as_deref().is_some_and(valid_u64_decimal)
+            "node-chunk" | "edge-chunk" => {
+                has_generation
+                    && self.filters.is_none()
+                    && self.chunk_id.is_some()
+                    && self.render_id.is_none()
+                    && self.memory_id.is_none()
+            }
+            "resolve" | "inspect" | "neighborhood" => {
+                has_generation
+                    && self.filters.is_none()
                     && self.chunk_id.is_none()
                     && self.render_id.is_some()
+                    && self.memory_id.is_none()
+            }
+            "locate" => {
+                has_generation
+                    && self.filters.is_none()
+                    && has_memory
+                    && self.chunk_id.is_none()
+                    && self.render_id.is_none()
             }
             _ => false,
         }
@@ -80,6 +153,9 @@ impl RenderRequest {
 
 struct Authority {
     owner_id: String,
+    principal_id: String,
+    session_id: Option<String>,
+    filters: MemoryListFilters,
     root_generation: String,
     root_cut: String,
     render_generation: u64,
@@ -90,6 +166,7 @@ struct Authority {
 pub(crate) struct GraphRenderHost {
     renderer: GraphRenderService,
     authority: Option<Authority>,
+    inspection: GraphInspection,
 }
 
 impl GraphRenderHost {
@@ -110,26 +187,38 @@ impl GraphRenderHost {
                 &registry.profile_id().to_owned(),
                 &request.principal_id,
                 &request.owner_id,
-                None,
+                request.session_id.as_deref(),
             )
             .map_err(registry_error)?;
         drop(registry);
 
         match operation {
             "prepare" => self.prepare(instance, owner, kind, request),
-            "node-chunk" => {
-                self.authorize_current_cut(instance, owner, kind, &request)?;
-                self.node_chunk(&request)
+            "eligible" => {
+                let cut = current_cut(instance, owner, kind)?;
+                let (generation, binding) = cut_binding(&cut);
+                if request.generation != generation || request.cut != binding {
+                    return Err(HttpError::new(409, "owner_cut_changed", false));
+                }
+                let filters = request.filters.ok_or(INVALID)?.root_filters()?;
+                let id = decode_memory_id(request.memory_id.as_deref().ok_or(INVALID)?)?;
+                let eligible = instance
+                    .memory_matches_filter(owner, kind, cut, &filters, id)
+                    .map_err(product_error)?;
+                Ok(HttpResponse::ok(json!({ "eligible": eligible })))
             }
-            "edge-chunk" => {
+            _ => {
                 self.authorize_current_cut(instance, owner, kind, &request)?;
-                self.edge_chunk(&request)
+                match operation {
+                    "node-chunk" => self.node_chunk(&request),
+                    "edge-chunk" => self.edge_chunk(&request),
+                    "resolve" => self.resolve(&request),
+                    "inspect" => self.inspect(&request),
+                    "neighborhood" => self.neighborhood(&request),
+                    "locate" => self.locate(&request),
+                    _ => Err(INVALID),
+                }
             }
-            "resolve" => {
-                self.authorize_current_cut(instance, owner, kind, &request)?;
-                self.resolve(&request)
-            }
-            _ => Err(INVALID),
         }
     }
 
@@ -140,6 +229,7 @@ impl GraphRenderHost {
         kind: OwnerKind,
         request: RenderRequest,
     ) -> Result<HttpResponse, HttpError> {
+        let filters = request.filters.clone().ok_or(INVALID)?.root_filters()?;
         let cut = current_cut(instance, owner, kind)?;
         let (root_generation, root_cut) = cut_binding(&cut);
         if request.generation != root_generation || request.cut != root_cut {
@@ -151,6 +241,9 @@ impl GraphRenderHost {
             if authority.prepared_at.elapsed() > GENERATION_TTL {
                 self.evict();
             } else if authority.owner_id == request.owner_id
+                && authority.principal_id == request.principal_id
+                && authority.session_id == request.session_id
+                && authority.filters == filters
                 && authority.root_generation == root_generation
                 && authority.root_cut == root_cut
             {
@@ -163,7 +256,7 @@ impl GraphRenderHost {
             }
         }
 
-        let (source, source_cut) = match source_for_owner(instance, owner, kind, cut) {
+        let (source, inspection) = match read_source(instance, owner, kind, cut, &filters) {
             Ok(source) => source,
             Err(error) => {
                 if let Ok(latest_cut) = current_cut(instance, owner, kind) {
@@ -177,9 +270,6 @@ impl GraphRenderHost {
                 return Err(error);
             }
         };
-        if source_cut != cut {
-            return Err(HttpError::new(409, "owner_cut_changed", false));
-        }
         let latest_cut = current_cut(instance, owner, kind)?;
         if latest_cut != cut {
             let (latest_generation, latest_cut) = cut_binding(&latest_cut);
@@ -193,18 +283,23 @@ impl GraphRenderHost {
 
         // A service instance is profile scoped. Keep one prepared generation resident;
         // owner switches and changed cuts retire every earlier render identity.
-        self.renderer.clear();
-        self.authority = None;
+        if self
+            .authority
+            .as_ref()
+            .is_some_and(|authority| authority.owner_id != request.owner_id)
+        {
+            self.evict();
+        }
         let summary = self.renderer.prepare(source).map_err(|_| UNAVAILABLE)?;
         let latest_cut = match current_cut(instance, owner, kind) {
             Ok(cut) => cut,
             Err(error) => {
-                self.renderer.clear();
+                self.evict();
                 return Err(error);
             }
         };
         if latest_cut != cut {
-            self.renderer.clear();
+            self.evict();
             return Err(HttpError::new(409, "owner_cut_changed", false));
         }
         if self
@@ -225,8 +320,12 @@ impl GraphRenderHost {
             self.evict();
             return Err(HttpError::new(413, "graph_manifest_limit", false));
         }
+        self.inspection = inspection;
         self.authority = Some(Authority {
             owner_id: request.owner_id,
+            principal_id: request.principal_id,
+            session_id: request.session_id,
+            filters,
             root_generation,
             root_cut,
             render_generation: summary.generation_id,
@@ -247,7 +346,10 @@ impl GraphRenderHost {
             self.evict();
             return Err(stale_generation());
         }
-        if authority.owner_id != request.owner_id {
+        if authority.owner_id != request.owner_id
+            || authority.principal_id != request.principal_id
+            || authority.session_id != request.session_id
+        {
             return Err(stale_generation());
         }
         let current = current_cut(instance, owner, kind)?;
@@ -288,24 +390,79 @@ impl GraphRenderHost {
         Ok(HttpResponse::binary(bytes.to_vec()))
     }
 
-    fn resolve(&mut self, request: &RenderRequest) -> Result<HttpResponse, HttpError> {
-        let generation_id = self.check_render_generation(request)?;
-        let render_id = RenderNodeId::new(request.render_id.ok_or(INVALID)?);
-        let target = self
-            .renderer
-            .resolve_node(generation_id, render_id)
-            .map_err(|_| stale_generation())?;
-        if target.kind != "memory" {
-            return Err(HttpError::new(409, "graph_selection_unavailable", false));
-        }
-        let memory_id: [u8; 32] = target
-            .value
-            .try_into()
-            .map_err(|_| HttpError::new(409, "graph_selection_unavailable", false))?;
-        Ok(HttpResponse::ok(json!({"memoryId": hex(&memory_id)})))
+    fn resolve(&self, request: &RenderRequest) -> Result<HttpResponse, HttpError> {
+        let generation = self.check_render_generation(request)?;
+        let id = RenderNodeId::new(request.render_id.ok_or(INVALID)?);
+        let memory = self.memory_id(generation, id)?;
+        Ok(HttpResponse::ok(json!({"memoryId": memory})))
     }
 
-    fn check_render_generation(&mut self, request: &RenderRequest) -> Result<u64, HttpError> {
+    fn inspect(&self, request: &RenderRequest) -> Result<HttpResponse, HttpError> {
+        let generation = self.check_render_generation(request)?;
+        let id = RenderNodeId::new(request.render_id.ok_or(INVALID)?);
+        let memory = self.memory_id(generation, id)?;
+        let title = self
+            .inspection
+            .titles
+            .get(id.get() as usize)
+            .and_then(Option::as_deref)
+            .ok_or_else(|| HttpError::new(404, "graph_title_unavailable", false))?;
+        let position = self.positions(generation)?[id.get() as usize];
+        Ok(HttpResponse::ok(
+            json!({"memoryId": memory, "title": title, "position": position}),
+        ))
+    }
+
+    fn locate(&self, request: &RenderRequest) -> Result<HttpResponse, HttpError> {
+        let generation = self.check_render_generation(request)?;
+        let memory = decode_memory_id(request.memory_id.as_deref().ok_or(INVALID)?)?;
+        let key = GraphRenderNodeKey::new(memory.0.to_vec());
+        let id = self
+            .renderer
+            .locate_node(generation, &key)
+            .map_err(|_| stale_generation())?;
+        let Some(id) = id else {
+            return Ok(HttpResponse::ok(serde_json::Value::Null));
+        };
+        let position = self.positions(generation)?[id.get() as usize];
+        Ok(HttpResponse::ok(
+            json!({"renderId": id.get(), "position": position}),
+        ))
+    }
+
+    fn neighborhood(&self, request: &RenderRequest) -> Result<HttpResponse, HttpError> {
+        let generation = self.check_render_generation(request)?;
+        let id = request.render_id.ok_or(INVALID)?;
+        let neighborhood = self
+            .inspection
+            .incident
+            .neighborhood(id, self.positions(generation)?)
+            .ok_or_else(stale_generation)?;
+        Ok(HttpResponse::ok(
+            serde_json::to_value(neighborhood).map_err(|_| UNAVAILABLE)?,
+        ))
+    }
+
+    fn positions(&self, generation: u64) -> Result<&[GraphRenderVec3], HttpError> {
+        Ok(&self
+            .renderer
+            .layout(generation)
+            .map_err(|_| stale_generation())?
+            .positions)
+    }
+
+    fn memory_id(&self, generation: u64, id: RenderNodeId) -> Result<String, HttpError> {
+        let target = self
+            .renderer
+            .resolve_node(generation, id)
+            .map_err(|_| stale_generation())?;
+        if target.kind != "memory" || target.value.len() != 32 {
+            return Err(HttpError::new(409, "graph_selection_unavailable", false));
+        }
+        Ok(hex(&target.value))
+    }
+
+    fn check_render_generation(&self, request: &RenderRequest) -> Result<u64, HttpError> {
         let authority = self.authority.as_ref().ok_or_else(stale_generation)?;
         let requested = request
             .generation_id
@@ -323,6 +480,7 @@ impl GraphRenderHost {
     fn evict(&mut self) {
         self.renderer.clear();
         self.authority = None;
+        self.inspection = GraphInspection::default();
     }
 
     fn evict_if_authority_cut_advanced(
@@ -356,190 +514,32 @@ fn current_cut(
     instance: &Instance,
     owner: OwnerId,
     kind: OwnerKind,
-) -> Result<SemanticGraphCut, HttpError> {
-    let (cut, _) = instance
-        .semantic_graph_memory_page(owner, kind, None, None, 1)
-        .map_err(product_error)?;
-    Ok(cut)
+) -> Result<InspectionCut, HttpError> {
+    instance
+        .semantic_graph_inspection_cut(owner, kind)
+        .map_err(product_error)
 }
 
-fn source_for_owner(
-    instance: &Instance,
-    owner: OwnerId,
-    kind: OwnerKind,
-    expected_cut: SemanticGraphCut,
-) -> Result<(GraphRenderSource, SemanticGraphCut), HttpError> {
-    let (cut, first_page) = instance
-        .semantic_graph_memory_page(owner, kind, Some(expected_cut), None, SOURCE_PAGE_LIMIT)
-        .map_err(product_error)?;
-    if cut != expected_cut {
-        return Err(HttpError::new(409, "owner_cut_changed", false));
-    }
-    let mut memories = first_page.memories;
-    let mut after = first_page.next;
-    while let Some(next) = after {
-        if memories.len() >= MAX_RENDER_NODES {
-            return Err(HttpError::new(413, "graph_node_limit", false));
-        }
-        let (page_cut, page) = instance
-            .semantic_graph_memory_page(owner, kind, Some(cut), Some(next), SOURCE_PAGE_LIMIT)
-            .map_err(product_error)?;
-        if page_cut != cut {
-            return Err(HttpError::new(409, "owner_cut_changed", false));
-        }
-        memories.extend(page.memories);
-        after = page.next;
-    }
-    if memories.len() > MAX_RENDER_NODES {
-        return Err(HttpError::new(413, "graph_node_limit", false));
-    }
-
-    let mut relations = Vec::new();
-    let mut offset = 0;
-    loop {
-        let (page_cut, page) = instance
-            .semantic_graph_relation_page(owner, kind, cut, offset, SOURCE_PAGE_LIMIT)
-            .map_err(product_error)?;
-        if page_cut != cut {
-            return Err(HttpError::new(409, "owner_cut_changed", false));
-        }
-        if relations.len().saturating_add(page.relations.len()) > MAX_RENDER_RELATIONS {
-            return Err(HttpError::new(413, "graph_relation_limit", false));
-        }
-        relations.extend(page.relations);
-        match page.next {
-            Some(next) if next > offset => offset = next,
-            Some(_) => return Err(HttpError::new(503, "graph_source_invalid", false)),
-            None => break,
-        }
-    }
-    let community_generation = cut.community;
-    let community_sources = community_sources(instance, owner, kind, cut)?;
-    let mut nodes = memories
-        .into_iter()
-        .map(|memory| {
-            let key = memory_key(memory.id);
-            GraphRenderNodeSource::new(
-                key,
-                memory.title.unwrap_or_default(),
-                GraphRenderNodeTarget::new("memory", memory.id.0.to_vec()),
-            )
-        })
-        .collect::<Vec<_>>();
-    nodes.sort_unstable_by(|left, right| left.key.cmp(&right.key));
-    for (render_id, node) in nodes.iter_mut().enumerate() {
-        node.label = node.label.chars().take(256).collect();
-        if node.label.trim().is_empty() {
-            node.label = format!("Memory {render_id}");
-        }
-    }
-    let relation_sources = relations
-        .into_iter()
-        .filter_map(|relation| relation_source(relation))
-        .collect();
-    let source = GraphRenderSource::new(
-        owner.to_string(),
-        community_generation,
-        nodes,
-        relation_sources,
-        community_sources,
-    );
-    Ok((source, cut))
-}
-
-fn relation_source(relation: Relation) -> Option<GraphRenderRelationSource> {
-    if !relation.active {
-        return None;
-    }
-    let (NodeRef::Memory(source), NodeRef::Memory(target)) = (relation.source, relation.target)
-    else {
-        return None;
-    };
-    if matches!(
-        relation.kind,
-        reliquary_memory::RelationKind::EntityAssociation
-            | reliquary_memory::RelationKind::PrincipalAssociation
-    ) {
-        return None;
-    }
-    Some(GraphRenderRelationSource {
-        source: GraphRenderNodeKey::new(source.to_vec()),
-        target: GraphRenderNodeKey::new(target.to_vec()),
-        style: style_for_relation(relation.kind, relation.origin),
-    })
-}
-
-fn community_sources(
-    instance: &Instance,
-    owner: OwnerId,
-    kind: OwnerKind,
-    cut: SemanticGraphCut,
-) -> Result<Vec<GraphRenderCommunitySource>, HttpError> {
-    let mut communities = Vec::new();
-    let mut after_community: Option<CommunityId> = None;
-    loop {
-        let (page_cut, page) = instance
-            .semantic_graph_community_page(owner, kind, cut, after_community, SOURCE_PAGE_LIMIT)
-            .map_err(product_error)?;
-        if page_cut != cut {
-            return Err(HttpError::new(409, "owner_cut_changed", false));
-        }
-        for community in page.communities {
-            let mut members = Vec::with_capacity(community.member_count);
-            let mut after_member = None;
-            loop {
-                let (member_cut, page) = instance
-                    .semantic_graph_community_member_page(
-                        owner,
-                        kind,
-                        cut,
-                        community.id,
-                        after_member,
-                        SOURCE_PAGE_LIMIT,
-                    )
-                    .map_err(product_error)?;
-                if member_cut != cut {
-                    return Err(HttpError::new(409, "owner_cut_changed", false));
-                }
-                members.extend(page.members.into_iter().map(memory_key));
-                after_member = page.next;
-                if after_member.is_none() {
-                    break;
-                }
-            }
-            if members.len() != community.member_count {
-                return Err(HttpError::new(409, "community_cut_mismatch", false));
-            }
-            communities.push(GraphRenderCommunitySource::new(community.id.0, members));
-        }
-        match page.next {
-            Some(next) if Some(next) != after_community => after_community = Some(next),
-            Some(_) => return Err(HttpError::new(503, "community_page_invalid", false)),
-            None => break,
-        }
-    }
-    Ok(communities)
-}
-
-fn memory_key(id: MemoryId) -> GraphRenderNodeKey {
-    GraphRenderNodeKey::new(id.0.to_vec())
-}
-
-fn cut_binding(cut: &SemanticGraphCut) -> (String, String) {
-    let inspection_cut = InspectionCut {
-        owner_id: cut.owner_id,
-        generation: cut.generation,
-        archive: cut.archive,
-        memory: cut.memory,
-        perception: cut.perception,
-        relationship: cut.relationship,
-        graph: cut.graph,
-        community: cut.community,
-    };
+fn cut_binding(cut: &InspectionCut) -> (String, String) {
     (
-        crate::dashboard::generation_id(&inspection_cut),
-        crate::dashboard::cut_id(&inspection_cut),
+        crate::dashboard::generation_id(cut),
+        crate::dashboard::cut_id(cut),
     )
+}
+
+fn decode_memory_id(value: &str) -> Result<MemoryId, HttpError> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(INVALID);
+    }
+    let mut bytes = [0; 32];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).map_err(|_| INVALID)?;
+    }
+    Ok(MemoryId(bytes))
 }
 
 fn product_error(error: ProductError) -> HttpError {
@@ -583,6 +583,9 @@ mod tests {
     fn authority(owner_id: &str) -> Authority {
         Authority {
             owner_id: owner_id.to_owned(),
+            principal_id: "principal".into(),
+            session_id: None,
+            filters: MemoryListFilters::default(),
             root_generation: "17".to_owned(),
             root_cut: "cut-a".to_owned(),
             render_generation: 9,
@@ -595,6 +598,7 @@ mod tests {
         let mut host = GraphRenderHost {
             renderer: GraphRenderService::default(),
             authority: Some(authority("owner-a")),
+            inspection: GraphInspection::default(),
         };
         host.evict_if_authority_cut_advanced("owner-b", "18", "cut-b");
         assert!(host.authority.is_some());
@@ -604,6 +608,9 @@ mod tests {
             principal_id: "principal".into(),
             generation: "17".into(),
             cut: "cut-a".into(),
+            session_id: None,
+            filters: None,
+            memory_id: None,
             generation_id: Some("8".into()),
             chunk_id: Some(0),
             render_id: None,
@@ -617,6 +624,7 @@ mod tests {
         let mut host = GraphRenderHost {
             renderer: GraphRenderService::default(),
             authority: Some(authority("owner-a")),
+            inspection: GraphInspection::default(),
         };
         host.evict_if_authority_cut_advanced("owner-a", "18", "cut-b");
         assert!(host.authority.is_none());
@@ -635,6 +643,9 @@ mod tests {
             principal_id: "principal".into(),
             generation: "17".into(),
             cut: "a".repeat(64),
+            session_id: None,
+            filters: Some(FilterScope::default()),
+            memory_id: None,
             generation_id: None,
             chunk_id: None,
             render_id: None,
@@ -644,6 +655,7 @@ mod tests {
         request.chunk_id = Some(0);
         assert!(!request.valid_for("prepare"));
         request.generation_id = Some("9".into());
+        request.filters = None;
         assert!(request.valid_for("node-chunk"));
         request.render_id = Some(0);
         assert!(!request.valid_for("node-chunk"));

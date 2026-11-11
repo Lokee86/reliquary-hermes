@@ -19,11 +19,29 @@ export async function verifyLocalFixture(fixturePath, fixture) {
   }
 }
 
+export async function verifyOwnerScope(app, ownerId, kind) {
+  const details = app.locator("details.scope-options");
+  const summary = details.locator("summary").first();
+  const scope = app.getByRole("group", { name: "Owner scope", exact: true });
+  await summary.waitFor({ timeout: 30000 });
+  async function open() {
+    if (await details.getAttribute("open") === null) await summary.click();
+  }
+  await open();
+  if (kind) {
+    await scope.getByRole("button", { name: new RegExp("\\b" + kind + "$") }).first().click();
+    await app.locator(".knowledge-heading").getByText(new RegExp("^" + kind + " · ")).waitFor();
+    await open();
+  }
+  await scope.getByText(ownerId, { exact: true }).waitFor({ timeout: 30000 });
+  await summary.click();
+}
+
 export async function exerciseKnowledge(page, fixture, surface) {
-  const app = page.locator(".rly-app");
+  const app = page.getByRole("region", { name: "Reliquary", exact: true });
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
-  await app.getByRole("heading", { name: "Reliquary", exact: true }).waitFor({ timeout: 30000 });
+  await app.getByRole("navigation", { name: "Reliquary sections" }).waitFor({ timeout: 30000 });
   if (fixture.candidate) {
     const setup = app.getByRole("region", { name: "Reliquary setup" });
     if (surface === "desktop") {
@@ -45,8 +63,7 @@ export async function exerciseKnowledge(page, fixture, surface) {
     await setup.getByRole("button", { name: "Review and connect" }).click();
     await setup.getByRole("button", { name: "Connect Reliquary" }).click({ timeout: 30000 });
   }
-  const rail = app.getByRole("complementary", { name: "Owner scope" });
-  await rail.getByText(fixture.ownerIds.main, { exact: true }).waitFor({ timeout: 30000 });
+  await verifyOwnerScope(app, fixture.ownerIds.main);
   if (fixture.retiredOnly) {
     await app.getByRole("button", { name: "List", exact: true }).click();
     await app.getByRole("checkbox", { name: "Show non-active memories", exact: true }).click();
@@ -62,6 +79,7 @@ export async function exerciseKnowledge(page, fixture, surface) {
     console.log(surface + ": Memory creation, association link/unlink, replacement and retirement passed");
     return;
   }
+  await app.getByRole("button", { name: "Graph", exact: true }).click();
   const graph = app.locator(".knowledge-graph-wrap");
   async function graphReady(count) {
     await graph.locator('[data-graph-ready="true"]').waitFor({ timeout: 40000 });
@@ -95,14 +113,16 @@ export async function exerciseKnowledge(page, fixture, surface) {
   await inspector.getByRole("heading", { name: "History", exact: true }).waitFor();
   await screenshot("inspector");
   if (fixture.community) {
-    await exerciseCommunity(app, fixture.community, screenshot);
-    console.log(surface + ": community navigation, filtering and rename passed");
+    await exerciseCommunity(app, fixture.community, screenshot, surface);
+    console.log(surface + (surface === "desktop"
+      ? ": community navigation and filtering passed (read-only Desktop)"
+      : ": community navigation, filtering and rename passed"));
   }
-  await rail.getByRole("button", { name: /^PHY\b/ }).click();
-  await rail.getByText(fixture.ownerIds.phy, { exact: true }).waitFor();
-  await rail.getByText("Read only", { exact: true }).waitFor();
+  await verifyOwnerScope(app, fixture.ownerIds.phy, "PHY");
+  await app.getByText("PHY · Read only", { exact: true }).waitFor();
+  await app.getByRole("button", { name: "Graph", exact: true }).click();
   await graphReady(fixture.counts.phy);
-  assert.equal(await inspector.count(), 0);
+  await inspector.getByText("Select a memory.", { exact: true }).waitFor();
   const nav = app.getByRole("navigation", { name: "Reliquary sections" });
   await nav.getByRole("button", { name: "Sources", exact: true }).click();
   await app.getByRole("button", { name: "Import Existing Sessions" }).click();
@@ -114,7 +134,7 @@ export async function exerciseKnowledge(page, fixture, surface) {
 }
 
 
-async function exerciseCommunity(app, community, screenshot) {
+async function exerciseCommunity(app, community, screenshot, surface) {
   const nav = app.getByRole("complementary", { name: "Knowledge navigation" });
   const list = app.getByRole("region", { name: "Memory list" });
   const rows = list.locator(".knowledge-memory-row");
@@ -144,6 +164,7 @@ async function exerciseCommunity(app, community, screenshot) {
     await next.click();
     await original.click({ timeout: 30000 });
   }
+  if (surface === "desktop") return;
   await nav.getByLabel("Community name").fill(community.renamed);
   await nav.getByRole("button", { name: "Rename", exact: true }).click();
   if (community.onNextPage) await next.click({ timeout: 30000 });

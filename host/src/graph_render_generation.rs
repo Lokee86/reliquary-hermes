@@ -30,6 +30,7 @@ pub(crate) struct GraphRenderGeneration {
     pub(crate) node_targets: Vec<GraphRenderNodeTarget>,
     pub(crate) hierarchy: GraphRenderHierarchy,
     pub(crate) layout: GraphRenderLayout,
+    pub(crate) layout_fingerprint: u64,
     pub(crate) edge_projection: GraphRenderEdgeProjection,
     pub(crate) manifest: GraphRenderManifest,
     pub(crate) chunks: GraphRenderChunkStore,

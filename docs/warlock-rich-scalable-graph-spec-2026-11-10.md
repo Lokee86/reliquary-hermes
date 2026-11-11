@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-10
 
-**Status:** Ready for implementation; no renderer changes made by this specification.
+**Status:** Implemented and verified locally in Hermes Web and Desktop. The verification guide records the acceptance and benchmark evidence.
 
 **Owner:** Reliquary Hermes plugin's existing graph rendering subsystem, with reusable design/contract anchored in Warlock.
 
@@ -15,6 +15,14 @@
 **Authoritative comparison:** [Original versus scalable feature audit](warlock-graph-original-vs-scalable-audit-2026-11-10.md).
 
 **Scope:** Graph renderer, its source projection, and integrated Knowledge UI behavior in Hermes Web/Desktop. Not a general-purpose rewrite of the already functioning provider or UI.
+
+## Purpose
+
+Restore the original Warlock exploration behavior on the prepared-generation renderer shared by Hermes Web and Desktop.
+
+## Overview
+
+Root supplies authorized Memory eligibility and relationships at an exact cut. The Rust host prepares weighted positions, territory descriptors, bounded inspection and binary chunks. Graph and List share the same filters, selected Memory and inspector.
 
 ## 1. Problem statement
 
@@ -51,7 +59,7 @@ Shared Hermes Web/Desktop React Knowledge UI
 - Rust `host/src/graph_render_contract.rs`, `graph_render_manifest.rs`: the sole render manifest/territory DTO; binary chunk schemas stay unchanged unless independently justified.
 - Rust `host/src/graph_render_edge_projection*.rs`: compact weighted adjacency, aggregate topology and generation-local incident edge indexing for bounded selection.
 - React `dashboard/src/graph/render/{GraphRenderScene,RenderTerritories,BoundedPicker,RenderEdgeChunk,RenderNodeChunk,RenderLabels,client,types}.tsx/ts`: existing rendering client and surface, enriched rather than duplicated.
-- React `dashboard/src/knowledge/{KnowledgePanel,KnowledgeGraph,GraphSelectionInspector,KnowledgeInspector}.tsx`: unified selected Memory and filter scope, using existing authenticated Knowledge client.
+- React `dashboard/src/knowledge/{KnowledgePanel,KnowledgeGraph,KnowledgeInspector}.tsx` owns the shared selected Memory and filter scope through the authenticated Knowledge client.
 
 **No duplicate graph path**, no Tauri dependency in Hermes, no new renderer process, no fallback to the old `GraphData` pipeline, and no independent frontend force simulation.
 
@@ -99,6 +107,18 @@ If Root cannot currently produce exact-cut filtered graph input, add a narrow ex
 
 **Concrete budget design:** The implementation must choose and document fixed maximum local solver population, solver iterations, aggregate fan-out, per-node neighborhood consideration and expansion bounds **before implementation benchmarking**. Keep work bounded by graph size plus inspected edges under those fixed budgets; require practical linear or near-linear scaling with N+E, not a claim of a strict asymptotic bound without measurement. Invalid/huge graph inputs must return typed errors or reduced-detail aggregate output, not lock the UI indefinitely.
 
+The renderer uses the following limits.
+
+| Surface | Limit |
+| --- | --- |
+| Hierarchy leaf capacity | 32,768 Memories |
+| Local relaxation | 128 nodes per population, 12 iterations, 16 weighted neighbor candidates per node |
+| Aggregate relaxation | 32 representatives per population, four iterations, 32 retained neighbors per representative |
+| Center movement | Six units per aggregate center within a 24-unit base clearance. Local movement stays inside each node's grid clearance. |
+| Selection | 128 incident edges, with the exact total and omitted count |
+| Root scan | 2M retained Memories or membership entries and 20M relation states examined. A scan beyond these limits fails before publishing a generation. |
+| Signed source | 1M Memories and 10M induced render relations, a 4 MiB manifest and 1 MiB binary chunks |
+
 **Reuse and invalidation correction:** Current `graph_render_prepare.rs` reuses layout when node keys/hierarchy are identical even if relations change. This rule is wrong for a relation-driven layout. Use a stable weighted-topology fingerprint (and any layout-policy/version fingerprint) so adjacency/weight changes invalidate the affected layout regions. Preserve and reuse unchanged chunks and hierarchy branches where correct; **never reuse old node/edge chunk geometry when positions change**. The next generation has fresh immutable node positions and properly updated edges/bounds, and structural reuse is supported by deterministic equivalence tests.
 
 ## 5. Interaction specification (original parity)
@@ -110,7 +130,7 @@ Replace `RenderTerritories` wireframe boxes with the original translucent sphere
 Hovering a node highlights it and displays a tooltip with its actual title and short identifier, anchored to the node or cursor. Resolve metadata lazily through authenticated, generation-bound inspection; cancel stale requests, debounce or request-gate as appropriate, and bound cache memory. No tooltip for missing/inaccessible Memories. Keyboard focus and equivalent selected detail remain accessible.
 
 ### 5.3 Selection/focus
-Click selects a Memory and focuses the `TrackballControls` target at its graph position **only on an intentional selection change**, never on viewport frame changes, hover, pan or chunk fetch. Preserve camera orientation and sensible zoom. Double click/keyboard focus behavior should be explicit and tested; do not interrupt right-drag pan. Highlight selected Memory and attenuate unrelated nodes/edges. Selection includes full Memory inspector in the same Knowledge surface (history/provenance/actions based on grants), not a bare ID and a forced switch to List.
+Click selects a Memory and focuses the `TrackballControls` target at its graph position **only on an intentional selection change**. Preserve camera orientation and zoom through hover, pan, and viewport chunk fetches. A second primary click within 350 ms and three pixels of the first successful pick is part of the same selection. Enter or Space selects the hovered or currently selected node when the canvas has focus. Right-drag pans. Selection highlights the Memory and its incident edges, attenuates unrelated nodes and edges, and opens the full inspector with grant-bound history, provenance and actions.
 
 ### 5.4 Relationships
 Original behavior highlights incident relationships and attenuates or omits unrelated edges. Implement a bounded selection-specific edge overlay or selection-aware LOD draw data from the Rust generation. Render real relation kinds/colors/direction/weights from authoritative source. Handle cross-community edges, selected nodes across chunks and offscreen neighbors with accurate counts/truncation. No fetching or rebuilding all graph edges on selection.
@@ -162,3 +182,12 @@ These stages are **bounded construction and verification checkpoints in one fina
 - Original: `Warlock-graph-original-review-2026-11-10/src/features/graph/{scene,model}/` and `src/features/workspace/{KnowledgePanel,KnowledgeGraph}.tsx`
 - Scalable: `Warlock-graph-scalable-review-2026-11-10/src/features/graph/render/`, `src-tauri/src/graph_render*.rs`, `docs/GRAPH_RENDER_ARCHITECTURE.md`
 - Hermes: `host/src/graph_render*.rs`, `dashboard/src/graph/render/*`, `dashboard/src/knowledge/*`, `dashboard/tests/`, `tests/test_graph_render_api.py`
+
+## Related docs
+
+- [Web and Desktop render API contract](ui-contract.md)
+- [Verification and acceptance evidence](verification.md)
+
+## Notes
+
+Historical renderer measurements use different datasets and build configurations. Compare candidate and baseline using the same synthetic graph and build profile.

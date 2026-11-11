@@ -26,10 +26,12 @@ pub(crate) fn grid_offset(index: usize, count: usize, spacing: f32) -> [f32; 3] 
     ]
 }
 
-pub(crate) fn grid_half_extent(count: usize, spacing: f32) -> f32 {
+pub(crate) fn grid_sphere_extent(count: usize, spacing: f32) -> f32 {
     let dimensions = grid_dimensions(count);
-    let widest = *dimensions.iter().max().unwrap_or(&1);
-    ((widest.saturating_sub(1)) as f32 * spacing) * 0.5
+    let half_x = dimensions[0].saturating_sub(1) as f32 * spacing * 0.5;
+    let half_y = dimensions[1].saturating_sub(1) as f32 * spacing * 0.5;
+    let half_z = dimensions[2].saturating_sub(1) as f32 * spacing * 0.5;
+    (half_x * half_x + half_y * half_y + half_z * half_z).sqrt()
 }
 
 fn centered_axis(index: usize, count: usize, spacing: f32) -> f32 {
