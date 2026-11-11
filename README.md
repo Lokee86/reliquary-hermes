@@ -22,7 +22,7 @@ This initial catalog package targets **Windows and Hermes 0.23.0 or later**. It 
 3. Open Reliquary's **Setup** tab in the web dashboard, or run `hermes memory setup reliquary`. Select or create your General REL and active PHY, review the selected files, and connect. Setup provisions a random profile-scoped local service token through Hermes' credential API.
 4. For model-backed processing and semantic recall, configure the optional processing routes below, set the API key through Hermes, and restart the profile's Reliquary service. Enable the Hermes `memory` toolset for explicit recall.
 
-The repository's public **Native host** GitHub Actions workflow builds and tests the Windows executable and produces a GitHub build-provenance attestation. A workflow artifact is an optional manual alternative to a local build; verify its attestation against the source SHA before use. The plugin has no binary downloader or self-updater. Plugin updates use `hermes plugins update reliquary` after a reviewed catalog SHA bump.
+The repository's public **Native host** GitHub Actions workflow builds and tests the Windows executable and produces a GitHub build-provenance attestation. Its artifact uses the release profile with optimization level 1 for bounded CI build time; the local build script retains Cargo's full release optimization. Both have the same features. A workflow artifact is an optional manual alternative to a local build; verify its attestation against the source SHA before use. The plugin has no binary downloader or self-updater. Plugin updates use `hermes plugins update reliquary` after a reviewed catalog SHA bump.
 
 ### Model routes and credentials
 

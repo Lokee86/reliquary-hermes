@@ -13,6 +13,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 45
     permissions:
       contents: read
       actions: read
@@ -23,30 +24,52 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install the stable Rust toolchain
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - name: Cache locked Cargo dependencies and compiler output
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - name: Restore locked Cargo dependencies and compiler output
+        id: cargo-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             .cargo-home
             host/target
-          key: windows-native-${{ hashFiles('host/Cargo.lock', 'vendor/reliquary/**/*.rs', 'vendor/reliquary/**/Cargo.toml') }}
-      - name: Test and build the Windows host
+          key: windows-native-v2-release-o1-${{ hashFiles('host/Cargo.lock', 'vendor/reliquary/**/*.rs', 'vendor/reliquary/**/Cargo.toml', 'vendor/lodestone/**/*.rs', 'vendor/lodestone/**/Cargo.toml') }}
+      - name: Build the Windows host (release)
+        timeout-minutes: 30
         shell: pwsh
         run: |
+          $env:CARGO_PROFILE_RELEASE_OPT_LEVEL = '1'
           $repo = $env:GITHUB_WORKSPACE
           $env:CARGO_HOME = Join-Path $repo '.cargo-home'
           $env:CARGO_TARGET_DIR = Join-Path $repo 'host\target'
-          $env:CARGO_PROFILE_DEV_DEBUG = '0'
-          $env:CARGO_PROFILE_TEST_DEBUG = '0'
           $scratch = Join-Path $repo 'host\.test-tmp\native-ci'
           New-Item -ItemType Directory -Force -Path $env:CARGO_HOME, $scratch | Out-Null
           $env:TEMP = $scratch
           $env:TMP = $scratch
           $env:TMPDIR = $scratch
-          cargo test --manifest-path host/Cargo.toml --locked -j 1 -- --test-threads=1
-          if ($LASTEXITCODE -ne 0) { throw "Cargo test failed with exit code $LASTEXITCODE." }
-          cargo build --manifest-path host/Cargo.toml --locked --release -j 1
-          if ($LASTEXITCODE -ne 0) { throw "Cargo build failed with exit code $LASTEXITCODE." }
+          cargo build --manifest-path host/Cargo.toml --locked --release -j 2
+          if ($LASTEXITCODE -ne 0) { throw "Cargo release build failed with exit code $LASTEXITCODE." }
+      - name: Test the Windows host (release)
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $env:CARGO_PROFILE_RELEASE_OPT_LEVEL = '1'
+          $repo = $env:GITHUB_WORKSPACE
+          $env:CARGO_HOME = Join-Path $repo '.cargo-home'
+          $env:CARGO_TARGET_DIR = Join-Path $repo 'host\target'
+          $scratch = Join-Path $repo 'host\.test-tmp\native-ci'
+          New-Item -ItemType Directory -Force -Path $env:CARGO_HOME, $scratch | Out-Null
+          $env:TEMP = $scratch
+          $env:TMP = $scratch
+          $env:TMPDIR = $scratch
+          cargo test --manifest-path host/Cargo.toml --locked --release -j 2 -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw "Cargo release tests failed with exit code $LASTEXITCODE." }
+      - name: Save partial Cargo cache after a trusted run
+        if: ${{ always() && github.event_name != 'pull_request' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .cargo-home
+            host/target
+          key: windows-native-v2-release-o1-${{ hashFiles('host/Cargo.lock', 'vendor/reliquary/**/*.rs', 'vendor/reliquary/**/Cargo.toml', 'vendor/lodestone/**/*.rs', 'vendor/lodestone/**/Cargo.toml') }}
       - name: Upload the Windows host
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
