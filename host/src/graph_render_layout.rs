@@ -236,34 +236,18 @@ fn layout_group_centers(
         .sum::<f32>();
     let initial_radius = (70.0_f32 * 1.5).max(occupied_volume.cbrt() * 1.4);
     let mut centers = initial_positions_with_radius(groups.len(), initial_radius);
-    let mut adjacency = vec![BTreeMap::<usize, u64>::new(); groups.len()];
-    for source in 0..group_by_render.len() {
-        for neighbor in topology.neighbors(source) {
-            let target = neighbor.render_id as usize;
-            if source >= target || target >= group_by_render.len() {
-                continue;
-            }
-            let left = group_by_render[source];
-            let right = group_by_render[target];
-            if left == right {
-                continue;
-            }
-            retain_group_neighbor(&mut adjacency[left], right, neighbor.weight_units);
-            retain_group_neighbor(&mut adjacency[right], left, neighbor.weight_units);
-        }
-    }
-    let mut links = BTreeMap::<(usize, usize), u64>::new();
+    let adjacency = bounded_group_adjacency(groups.len(), group_by_render, topology);
+    let mut bounded_links = BTreeMap::<(usize, usize), u64>::new();
     for (left, neighbors) in adjacency.iter().enumerate() {
         for (&right, &weight) in neighbors {
-            if left < right {
-                links
-                    .entry((left, right))
-                    .and_modify(|current| *current = (*current).max(weight))
-                    .or_insert(weight);
-            }
+            let pair = (left.min(right), left.max(right));
+            bounded_links
+                .entry(pair)
+                .and_modify(|current| *current = (*current).max(weight))
+                .or_insert(weight);
         }
     }
-    let group_links = links.into_iter().collect::<Vec<_>>();
+    let group_links = bounded_links.into_iter().collect::<Vec<_>>();
     let group_iterations = match groups.len() {
         0..=10_000 => GROUP_FORCE_ITERATIONS,
         10_001..=100_000 => 8,
@@ -311,6 +295,36 @@ fn layout_group_centers(
     centers
 }
 
+pub(crate) fn bounded_group_adjacency(
+    group_count: usize,
+    group_by_render: &[usize],
+    topology: &GraphRenderLayoutTopology,
+) -> Vec<BTreeMap<usize, u64>> {
+    let mut aggregate_weights = BTreeMap::<(usize, usize), u64>::new();
+    for source in 0..group_by_render.len() {
+        for neighbor in topology.neighbors(source) {
+            let target = neighbor.render_id as usize;
+            if source >= target || target >= group_by_render.len() {
+                continue;
+            }
+            let left = group_by_render[source];
+            let right = group_by_render[target];
+            if left == right {
+                continue;
+            }
+            let pair = (left.min(right), left.max(right));
+            let weight = aggregate_weights.entry(pair).or_default();
+            *weight = weight.saturating_add(neighbor.weight_units);
+        }
+    }
+    let mut adjacency = vec![BTreeMap::<usize, u64>::new(); group_count];
+    for ((left, right), weight) in aggregate_weights {
+        retain_group_neighbor(&mut adjacency[left], right, weight);
+        retain_group_neighbor(&mut adjacency[right], left, weight);
+    }
+    adjacency
+}
+
 fn retain_group_neighbor(neighbors: &mut BTreeMap<usize, u64>, candidate: usize, weight: u64) {
     if let Some(current) = neighbors.get_mut(&candidate) {
         *current = current.saturating_add(weight);
@@ -336,7 +350,7 @@ fn retain_group_neighbor(neighbors: &mut BTreeMap<usize, u64>, candidate: usize,
     }
 }
 
-fn apply_group_repulsion(
+pub(crate) fn apply_group_repulsion(
     centers: &[[f32; 3]],
     radii: &[f32],
     masses: &[f32],
@@ -386,44 +400,20 @@ fn apply_group_repulsion(
         cells.entry(key).or_default().push(index);
     }
     for (left, &(x, y, z)) in coords.iter().enumerate() {
-        let mut examined = 0;
-        'cells: for dx in -1..=1 {
-            for dy in -1..=1 {
-                for dz in -1..=1 {
-                    if let Some(neighbors) = cells.get(&(x + dx, y + dy, z + dz)) {
-                        for &right in neighbors {
-                            if examined >= MAX_REPULSION_CANDIDATES {
-                                break 'cells;
-                            }
-                            examined += 1;
-                            if right <= left {
-                                continue;
-                            }
-                            let delta = subtract(centers[right], centers[left]);
-                            let distance = length(delta);
-                            let minimum = radii[left] + radii[right] + 32.0;
-                            if distance >= minimum {
-                                continue;
-                            }
-                            let direction = if distance <= f32::EPSILON {
-                                let axis = (left.wrapping_mul(31).wrapping_add(right)) % 3;
-                                let mut v = [0.0; 3];
-                                v[axis] = 1.0;
-                                v
-                            } else {
-                                scale(delta, 1.0 / distance)
-                            };
-                            let amount = if distance <= f32::EPSILON {
-                                1.0
-                            } else {
-                                (minimum - distance) * 0.25
-                            };
-                            add_to(&mut force[left], scale(direction, -amount));
-                            add_to(&mut force[right], scale(direction, amount));
-                        }
-                    }
-                }
+        for right in sample_spatial_candidates(left, (x, y, z), &cells) {
+            let delta = subtract(centers[right], centers[left]);
+            let distance = length(delta);
+            let minimum = radii[left] + radii[right] + 32.0;
+            if distance >= minimum {
+                continue;
             }
+            let direction = pair_direction(left, right, delta, distance);
+            let amount = if distance <= f32::EPSILON {
+                1.0
+            } else {
+                (minimum - distance) * 0.25
+            };
+            add_to(&mut force[left], scale(direction, -amount));
         }
     }
 }
@@ -554,7 +544,7 @@ fn layout_local_members(count: usize, links: &[(usize, usize, u64)]) -> Vec<[f32
     positions
 }
 
-fn apply_spatial_repulsion(positions: &[[f32; 3]], force: &mut [[f32; 3]]) {
+pub(crate) fn apply_spatial_repulsion(positions: &[[f32; 3]], force: &mut [[f32; 3]]) {
     let cell_size = FORCE_SPATIAL_CELL_SIZE;
     let mut cells = HashMap::<(i32, i32, i32), Vec<usize>>::new();
     let coords = positions
@@ -571,45 +561,72 @@ fn apply_spatial_repulsion(positions: &[[f32; 3]], force: &mut [[f32; 3]]) {
         cells.entry(key).or_default().push(index);
     }
     for (left, &(x, y, z)) in coords.iter().enumerate() {
-        let mut examined = 0;
-        'cells: for dx in -1..=1 {
-            for dy in -1..=1 {
-                for dz in -1..=1 {
-                    if let Some(neighbors) = cells.get(&(x + dx, y + dy, z + dz)) {
-                        for &right in neighbors {
-                            if examined >= MAX_REPULSION_CANDIDATES {
-                                break 'cells;
-                            }
-                            examined += 1;
-                            if right <= left {
-                                continue;
-                            }
-                            let delta = subtract(positions[right], positions[left]);
-                            let distance = length(delta);
-                            if distance >= 2.0 {
-                                continue;
-                            }
-                            let direction = if distance <= f32::EPSILON {
-                                let axis = (left.wrapping_mul(31).wrapping_add(right)) % 3;
-                                let mut v = [0.0; 3];
-                                v[axis] = 1.0;
-                                v
-                            } else {
-                                scale(delta, 1.0 / distance)
-                            };
-                            let amount = if distance <= f32::EPSILON {
-                                0.2
-                            } else {
-                                (2.0 - distance) * 0.34
-                            };
-                            add_to(&mut force[left], scale(direction, -amount));
-                            add_to(&mut force[right], scale(direction, amount));
-                        }
+        for right in sample_spatial_candidates(left, (x, y, z), &cells) {
+            let delta = subtract(positions[right], positions[left]);
+            let distance = length(delta);
+            if distance >= 2.0 {
+                continue;
+            }
+            let direction = pair_direction(left, right, delta, distance);
+            let amount = if distance <= f32::EPSILON {
+                0.2
+            } else {
+                (2.0 - distance) * 0.34
+            };
+            add_to(&mut force[left], scale(direction, -amount));
+        }
+    }
+}
+
+fn sample_spatial_candidates(
+    index: usize,
+    cell: (i32, i32, i32),
+    cells: &HashMap<(i32, i32, i32), Vec<usize>>,
+) -> Vec<usize> {
+    let mut buckets = Vec::with_capacity(27);
+    for dx in -1..=1 {
+        for dy in -1..=1 {
+            for dz in -1..=1 {
+                if let Some(bucket) = cells.get(&(cell.0 + dx, cell.1 + dy, cell.2 + dz)) {
+                    if !bucket.is_empty() {
+                        buckets.push(bucket);
                     }
                 }
             }
         }
     }
+    if buckets.is_empty() {
+        return Vec::new();
+    }
+    let base_quota = MAX_REPULSION_CANDIDATES / buckets.len();
+    let remainder = MAX_REPULSION_CANDIDATES % buckets.len();
+    let mut result = Vec::with_capacity(MAX_REPULSION_CANDIDATES);
+    for (bucket_index, bucket) in buckets.into_iter().enumerate() {
+        let quota = (base_quota + usize::from(bucket_index < remainder)).min(bucket.len());
+        if quota == 0 {
+            continue;
+        }
+        let rotation = index % (bucket.len() / quota).max(1);
+        for sample in 0..quota {
+            let slot = (sample * bucket.len() / quota + rotation) % bucket.len();
+            let candidate = bucket[slot];
+            if candidate != index {
+                result.push(candidate);
+            }
+        }
+    }
+    result
+}
+
+fn pair_direction(left: usize, right: usize, delta: [f32; 3], distance: f32) -> [f32; 3] {
+    if distance > f32::EPSILON {
+        return scale(delta, 1.0 / distance);
+    }
+    let (low, high) = (left.min(right), left.max(right));
+    let axis = (low.wrapping_mul(31).wrapping_add(high)) % 3;
+    let mut direction = [0.0; 3];
+    direction[axis] = if left < right { 1.0 } else { -1.0 };
+    direction
 }
 
 fn recenter(positions: &mut [[f32; 3]]) {

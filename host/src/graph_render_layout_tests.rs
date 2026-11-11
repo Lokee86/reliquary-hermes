@@ -6,6 +6,9 @@ use crate::graph_render_error::GraphRenderError;
 use crate::graph_render_hierarchy::build_graph_render_hierarchy;
 use crate::graph_render_identity::{GraphRenderNodeKey, GraphRenderNodeTarget};
 use crate::graph_render_layout::GRAPH_RENDER_NODE_RADIUS;
+use crate::graph_render_layout::apply_group_repulsion;
+use crate::graph_render_layout::apply_spatial_repulsion;
+use crate::graph_render_layout::bounded_group_adjacency;
 use crate::graph_render_layout::build_graph_render_layout;
 use crate::graph_render_layout::build_graph_render_layout_with_topology;
 use crate::graph_render_source::GraphRenderCommunitySource;
@@ -208,6 +211,53 @@ fn cross_territory_topology_places_linked_territories_adjacent() {
 }
 
 #[test]
+fn coarse_fanout_keeps_cumulative_weak_relation_weight() {
+    let mut group_by_render = vec![0; 10];
+    group_by_render.extend(1..=35);
+    let mut edges = (1..=34).map(|group| (0, 9 + group, 2)).collect::<Vec<_>>();
+    edges.extend((0..10).map(|source| (source, 44, 1)));
+    let topology = topology_from_edges(group_by_render.len(), &edges);
+
+    let adjacency = bounded_group_adjacency(36, &group_by_render, &topology);
+
+    assert_eq!(adjacency[0].len(), 32);
+    assert_eq!(adjacency[0].get(&35), Some(&10));
+}
+
+#[test]
+fn dense_spatial_repulsion_gives_late_nodes_candidates() {
+    let positions = vec![[0.0; 3]; 128];
+    let mut force = vec![[0.0; 3]; positions.len()];
+    apply_spatial_repulsion(&positions, &mut force);
+    assert!(distance(force[127], [0.0; 3]) > 0.0);
+
+    let centers = vec![[0.0; 3]; 221];
+    let radii = vec![1.0; centers.len()];
+    let masses = vec![1.0; centers.len()];
+    let mut group_force = vec![[0.0; 3]; centers.len()];
+    apply_group_repulsion(&centers, &radii, &masses, &mut group_force);
+    assert!(distance(group_force[220], [0.0; 3]) > 0.0);
+}
+
+#[test]
+fn strong_link_across_unassigned_locality_boundary_pulls_nodes_closer() {
+    let memories = (1..=130).map(memory_id).collect::<Vec<_>>();
+    let hierarchy = build_graph_render_hierarchy(&memories, vec![], 256, 2).unwrap();
+    let weak = chain_topology(memories.len(), 127, 9_000);
+    let strong = chain_topology(memories.len(), 127, 32_000);
+
+    let weak_layout =
+        build_graph_render_layout_with_topology(&hierarchy, memories.len() as u32, &weak);
+    let strong_layout =
+        build_graph_render_layout_with_topology(&hierarchy, memories.len() as u32, &strong);
+
+    assert!(
+        distance(strong_layout.positions[127], strong_layout.positions[128])
+            < distance(weak_layout.positions[127], weak_layout.positions[128])
+    );
+}
+
+#[test]
 fn every_hierarchy_bound_contains_its_children_and_leaf_nodes() {
     let memories = (1..=9).map(memory_id).collect::<Vec<_>>();
     let hierarchy =
@@ -306,6 +356,50 @@ fn pair_topology(node_count: usize, weight_units: u64) -> GraphRenderLayoutTopol
             });
         }
         offsets[index + 1] = neighbors.len();
+    }
+    GraphRenderLayoutTopology { offsets, neighbors }
+}
+
+fn chain_topology(
+    node_count: usize,
+    weighted_edge: usize,
+    weighted_value: u64,
+) -> GraphRenderLayoutTopology {
+    let edges = (0..node_count - 1)
+        .map(|left| {
+            let weight = if left == weighted_edge {
+                weighted_value
+            } else {
+                9_000
+            };
+            (left, left + 1, weight)
+        })
+        .collect::<Vec<_>>();
+    topology_from_edges(node_count, &edges)
+}
+
+fn topology_from_edges(
+    node_count: usize,
+    edges: &[(usize, usize, u64)],
+) -> GraphRenderLayoutTopology {
+    let mut rows = vec![Vec::<GraphRenderLayoutNeighbor>::new(); node_count];
+    for &(left, right, weight_units) in edges {
+        rows[left].push(GraphRenderLayoutNeighbor {
+            render_id: right as u32,
+            weight_units,
+        });
+        rows[right].push(GraphRenderLayoutNeighbor {
+            render_id: left as u32,
+            weight_units,
+        });
+    }
+    let mut offsets = Vec::with_capacity(node_count + 1);
+    let mut neighbors = Vec::new();
+    offsets.push(0);
+    for row in &mut rows {
+        row.sort_unstable_by_key(|neighbor| neighbor.render_id);
+        neighbors.append(row);
+        offsets.push(neighbors.len());
     }
     GraphRenderLayoutTopology { offsets, neighbors }
 }
