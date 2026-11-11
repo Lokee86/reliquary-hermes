@@ -12,6 +12,7 @@ interface Props {
   hoveredRenderId: number | null;
   nodeGlow: number;
   register: (chunkId: number, pickable: THREE.Points | THREE.InstancedMesh | null) => void;
+  onDrawn: (chunkId: number, nodeCount: number) => void;
 }
 
 const POINT_MODE_THRESHOLD = 75000;
@@ -66,7 +67,7 @@ function getPointSprite() {
 }
 
 function NodePoints(props: Props) {
-  const { chunk, register } = props;
+  const { chunk, register, onDrawn } = props;
   const geometryRef = useRef<THREE.BufferGeometry>(null);
   const colors = useNodeColors(props);
   const setPoints = useCallback((points: THREE.Points | null) => {
@@ -86,7 +87,7 @@ function NodePoints(props: Props) {
 
   // BoundedPicker owns raycasts and maps the hit index back to the chunk's render ID.
   return (
-    <points key={chunk.nodeCount} ref={setPoints}>
+    <points key={chunk.nodeCount} ref={setPoints} onAfterRender={() => onDrawn(chunk.chunkId, chunk.nodeCount)}>
       <bufferGeometry ref={geometryRef}>
         <bufferAttribute attach="attributes-position" args={[chunk.positions, 3]} />
         <bufferAttribute attach="attributes-color" args={[colors, 3]} />
@@ -103,7 +104,7 @@ function sphereDetail(count: number): [number, number, number] {
 }
 
 function NodeSpheres(props: Props) {
-  const { chunk, totalNodeCount, selectedRenderId, register } = props;
+  const { chunk, totalNodeCount, selectedRenderId, register, onDrawn } = props;
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const tempObj = useMemo(() => new THREE.Object3D(), []);
   const colors = useNodeColors(props);
@@ -131,6 +132,7 @@ function NodeSpheres(props: Props) {
     <instancedMesh
       key={chunk.nodeCount}
       ref={setMesh}
+      onAfterRender={() => onDrawn(chunk.chunkId, chunk.nodeCount)}
       args={[undefined, undefined, chunk.nodeCount]}
     >
       <sphereGeometry args={sphereDetail(totalNodeCount)} />

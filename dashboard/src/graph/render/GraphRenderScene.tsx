@@ -31,6 +31,7 @@ type SceneProps = ReturnType<typeof useGraphRenderInteraction> & {
   resetVersion: number;
   presentation: GraphPresentation;
   tooltipRef: RefObject<HTMLDivElement | null>;
+  telemetryRef: RefObject<HTMLDivElement | null>;
 };
 
 // Warlock GraphScene.tsx at d9e38cb. Only node metadata and its size come from
@@ -71,12 +72,27 @@ function TooltipAnchor({ node, tooltipRef }: {
 
 function Scene({
   client, frame, center, extent, selectedRenderId, hoveredRenderId, hoverNode, selectedTitle,
-  neighborhood, focusRequest, resetVersion, pick, publishHover, loadViewport, tooltipRef, presentation,
+  neighborhood, focusRequest, resetVersion, pick, publishHover, loadViewport, tooltipRef, telemetryRef, presentation,
 }: SceneProps) {
   const controlsRef = useRef<TrackballControlsImpl | null>(null);
   const animationActivity = useRef(false);
   const pointsByChunk = useRef(new Map<number, THREE.Points | THREE.InstancedMesh>());
+  const drawnChunks = useRef(new Map<number, number>());
   const { camera } = useThree();
+  useFrame(() => {
+    drawnChunks.current.clear();
+    telemetryRef.current?.setAttribute("data-drawn-node-count", "0");
+    telemetryRef.current?.setAttribute("data-drawn-node-chunks", "0");
+  });
+  const recordDrawnChunk = useCallback((chunkId: number, nodeCount: number) => {
+    drawnChunks.current.set(chunkId, nodeCount);
+    const telemetry = telemetryRef.current;
+    if (!telemetry) return;
+    telemetry.setAttribute("data-drawn-node-chunks", String(drawnChunks.current.size));
+    telemetry.setAttribute("data-drawn-node-count", String(
+      [...drawnChunks.current.values()].reduce((total, count) => total + count, 0),
+    ));
+  }, [telemetryRef]);
   const registerChunk = useCallback((chunkId: number, pickable: THREE.Points | THREE.InstancedMesh | null) => {
     if (pickable) pointsByChunk.current.set(chunkId, pickable);
     else pointsByChunk.current.delete(chunkId);
@@ -116,7 +132,7 @@ function Scene({
         <RenderNodeChunk key={chunk.chunkId} chunk={chunk}
           totalNodeCount={client.manifest.totalNodeCount} nodeGlow={presentation.display.nodeGlow}
           selectedRenderId={selectedRenderId} hoveredRenderId={hoveredRenderId}
-          register={registerChunk} />
+          register={registerChunk} onDrawn={recordDrawnChunk} />
       ))}
       {frame && <RenderLabels labels={frame.labels} selectedRenderId={selectedRenderId} selectedLabel={selectedLabel} />}
       {hoverNode && <TooltipAnchor node={hoverNode} tooltipRef={tooltipRef} />}
@@ -160,6 +176,7 @@ function GraphScene(props: GraphRenderSceneProps) {
   const loadedNodeCount = frame?.nodeChunks.reduce((total, chunk) => total + chunk.nodeCount, 0) ?? 0;
   const [resetVersion, setResetVersion] = useState(0);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const telemetryRef = useRef<HTMLDivElement | null>(null);
   const center = useMemo(() => boundsCenter(client.manifest.globalBounds), [client]);
   const extent = useMemo(() => framingExtent(client.manifest), [client]);
   const camera = useMemo(() => ({
@@ -176,7 +193,17 @@ function GraphScene(props: GraphRenderSceneProps) {
     : [];
 
   return (
-    <div className="graph-render-scene" style={{ position: "relative", width: "100%", height: "100%", minHeight: 360 }}>
+    <div
+      ref={telemetryRef}
+      className="graph-render-scene"
+      data-expected-node-count={client.manifest.totalNodeCount}
+      data-resident-node-count={loadedNodeCount}
+      data-resident-node-chunks={frame?.nodeChunks.length ?? 0}
+      data-expected-node-chunks={client.manifest.nodeChunks.length}
+      data-downsampled={!client.nodeOverviewFits}
+      data-edge-lod={frame?.lod ?? "pending"}
+      style={{ position: "relative", width: "100%", height: "100%", minHeight: 360 }}
+    >
       <Canvas
         camera={camera}
         dpr={[1, 1.5]}
@@ -188,7 +215,7 @@ function GraphScene(props: GraphRenderSceneProps) {
         }}
       >
         <Scene {...interaction} client={client} center={center} extent={extent}
-          resetVersion={resetVersion} tooltipRef={tooltipRef} presentation={props.presentation} />
+          resetVersion={resetVersion} tooltipRef={tooltipRef} telemetryRef={telemetryRef} presentation={props.presentation} />
       </Canvas>
       {interaction.hoverNode && <Tooltip node={interaction.hoverNode} tooltipRef={tooltipRef} />}
       <button className="graph-render-reset" type="button" onClick={() => setResetVersion((value) => value + 1)}>
@@ -202,12 +229,11 @@ function GraphScene(props: GraphRenderSceneProps) {
         </div>
       )}
       {error && <div className="knowledge-graph-status error" role="alert">{error}</div>}
-      <div className="graph-render-telemetry" role="status" aria-live="polite">
-        {loadedNodeCount.toLocaleString()} / {client.manifest.totalNodeCount.toLocaleString()} Memories drawn
-        <span>{frame?.nodeChunks.length ?? 0} / {client.manifest.nodeChunks.length} node chunks loaded</span>
-        {!client.nodeOverviewFits && <span>Overview downsampling active · max 32 chunks / 16 MiB</span>}
-        {frame && <span>Edges: {frame.lod}</span>}
-      </div>
+      {frame && !client.nodeOverviewFits && (
+        <div className="graph-render-telemetry" role="status" aria-live="polite">
+          Showing {frame.nodeChunks.reduce((total, chunk) => total + chunk.nodeCount, 0).toLocaleString()} of {client.manifest.totalNodeCount.toLocaleString()} memories
+        </div>
+      )}
     </div>
   );
 }

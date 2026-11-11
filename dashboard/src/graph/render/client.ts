@@ -58,6 +58,7 @@ export class GraphRenderClient {
 
   private readonly transport: GraphRenderTransport;
   readonly nodeOverviewFits: boolean;
+  private readonly overviewNodeChunks: GraphRenderNodeChunkDescriptor[];
   private readonly detailEdgesFit: boolean;
   private readonly hierarchyIndex: GraphRenderBoundsIndex<GraphRenderHierarchyDescriptor>;
   private readonly nodeIndex: GraphRenderBoundsIndex<GraphRenderNodeChunkDescriptor>;
@@ -80,10 +81,10 @@ export class GraphRenderClient {
     this.manifest = manifest;
     this.transport = transport;
     const detailEdgeCount = manifest.edgeChunks.filter(chunk => chunk.lod === "detail").length;
-    const intermediateEdgeCount = manifest.edgeChunks.filter(chunk => chunk.lod === "intermediate").length;
     const nodeBytes = manifest.nodeChunks.reduce((total, chunk) => total + chunk.byteLen, 0);
     this.nodeOverviewFits = manifest.nodeChunks.length <= GRAPH_RENDER_DETAIL_CHUNK_BUDGET
       && nodeBytes <= GRAPH_RENDER_NODE_OVERVIEW_BYTE_BUDGET;
+    this.overviewNodeChunks = selectSpatialNodeSample(manifest.nodeChunks, manifest.globalBounds);
     const detailEdgeBytes = manifest.edgeChunks
       .filter(chunk => chunk.lod === "detail")
       .reduce((total, chunk) => total + chunk.byteLen, 0);
@@ -115,11 +116,12 @@ export class GraphRenderClient {
       viewport.radius,
       GRAPH_RENDER_HIERARCHY_BUDGET,
     );
-    const nodeChunks = this.nodeIndex.querySphere(
-      viewport.center,
-      viewport.radius,
-      GRAPH_RENDER_DETAIL_CHUNK_BUDGET,
-    );
+    const nodeCandidates = this.nodeOverviewFits
+      ? this.manifest.nodeChunks
+      : lod === "overview"
+        ? this.overviewNodeChunks
+        : this.nodeIndex.querySphere(viewport.center, viewport.radius, GRAPH_RENDER_DETAIL_CHUNK_BUDGET);
+    const nodeChunks = selectBoundedNodeChunks(nodeCandidates);
     const edgeChunks = this.detailEdgesFit
       ? this.edgeIndexes.detail.querySphere(
           viewport.center,
@@ -271,4 +273,57 @@ export class GraphRenderClient {
     this.edgeRequests.set(descriptor.chunkId, request);
     return request;
   }
+}
+
+function selectBoundedNodeChunks(candidates: GraphRenderNodeChunkDescriptor[]) {
+  const selected: GraphRenderNodeChunkDescriptor[] = [];
+  let bytes = 0;
+  for (const chunk of candidates) {
+    if (selected.length >= GRAPH_RENDER_DETAIL_CHUNK_BUDGET) break;
+    if (chunk.byteLen > GRAPH_RENDER_NODE_OVERVIEW_BYTE_BUDGET
+        || bytes + chunk.byteLen > GRAPH_RENDER_NODE_OVERVIEW_BYTE_BUDGET) continue;
+    selected.push(chunk);
+    bytes += chunk.byteLen;
+  }
+  return selected;
+}
+
+function selectSpatialNodeSample(
+  chunks: GraphRenderNodeChunkDescriptor[],
+  bounds: GraphRenderManifest["globalBounds"],
+) {
+  if (chunks.length <= GRAPH_RENDER_DETAIL_CHUNK_BUDGET) return chunks;
+  const grid = [4, 4, 2] as const;
+  const buckets = new Map<number, GraphRenderNodeChunkDescriptor[]>();
+  for (const chunk of chunks) {
+    const center = [0, 1, 2].map(axis =>
+      (chunk.bounds.min[axis] + chunk.bounds.max[axis]) * 0.5,
+    );
+    const cell = center.map((value, axis) => Math.min(grid[axis] - 1, Math.max(0,
+      Math.floor((value - bounds.min[axis]) / Math.max(1e-9, bounds.max[axis] - bounds.min[axis]) * grid[axis]),
+    )));
+    const key = cell[0] + grid[0] * (cell[1] + grid[1] * cell[2]);
+    const items = buckets.get(key) ?? [];
+    items.push(chunk);
+    buckets.set(key, items);
+  }
+  const orderedBuckets = [...buckets.entries()].sort(([left], [right]) => left - right);
+  const selected: GraphRenderNodeChunkDescriptor[] = [];
+  for (const [, items] of orderedBuckets) {
+    items.sort((left, right) => left.chunkId - right.chunkId);
+    selected.push(items[0]);
+  }
+  // Fill unused slots in deterministic round-robin passes across spatial buckets.
+  for (let offset = 1; selected.length < GRAPH_RENDER_DETAIL_CHUNK_BUDGET; offset += 1) {
+    let added = false;
+    for (const [, items] of orderedBuckets) {
+      if (items[offset]) {
+        selected.push(items[offset]);
+        added = true;
+        if (selected.length >= GRAPH_RENDER_DETAIL_CHUNK_BUDGET) break;
+      }
+    }
+    if (!added) break;
+  }
+  return selected;
 }

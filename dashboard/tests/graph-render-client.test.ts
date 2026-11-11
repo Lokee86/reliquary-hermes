@@ -228,7 +228,7 @@ const relChunks: GraphRenderManifest["nodeChunks"] = Array.from({ length: 13 }, 
   parentHierarchyId: 1,
   bounds,
   nodeCount: chunkId < 7 ? 169 : 168,
-  byteLen: 5_408,
+  byteLen: 32 + (chunkId < 7 ? 169 : 168) * 24,
   labelCandidates: [],
 }));
 const relManifest: GraphRenderManifest = {
@@ -240,24 +240,62 @@ const relManifest: GraphRenderManifest = {
 const rel = await GraphRenderClient.prepare("owner", {
   ...transport,
   async prepare() { return relManifest; },
+  async nodeChunk(_generationId, chunkId) {
+    return nodePayload(chunkId, relChunks[chunkId].nodeCount);
+  },
 });
+const relCloseView = rel.planViewport({ center: [0, 0, 0], radius: 1 });
+assert.equal(relCloseView.lod, "detail", "edge LOD follows the viewport independently");
+assert.equal(relCloseView.nodeChunks.length, 13, "full-fit nodes ignore viewport bounds");
 const relOverview = rel.planViewport({ center: [0, 0, 0], radius: 100 });
-assert.equal(relOverview.lod, "overview", "edge LOD remains coarse at the overview camera");
+assert.equal(relOverview.lod, "overview");
 assert.equal(relOverview.nodeChunks.length, 13, "all bounded node chunks are requested at overview");
 assert.equal(relOverview.nodeChunks.reduce((count, chunk) => count + chunk.nodeCount, 0), 2_191);
 assert.equal(rel.nodeOverviewFits, true);
+const relFrame = await rel.loadViewport({ center: [0, 0, 0], radius: 1 });
+assert.equal(relFrame.nodeChunks.length, 13, "all node chunks decode before any zoom");
+assert.equal(relFrame.nodeChunks.reduce((count, chunk) => count + chunk.nodeCount, 0), 2_191);
+
+const oversizedChunks: GraphRenderManifest["nodeChunks"] = Array.from({ length: 32 }, (_, chunkId) => {
+  const x = -90 + chunkId * (180 / 31);
+  const chunkBounds = { min: [x - 1, -1, -1] as const, max: [x + 1, 1, 1] as const };
+  return {
+    chunkId, parentHierarchyId: 1, bounds: chunkBounds, nodeCount: 1,
+    byteLen: 1024 * 1024, labelCandidates: [],
+  };
+});
+const oversized = await GraphRenderClient.prepare("owner", {
+  ...transport,
+  async prepare() {
+    return { ...manifest, totalNodeCount: 32, nodeChunks: oversizedChunks };
+  },
+});
+const oversizedPlan = oversized.planViewport({ center: [0, 0, 0], radius: 100 });
+assert.equal(oversized.nodeOverviewFits, false, "chunk byte cap triggers downsampling even under the chunk-count cap");
+assert.ok(oversizedPlan.nodeChunks.length <= 16);
+assert.ok(oversizedPlan.nodeChunks.reduce((bytes, chunk) => bytes + chunk.byteLen, 0)
+  <= 16 * 1024 * 1024, "planned node bytes stay within the residency budget");
+const selectedXs = oversizedPlan.nodeChunks.map(chunk => (chunk.bounds.min[0] + chunk.bounds.max[0]) * 0.5);
+assert.ok(Math.max(...selectedXs) - Math.min(...selectedXs) > 80,
+  "oversized overview samples chunks across the spatial extent");
 
 console.log("Hermes graph render client checks passed");
 
-function nodePayload(chunkId = 0) {
-  const raw = new Uint8Array(80);
+function nodePayload(chunkId = 0, count = 2) {
+  const raw = new Uint8Array(32 + count * 24);
   const view = new DataView(raw.buffer);
   writeMagic(raw, "WRNODE");
-  writeHeader(view, chunkId, 2);
-  new Float32Array(raw.buffer, 32, 6).set([1,2,3,4,5,6]);
-  new Uint32Array(raw.buffer, 56, 2).set([0x112233ff, 0x445566ff]);
-  new Float32Array(raw.buffer, 64, 2).set([1.5, 2.5]);
-  new Uint32Array(raw.buffer, 72, 2).set([10,11]);
+  writeHeader(view, chunkId, count);
+  const positions = new Float32Array(raw.buffer, 32, count * 3);
+  const colors = new Uint32Array(raw.buffer, 32 + count * 12, count);
+  const sizes = new Float32Array(raw.buffer, 32 + count * 16, count);
+  const renderIds = new Uint32Array(raw.buffer, 32 + count * 20, count);
+  for (let index = 0; index < count; index += 1) {
+    positions.set([index * 3 + 1, index * 3 + 2, index * 3 + 3], index * 3);
+    colors[index] = index === 0 ? 0x112233ff : 0x445566ff;
+    sizes[index] = index + 1.5;
+    renderIds[index] = index + 10;
+  }
   return raw;
 }
 
