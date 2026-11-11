@@ -21,6 +21,7 @@
 - [Warlock UI integration reconciliation](warlock-ui-integration-reconciliation-2026-11-10.md): exact dirty-input hashes, source provenance and semantic conflict decisions.
 - [Warlock UI integration consolidation](warlock-ui-integration-consolidation-spec-2026-11-10.md): reconcile graph and non-graph Warlock ports with dirty main, verify one complete Web/Desktop build and deployment, and retire only proven-redundant branches.
 - [Original Warlock React graph component hard-cut](warlock-original-react-graph-component-hard-cut-spec-2026-11-10.md): source-first transplant of original GraphScene, NodeCloud, EdgeLines, NodeLabels and Territories onto the accepted binary-chunk renderer; includes exact visual parity, no lookalike replacement, and hard-cut acceptance.
+- [Warlock v1 graph preferences for Reliquary — adaptation spec](warlock-v1-graph-preferences-reliquary-adaptation-spec-2026-11-10.md): restore the original Display and Animation controls on the bounded Memory/Relation/Community renderer, with Hermes theming, scoped saved views and explicit acceptance gates.
 - [Verification and later gates](verification.md): exact commands, evidence, ownership impact and unimplemented capabilities.
 - [Roadmap](roadmap.md): deferred service-lifecycle work that remains intentionally outside the current acceptance scope.
 - [Documentation policy and procedure](documentation-policy.md): service profile, canonical owners and required checks.
