@@ -1,7 +1,8 @@
 // Port of Warlock scene/NodeCloud.tsx at d9e38cb, fed by resident binary chunks.
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { nodeGlowBoost, setPackedColor } from "./renderColors";
+import { composeNodeGlowMultiplier } from "./displayHelpers";
+import { setPackedColor } from "./renderColors";
 import type { GraphRenderNodeChunk } from "./types";
 
 interface Props {
@@ -9,6 +10,7 @@ interface Props {
   totalNodeCount: number;
   selectedRenderId: number | null;
   hoveredRenderId: number | null;
+  nodeGlow: number;
   register: (chunkId: number, pickable: THREE.Points | THREE.InstancedMesh | null) => void;
 }
 
@@ -18,17 +20,18 @@ function nodeColor(
   packed: number,
   highlighted: boolean,
   hovered: boolean,
+  nodeGlow: number,
   temp: THREE.Color,
 ): [number, number, number] {
   setPackedColor(temp, packed);
   if (!highlighted && !hovered) temp.multiplyScalar(0.15);
-  else temp.multiplyScalar(nodeGlowBoost(temp.r, temp.g, temp.b));
+  else temp.multiplyScalar(composeNodeGlowMultiplier(temp.r, temp.g, temp.b, nodeGlow));
   // Hermes has an explicit hover highlight alongside Warlock's selection emphasis.
   if (hovered) temp.multiplyScalar(1.2);
   return [temp.r, temp.g, temp.b];
 }
 
-function useNodeColors({ chunk, selectedRenderId, hoveredRenderId }: Props) {
+function useNodeColors({ chunk, selectedRenderId, hoveredRenderId, nodeGlow }: Props) {
   // Only a change to this chunk's hover target invalidates its color buffer.
   const hoveredIndex = hoveredRenderId === null ? -1 : chunk.renderIds.indexOf(hoveredRenderId);
   return useMemo(() => {
@@ -36,13 +39,13 @@ function useNodeColors({ chunk, selectedRenderId, hoveredRenderId }: Props) {
     const temp = new THREE.Color();
     for (let index = 0; index < chunk.nodeCount; index += 1) {
       const highlighted = selectedRenderId === null || chunk.renderIds[index] === selectedRenderId;
-      const [r, g, b] = nodeColor(chunk.packedColors[index], highlighted, index === hoveredIndex, temp);
+      const [r, g, b] = nodeColor(chunk.packedColors[index], highlighted, index === hoveredIndex, nodeGlow, temp);
       colors[index * 3] = r;
       colors[index * 3 + 1] = g;
       colors[index * 3 + 2] = b;
     }
     return colors;
-  }, [chunk, hoveredIndex, selectedRenderId]);
+  }, [chunk, hoveredIndex, nodeGlow, selectedRenderId]);
 }
 
 let pointSprite: THREE.CanvasTexture | null = null;

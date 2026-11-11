@@ -1,7 +1,8 @@
 import { useEffect, useMemo } from "react";
 import * as THREE from "three";
 import type { GraphRenderEdgeChunk, GraphRenderEdgeLod } from "./types";
-import { edgeIntensityScale, setPackedColor } from "./renderColors";
+import { composeEdgeIntensity } from "./displayHelpers";
+import { setPackedColor } from "./renderColors";
 
 type EdgeBuffers = Pick<GraphRenderEdgeChunk, "endpoints" | "packedColors" | "weights">;
 
@@ -54,14 +55,16 @@ export function RenderEdgeChunk({
   lod,
   muted = false,
   visibleSegmentCount,
+  edgeBrightness,
 }: {
   chunk: GraphRenderEdgeChunk;
   lod: GraphRenderEdgeLod;
   muted?: boolean;
   visibleSegmentCount: number;
+  edgeBrightness: number;
 }) {
   // Detail segments stay within one leaf. Aggregate segments connect hierarchy centers.
-  const intensity = (lod === "detail" ? 0.25 : 0.06) * edgeIntensityScale(visibleSegmentCount);
+  const intensity = composeEdgeIntensity(lod, visibleSegmentCount, edgeBrightness);
   return (
     <EdgeLines
       endpoints={chunk.endpoints}
