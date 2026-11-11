@@ -3,7 +3,7 @@ use crate::graph_render_edge_projection_model::GraphRenderLayoutTopology;
 use crate::graph_render_hierarchy_model::GraphRenderHierarchy;
 use crate::graph_render_layout_model::{GraphRenderLayout, GraphRenderLayoutNode, empty_bounds};
 use crate::graph_render_style::edge_weight_from_units;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// The global node pass keeps at most 16 weighted neighbors per node and visits
 /// at most 64 nearby collision candidates per node per iteration. Coarse groups
@@ -63,13 +63,18 @@ pub(crate) fn build_graph_render_layout_with_topology(
     let mut links = strongest_links(topology, node_count as usize);
     links.sort_unstable_by_key(|&(left, right, _)| (left, right));
     let mut velocities = vec![[0.0_f32; 3]; positions.len()];
-    for iteration in 0..FORCE_ITERATIONS {
+    let node_iterations = match positions.len() {
+        0..=100_000 => FORCE_ITERATIONS,
+        100_001..=500_000 => 8,
+        _ => 4,
+    };
+    for iteration in 0..node_iterations {
         let mut forces = vec![[0.0_f32; 3]; positions.len()];
         for &(left, right, weight) in &links {
             apply_global_attraction(&mut forces, left, right, weight, &positions);
         }
         apply_spatial_repulsion(&positions, &mut forces);
-        let cooling = 1.0 - 0.55 * iteration as f32 / FORCE_ITERATIONS as f32;
+        let cooling = 1.0 - 0.55 * iteration as f32 / node_iterations as f32;
         for ((position, velocity), force) in positions.iter_mut().zip(&mut velocities).zip(forces) {
             let gravity = scale(*position, -0.014);
             *velocity = scale(add(*velocity, add(force, gravity)), 0.8);
@@ -239,8 +244,13 @@ fn layout_group_centers(
         }
     }
     let group_links = links.into_iter().collect::<Vec<_>>();
+    let group_iterations = match groups.len() {
+        0..=10_000 => GROUP_FORCE_ITERATIONS,
+        10_001..=100_000 => 8,
+        _ => 4,
+    };
     let mut velocities = vec![[0.0; 3]; groups.len()];
-    for iteration in 0..GROUP_FORCE_ITERATIONS {
+    for iteration in 0..group_iterations {
         let mut force = vec![[0.0; 3]; groups.len()];
         for &((left, right), weight_units) in &group_links {
             let delta = subtract(centers[right], centers[left]);
@@ -257,7 +267,7 @@ fn layout_group_centers(
             add_to(&mut force[right], scale(pull, -1.0));
         }
         apply_group_repulsion(&centers, &radii, &mut force);
-        let cooling = 1.0 - 0.55 * iteration as f32 / GROUP_FORCE_ITERATIONS as f32;
+        let cooling = 1.0 - 0.55 * iteration as f32 / group_iterations as f32;
         for ((center, velocity), delta) in centers.iter_mut().zip(&mut velocities).zip(force) {
             let gravity = scale(*center, -0.0024);
             *velocity = scale(add(*velocity, add(delta, gravity)), 0.84);
@@ -303,7 +313,7 @@ fn apply_group_repulsion(centers: &[[f32; 3]], radii: &[f32], force: &mut [[f32;
         return;
     }
     let cell_size = (radii.iter().copied().fold(0.0_f32, f32::max) * 2.0 + 24.0).max(32.0);
-    let mut cells = BTreeMap::<(i32, i32, i32), Vec<usize>>::new();
+    let mut cells = HashMap::<(i32, i32, i32), Vec<usize>>::new();
     let coords = centers
         .iter()
         .map(|p| {
@@ -453,7 +463,7 @@ fn apply_global_attraction(
 
 fn apply_spatial_repulsion(positions: &[[f32; 3]], force: &mut [[f32; 3]]) {
     let cell_size = FORCE_SPATIAL_CELL_SIZE;
-    let mut cells = BTreeMap::<(i32, i32, i32), Vec<usize>>::new();
+    let mut cells = HashMap::<(i32, i32, i32), Vec<usize>>::new();
     let coords = positions
         .iter()
         .map(|p| {
