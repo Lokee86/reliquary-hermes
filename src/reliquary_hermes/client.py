@@ -269,11 +269,26 @@ class HostClient:
                         code = "service_restart_required"
                 except ContractError:
                     pass
+            if path.startswith("/v1/graph-render/") and status in {404, 413}:
+                try:
+                    graph_code = decode(reply).get("code")
+                    if isinstance(graph_code, str) and graph_code in {
+                        "graph_title_unavailable", "graph_node_limit", "graph_relation_limit",
+                        "graph_community_limit", "graph_generation_limit", "graph_manifest_limit",
+                        "graph_chunk_limit", "graph_source_scan_limit",
+                    }:
+                        code = graph_code
+                except ContractError:
+                    pass
             raise HostUnavailable(code or "invalid_host_response")
         return reply
 
     def graph_render(self, operation: str, selector: dict) -> bytes:
-        limits = {"prepare": 4 << 20, "node-chunk": 1 << 20, "edge-chunk": 1 << 20, "resolve": 4096}
+        limits = {
+            "prepare": 4 << 20, "node-chunk": 1 << 20, "edge-chunk": 1 << 20,
+            "resolve": 4096, "inspect": 4096, "neighborhood": 64 << 10,
+            "locate": 4096, "eligible": 4096,
+        }
         require(operation in limits, "invalid_graph_operation")
         discovery = self._read_discovery()
         if discovery is None:

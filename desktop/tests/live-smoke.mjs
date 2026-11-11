@@ -56,7 +56,7 @@ const app = await _electron.launch({
     HERMES_DESKTOP_ISOLATED_BACKEND: "1",
     HERMES_DESKTOP_SKIP_QUIT_CONFIRM: "1",
     HERMES_DESKTOP_SKIP_PROTOCOL_REGISTRATION: "1",
-    HERMES_DESKTOP_APP_NAME: "HermesReliquarySmoke",
+    HERMES_DESKTOP_APP_NAME: `HermesReliquarySmoke-${process.pid}-${Date.now()}`,
     HERMES_DISABLE_LAZY_INSTALLS: "1",
     GIT_NO_LAZY_FETCH: "1", UV_OFFLINE: "1", PYTHONDONTWRITEBYTECODE: "1",
     PYTHONPATH: [HP01_HERMES_CHECKOUT, fixture.integrationSrc].filter(Boolean).join(delimiter),
@@ -103,10 +103,56 @@ try {
     .or(page.getByRole("link", { name: "Reliquary", exact: true }));
   await nav.first().click({ timeout: 240000 });
   await exerciseKnowledge(page, fixture, "desktop");
+  await exerciseGraphSelection(page, fixture, "desktop");
 } catch (error) {
   const page = app.windows()[0];
   if (page) await page.screenshot({ path: join(scratch, "failed-desktop.png"), timeout: 10000 }).catch(() => {});
   throw error;
 } finally {
   await app.close();
+}
+
+async function exerciseGraphSelection(page, fixture, surface) {
+  const app = page.locator(".rly-app");
+  const sections = app.getByRole("navigation", { name: "Reliquary sections" });
+  await sections.getByRole("button", { name: "Knowledge", exact: true }).click();
+  await app.getByRole("complementary", { name: "Owner scope" })
+    .getByRole("button", { name: /^REL\b/ }).click();
+  await app.getByRole("button", { name: "Graph", exact: true }).click();
+  const graph = app.locator(".knowledge-graph-wrap");
+  await graph.locator('[data-graph-ready="true"]').waitFor({ timeout: 40000 });
+  if (fixture.community) {
+    const nav = app.getByRole("complementary", { name: "Knowledge navigation" });
+    if (fixture.community.onNextPage) await nav.getByRole("button", { name: "Next community page", exact: true }).click();
+    const communityName = surface === "desktop" ? fixture.community.name : fixture.community.renamed ?? fixture.community.name;
+    await nav.getByRole("button").filter({ hasText: communityName }).first().click();
+    await page.waitForFunction((count) => document.querySelector(".knowledge-graph-wrap")
+      ?.getAttribute("data-graph-node-count") === String(count), fixture.community.memberCount, { timeout: 40000 });
+    await graph.locator('[data-graph-ready="true"]').waitFor({ timeout: 40000 });
+  }
+
+  const canvas = graph.locator("canvas");
+  const box = await canvas.boundingBox();
+  assert(box, "Graph canvas has no visible bounds.");
+  const inspector = app.getByRole("complementary", { name: "Memory inspector" });
+  let selected = false;
+  const xSamples = fixture.community ? [0.40, 0.44, 0.48, 0.52, 0.56, 0.60] : [0.15, 0.325, 0.5, 0.675, 0.85];
+  const ySamples = fixture.community ? [0.32, 0.36, 0.40, 0.44, 0.48, 0.52] : [0.15, 0.325, 0.5, 0.675, 0.85];
+  for (const fy of ySamples) {
+    for (const fx of xSamples) {
+      await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
+      try {
+        await inspector.getByText("Lifecycle", { exact: true }).waitFor({ timeout: fixture.community ? 250 : 500 });
+        selected = true;
+        break;
+      } catch { /* Try the next visible point location. */ }
+    }
+    if (selected) break;
+  }
+  assert(selected, "Clicking visible graph node locations did not select a Memory.");
+  await app.getByRole("button", { name: "List", exact: true }).click();
+  await app.locator(".knowledge-memory-row[aria-pressed='true']").waitFor({ timeout: 30000 });
+  await app.getByRole("button", { name: "Graph", exact: true }).click();
+  await graph.locator('[data-graph-ready="true"]').waitFor({ timeout: 40000 });
+  await inspector.getByText("Lifecycle", { exact: true }).waitFor({ timeout: 30000 });
 }

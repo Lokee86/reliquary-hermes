@@ -6,7 +6,7 @@ The Reliquary tab mounts one Warlock-derived React Knowledge experience in Herme
 
 ## Overview
 
-Knowledge opens on the selected authorized owner’s spatial graph. The REL and PHY rail follows the active Hermes profile. List and inspector reads use the existing bounded `dashboard-v1` contract. The graph uses manifest v2 and binary chunks through `graph-render-v1`. Setup and Sources use their existing profile-scoped APIs.
+Knowledge opens on the selected authorized owner’s spatial graph. The REL and PHY rail follows the active Hermes profile. Graph and List share filters, Memory selection and the full inspector. List and inspector reads use the bounded `dashboard-v1` contract. The graph uses the v3 manifest, binary chunks and bounded interaction reads through `graph-render-v1`. Setup and Sources use their profile-scoped APIs.
 
 Build both entrypoints and the Web stylesheet from the repository root:
 

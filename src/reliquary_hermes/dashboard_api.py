@@ -459,14 +459,21 @@ async def graph_render_v1(request: Request, operation: str):
     if request.headers.get("content-type", "").partition(";")[0].strip().lower() != "application/json":
         raise HTTPException(status_code=415, detail="graph_json_required")
     try:
-        raw = await _read_bounded_body(request, limit=2048, error="graph_request_too_large")
+        raw = await _read_bounded_body(request, limit=32 << 10, error="graph_request_too_large")
         selector = graph_selector(raw, operation)
     except ContractError:
         raise HTTPException(status_code=400, detail="invalid_graph_selector") from None
     try:
         result = await run_in_threadpool(read_render, home, operation, selector)
     except HostUnavailable as error:
-        status = {"host_denied": 403, "host_conflict": 409}.get(str(error), 503)
+        code = str(error)
+        if code == "graph_title_unavailable":
+            raise HTTPException(status_code=404, detail=code) from None
+        if code in {"graph_node_limit", "graph_relation_limit", "graph_community_limit",
+                    "graph_generation_limit", "graph_manifest_limit", "graph_chunk_limit",
+                    "graph_source_scan_limit"}:
+            raise HTTPException(status_code=413, detail=code) from None
+        status = {"host_denied": 403, "host_conflict": 409}.get(code, 503)
         raise HTTPException(status_code=status, detail={
             403: "graph_denied", 409: "graph_stale", 503: "graph_unavailable",
         }[status]) from None

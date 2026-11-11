@@ -63,6 +63,11 @@ fn local_relation_mutation_reencodes_only_the_changed_detail_chunk() {
     let first = service
         .prepare(source("owner", 1, count, first_relations))
         .unwrap();
+    let first_positions = service
+        .layout(first.generation_id)
+        .unwrap()
+        .positions
+        .clone();
     let old_second_detail = service.edge_chunk(first.generation_id, 1).unwrap().to_vec();
 
     let second_relations = vec![
@@ -76,12 +81,18 @@ fn local_relation_mutation_reencodes_only_the_changed_detail_chunk() {
     let second = service
         .prepare(source("owner", 2, count, second_relations))
         .unwrap();
+    let second_positions = service
+        .layout(second.generation_id)
+        .unwrap()
+        .positions
+        .clone();
 
-    assert!(second.reuse.hierarchy_layout_reused);
-    assert_eq!(second.reuse.node_chunks_reused, 2);
-    assert_eq!(second.reuse.node_chunks_encoded, 0);
-    assert_eq!(second.reuse.edge_chunks_reused, 1);
-    assert_eq!(second.reuse.edge_chunks_encoded, 1);
+    assert!(!second.reuse.hierarchy_layout_reused);
+    assert_ne!(first_positions, second_positions);
+    assert_eq!(second.reuse.node_chunks_reused, 1);
+    assert_eq!(second.reuse.node_chunks_encoded, 1);
+    assert_eq!(second.reuse.edge_chunks_reused, 0);
+    assert_eq!(second.reuse.edge_chunks_encoded, 2);
 
     let new_second_detail = service.edge_chunk(second.generation_id, 1).unwrap();
     assert_eq!(

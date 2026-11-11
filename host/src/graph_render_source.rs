@@ -6,13 +6,20 @@ use crate::graph_render_style::GraphRenderEdgeStyle;
 pub(crate) struct GraphRenderCommunitySource {
     pub(crate) community_id: [u8; 32],
     pub(crate) members: Vec<GraphRenderNodeKey>,
+    pub(crate) name: Option<String>,
 }
 impl GraphRenderCommunitySource {
     pub(crate) fn new(community_id: [u8; 32], members: Vec<GraphRenderNodeKey>) -> Self {
         Self {
             community_id,
             members,
+            name: None,
         }
+    }
+
+    pub(crate) fn with_name(mut self, name: Option<String>) -> Self {
+        self.name = name;
+        self
     }
 }
 pub(crate) fn reject_duplicate_community_ids(

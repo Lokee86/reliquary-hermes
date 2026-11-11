@@ -398,6 +398,97 @@ Peak process working set across both tiers was 1.35 GiB. The largest node and ed
 
 The Warlock September 28 baseline assembled whole-graph JavaScript objects and uploaded their geometry. The Hermes measurements cover Rust projection and binary packing. GPU timings and million-node transport throughput in Hermes are unmeasured. The live Web and Desktop checks used the copied 13-node REL and 4-node PHY.
 
+## Rich Warlock graph verification
+
+The rich renderer requires Reliquary Root at `fa574eec` with the [filtered semantic graph projection patch](../patches/reliquary-fa574eec-filtered-graph-projection.patch) applied. The checkout layout stays the same. The Hermes host resolves `../../Reliquary` from its Cargo manifest. The patch adds authorized, exact-cut reads and reuses the List predicate for title or body search, community, lifecycle, category and Memory type.
+
+Run the existing Rust, Python and dashboard suites from the integration checkout. Run the Root test `hp02_memory_graph_expands_active_neighbors_at_one_cut` in `oc06_inspection` to check List parity, induced relationships, early stop and stale cuts. The Web and Electron probes use independent copies of the November 8 REL and PHY. The active-only graph should show 11 REL Memories and four PHY Memories. Turning on Show non-active memories should show 13 REL Memories. Record the input and browsed file hashes separately for each host.
+
+The paired renderer benchmark uses the baseline at `8136458` and the candidate under the same release profile and graph generator. For the 100k-node/1M-edge and 1M-node/10M-edge tiers, the release gate allows up to 2.5 times the baseline preparation time and twice its peak working set. The million-node preparation must also fit the 30-second host response window before host and transport overhead. Report a dense moderate tier separately. Hosted timings must record browser heap, frame timing and p95 hover and selected-neighborhood response time. Record the sample count and build for every reported timing.
+
+The isolated release benchmark compiled the production renderer modules for each revision. The table records the final paired sample for each tier on the same Windows host. The timer covers generation preparation, and peak working set includes creation of the synthetic source. Root mounting, network transfer and GPU work are outside these measurements.
+
+| Nodes / input edges | Baseline prepare | Candidate prepare | Baseline peak working set | Candidate peak working set |
+| --- | ---: | ---: | ---: | ---: |
+| 25k / 2.5M | 0.75 s | 1.07 s | 258 MB | 377 MB |
+| 100k / 1M | 0.74 s | 0.58 s | 149 MB | 195 MB |
+| 1M / 10M | 6.99 s | 6.78 s | 1,447 MB | 1,911 MB |
+
+All three tiers retained the baseline packed chunk size. The 1M tier used 32,129,472 packed bytes and a 26,562-byte manifest. The two release-gated tiers met both ceilings. The standalone release harness passed 15 layout and hierarchy tests, including weight-sensitive distance across territories, exact deterministic positions, and minimum node clearance across local population boundaries.
+
+The matched browser comparison served those same binary chunks over loopback to each revision's production React renderer in Chrome with SwiftShader at 1280×900. Overview used the manifest center. Detail centered on the nearest leaf, kept the manifest's extent for LOD thresholds, and zoomed through the normal controls. The harness sampled six seconds at overview and eight seconds at detail.
+
+| Nodes / input edges | Renderer | Overview p95 / frames | Detail p95 / frames | Used JS heap overview / detail | Detail node bytes fetched |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 100k / 1M | Baseline | 173.6 ms / 42 | 253.5 ms / 33 | 9.0 / 15.6 MB | 786,464 |
+| 100k / 1M | Rich | 187.6 ms / 37 | 263.9 ms / 34 | 8.7 / 9.8 MB | 40,736 |
+| 1M / 10M | Baseline | 284.7 ms / 38 | 270.8 ms / 32 | 9.1 / 16.0 MB | 786,464 |
+| 1M / 10M | Rich | 173.7 ms / 39 | 319.5 ms / 29 | 9.1 / 10.5 MB | 786,464 |
+
+The candidate selected a smaller leaf in the 100k sample. At 1M both renderers fetched one full node chunk and the same edge bytes at detail. The rich renderer used less JS heap and had a longer p95 detail frame interval in this software-rendered sample. All four browser runs reached both LODs without page errors. The hosted corpus run below measures the new inspect and neighborhood routes, which were absent from the frozen baseline.
+
+The locked offline host suite passed 95 tests. All four Root inspection tests passed. The graph projection case verified the same result as List for combined query, category, type and lifecycle filters, induced links, early visitor stop, and stale-cut denial. The pinned Python API, setup and source lifecycle run passed 19 tests. The installed-source run passed six capture, history and manual processing tests. The shared dashboard passed typecheck and four TypeScript tests and produced both bundles.
+
+The signed loopback smoke used independent copies of the November 8 owners. It verified 11 active and 13 total REL Memories, v3 descriptors, binary framing, title inspection, incident counts, locate, filter exclusion, and stale and cross-owner denial. For 20 sequential reads each on the final debug host, signed loopback p95 was 100.77 ms for inspection and 100.81 ms for the neighborhood. These samples cover the signed host round trip.
+
+Hosted Hermes Web passed the copied-corpus smoke in Chrome with SwiftShader. It covered both owner canvases, authenticated binary responses, owner and generation denial, graph click through to full detail, Graph and List selection continuity, search, provenance, history and Sources. The lifecycle control moved the REL graph from 11 to 13 and back to 11 Memories. The final interaction run verified five visible hover tooltips and five selected neighborhoods, single-selection double-click, keyboard selection and a settled right-drag with selection retained. During a concurrent Desktop smoke, the final Web run measured request p95 of 592.7 ms for inspect and 570.7 ms for neighborhood, 18.2 MB of used JS heap, and p95 frame interval of 105 ms over 23 animation frames.
+
+Hosted Hermes Desktop passed the copied-corpus Electron smoke with both owner canvases, full Memory inspection, Sources, and Graph and List selection continuity. A second isolated REL had six Memories in two accepted communities and one cross-community relation. The Desktop smoke filtered to the selected community's three-node canvas, selected a Memory, and retained the selection through List and Graph. The profile exposed community browsing under its read-only grant.
+
+The original November 8 REL and PHY and both final hosted copies matched the initial SHA-256 hashes after verification.
+
+## Original Warlock React graph port
+
+The release worktree starts at deployed checkpoint b216487b9e7c3a282149ca5e6a780c5148567315. Its Web JavaScript, Web stylesheet and Desktop module matched the installed files before the port. The release branch carries only the graph component changes and verification. The integration checkout at 9aad11749f226eab410abd380cd55efcd64debee already had 67 changed paths and retains its separate local work.
+
+The component sources are frozen at Warlock d9e38cb9e53dd2f8de345dd90cba08d00c27ac3b. A scripted source comparison checked exact equality of the point sprite, sphere detail policy, node and territory canvas texture functions, glow boost, edge density scale, additive edge material, point material, scene lighting and bloom. The comparison also verified removal of the extra filled shell and rounded territory card.
+
+Frozen Warlock visual sources by SHA-256.
+
+| Source | SHA-256 |
+| --- | --- |
+| GraphScene.tsx | 8d584424c14b2176e5c2d71b61278b2e1c7aeecd5b69e11c52d54159c212487b |
+| NodeCloud.tsx | df47b097f85d27846a8b5a7c65b6535253601642481d03e0968d3484490cd496 |
+| EdgeLines.tsx | ef2569fba67df89ec13785c6ef22a019247c895e38d7183524a04bb5d34e9c21 |
+| NodeLabels.tsx | 4971710448a56bebb2624ae22d22f52a029db97a4b70eea85124842cb2aeff69 |
+| Territories.tsx | 3710ebf57a1450b3df5d17b4cf4bd9d7d92ed7815f3fdb50a7d80bf392319b88 |
+| visuals.ts | 25a240a95a7ca2793dd8a69e32d99c47e76fa5ed1c0fc0fdae7aeef16817529d |
+
+The shared scene renders resident typed chunks and viewport territories from the existing v3 manifest. It retains the original 75,000-node sphere-to-points threshold and the bounded label candidates. The selected Memory can receive its own label from its resident chunk and authorized title. Aggregate segments use the coarse edge intensity and the packed relation weight. The 128-edge selected overlay uses the original additive material and carries the existing direction markers and omitted-count status.
+
+Compact Rust coordinates need a smaller initial extent than the original 180-unit minimum. Initial and reset framing use the node bounds and real territory radii. The label on a single real territory uses zero depth offset to stay in frame. Unassigned keeps the original wireframe and text style at subdued opacity and a lower label position. Both hosts expose their React instance without a DOM renderer. The tooltip retains the original markup, anchor and styling, with the screen position projected from the Three camera into a host-rendered element.
+
+The paired Chrome 156 screenshots used a native GeForce RTX 3060 with D3D11. They cover selected, unselected and hovered states, linked communities, single real and unassigned territories, a dense selection, and 720- and 1280-pixel canvases. The linked case matched closely after accounting for the one-pixel host border. The bounded labels and compact framing differ as described above. The native interaction harness verified title and short ID hover, dismissal, click and keyboard selection, duplicate-click suppression, incident-edge limits, rotate, wheel zoom, reset and right-pan stability during a delayed viewport response.
+
+The locked offline host suite passed 95 tests with one ignored scale characterization. The release dashboard typecheck and four Node tests passed, and the same script built both host assets. The focused graph render, dashboard and setup API run passed 12 Python tests.
+
+The full Python run passed 388 tests and skipped five optional live cases. The five failing process cases passed on rerun. The stable-pin retrieval and owner-enumeration cases passed together. The three HU08 capture and manual-import cases passed with the HU08 checkout in a fresh interpreter, avoiding cached imports from the older Hermes pin. All 393 enabled cases passed across these runs.
+
+The release assets passed hosted Chrome and Electron smoke tests with independent copies of the November 8 REL and PHY. Web verified chunk MIME and lengths, forged owner and principal rejection, stale generation and render-ID rejection, title and short-ID hover, settled right-pan, reset, keyboard and pointer selection, selected relationships and the REL lifecycle transition from 11 to 13 and back to 11 Memories. Desktop verified both owner canvases through authenticated binary IPC, pointer selection, Graph and List continuity, the full inspector and Sources. The original and copied owners matched their pre-test SHA-256 hashes.
+
+The verified assets from 565080282836692297737ec479b8df53b3620a6e were deployed to the local Web and Desktop plugin directories. The running Web dashboard returned HTTP 200 with matching JavaScript and stylesheet bytes. The installed Desktop module matched its tested build. Configuration, processing settings, the Rust host pin and the Rust host executable matched their pre-deploy hashes.
+
+| Deployed asset | SHA-256 |
+| --- | --- |
+| Web JavaScript | 871aeb79a23efa3c50855760d8d24938c6253ffbaaa1bfbc5bc356b76edad244 |
+| Web stylesheet | ef872ca9021f633c7ac0a5665dd8dcbafa407ca38275c1f063475aed36eef8db |
+| Desktop module | 130234c081bd730f28a5085385a8ab1014bbee8a3359bf5d955b768199ad8dda |
+
+The fresh release benchmark reran the established paired harness. All 27 production source files used by the prebuilt candidate matched the current Rust files by SHA-256. Each row is one serial run. The baseline is 8136458.
+
+| Nodes / input edges | Baseline prepare | Candidate prepare | Baseline peak working set | Candidate peak working set |
+| --- | ---: | ---: | ---: | ---: |
+| 25k / 2.5M | 0.78 s | 1.26 s | 258 MB | 377 MB |
+| 100k / 1M | 0.40 s | 0.77 s | 150 MB | 195 MB |
+| 1M / 10M | 4.05 s | 7.59 s | 1,447 MB | 1,911 MB |
+
+Both release-gated tiers stayed below the time and memory ceilings. The million-node tier packed 32,129,472 bytes in chunks and a 26,562-byte manifest. A second comparison ran the previous rich React renderer and the port against the same candidate binary chunks using SwiftShader at 1280×900. Each case has one six-second overview sample and one eight-second detail sample. Every run reached detail LOD and fetched the same bytes in its pair without page errors.
+
+| Nodes / input edges | Detail p95 previous / port | Used JS heap at detail previous / port |
+| --- | ---: | ---: |
+| 100k / 1M | 277.8 / 270.9 ms | 9.91 / 9.77 MB |
+| 1M / 10M | 319.4 / 326.4 ms | 10.66 / 16.80 MB |
+
 ## Related docs
 
 - [HU09 native file-dialog specification](hu09-native-file-dialogs-onboarding-spec-2026-11-09.md)

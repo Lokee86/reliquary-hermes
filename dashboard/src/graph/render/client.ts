@@ -2,6 +2,9 @@ import { decodeEdgeChunk, decodeNodeChunk } from "./binary";
 import { GraphRenderBoundsIndex } from "./boundsIndex";
 import {
   buildEdgeIndexes,
+  isGraphVec3,
+  isMemoryId,
+  isU32,
   validateManifest,
   validateRenderId,
   validateViewport,
@@ -21,24 +24,26 @@ import type {
   GraphRenderEdgeChunkDescriptor,
   GraphRenderEdgeLod,
   GraphRenderFrame,
+  GraphRenderFilterScope,
   GraphRenderHierarchyDescriptor,
   GraphRenderManifest,
   GraphRenderNodeChunk,
   GraphRenderNodeChunkDescriptor,
   GraphRenderNodeResolution,
-  GraphRenderSource,
+  GraphRenderNodeInspection,
   GraphRenderVec3,
   GraphRenderViewport,
 } from "./types";
 
 const RESOLUTION_CACHE_LIMIT = 128;
+const INCIDENT_EDGE_LIMIT = 128;
 const RESIDENT_CHUNK_LIMIT = 2 * GRAPH_RENDER_DETAIL_CHUNK_BUDGET;
 const SMALL_GRAPH_NODE_LIMIT = 256;
 
-function retain<T>(cache: Map<number, T>, id: number, value: T) {
+function retain<T>(cache: Map<number, T>, id: number, value: T, limit = RESIDENT_CHUNK_LIMIT) {
   cache.delete(id);
   cache.set(id, value);
-  if (cache.size > RESIDENT_CHUNK_LIMIT) {
+  if (cache.size > limit) {
     const oldest = cache.keys().next();
     if (!oldest.done) cache.delete(oldest.value);
   }
@@ -59,6 +64,7 @@ export class GraphRenderClient {
   private readonly nodeRequests = new Map<number, Promise<GraphRenderNodeChunk>>();
   private readonly edgeRequests = new Map<number, Promise<GraphRenderEdgeChunk>>();
   private readonly resolutions = new Map<number, GraphRenderNodeResolution>();
+  private readonly inspections = new Map<number, GraphRenderNodeInspection>();
   private loadVersion = 0;
 
   viewport: GraphRenderViewport | null = null;
@@ -84,8 +90,12 @@ export class GraphRenderClient {
     this.edgeIndexes = buildEdgeIndexes(manifest);
   }
 
-  static async prepare(ownerId: string, transport: GraphRenderTransport, source?: GraphRenderSource) {
-    return new GraphRenderClient(await transport.prepare(ownerId, source), transport);
+  static async prepare(
+    ownerId: string, transport: GraphRenderTransport, filters: GraphRenderFilterScope = { includeArchived: false },
+  ) {
+    const manifest = await transport.prepare(ownerId, filters);
+    if (manifest.ownerId !== ownerId) throw new Error("graph render owner mismatch");
+    return new GraphRenderClient(manifest, transport);
   }
 
   planViewport(viewport: GraphRenderViewport) {
@@ -164,19 +174,54 @@ export class GraphRenderClient {
   async resolveNode(renderId: number): Promise<GraphRenderNodeResolution> {
     validateRenderId(renderId);
     const cached = this.resolutions.get(renderId);
-    if (cached) {
-      this.resolutions.delete(renderId);
-      this.resolutions.set(renderId, cached);
-      return cached;
-    }
+    if (cached) return retain(this.resolutions, renderId, cached, RESOLUTION_CACHE_LIMIT);
     const resolution = await this.transport.resolveNode(this.manifest.generationId, renderId);
-    this.resolutions.set(renderId, resolution);
-    while (this.resolutions.size > RESOLUTION_CACHE_LIMIT) {
-      const oldest = this.resolutions.keys().next().value as number | undefined;
-      if (oldest === undefined) break;
-      this.resolutions.delete(oldest);
+    return retain(this.resolutions, renderId, resolution, RESOLUTION_CACHE_LIMIT);
+  }
+
+  async inspectNode(renderId: number, signal?: AbortSignal) {
+    validateRenderId(renderId);
+    signal?.throwIfAborted();
+    const cached = this.inspections.get(renderId);
+    if (cached) return retain(this.inspections, renderId, cached, RESOLUTION_CACHE_LIMIT);
+    const detail = await this.transport.inspectNode(this.manifest.generationId, renderId, signal);
+    signal?.throwIfAborted();
+    if (!detail || !isMemoryId(detail.memoryId) || !isGraphVec3(detail.position)
+        || typeof detail.title !== "string" || !detail.title.trim() || [...detail.title].length > 256) {
+      throw new Error("invalid graph node inspection");
     }
-    return resolution;
+    return retain(this.inspections, renderId, detail, RESOLUTION_CACHE_LIMIT);
+  }
+
+  async locateMemory(memoryId: string, signal?: AbortSignal) {
+    if (!isMemoryId(memoryId)) throw new Error("invalid Memory ID");
+    const location = await this.transport.locateMemory(this.manifest.generationId, memoryId, signal);
+    signal?.throwIfAborted();
+    if (location !== null && (!this.isGenerationNode(location?.renderId) || !isGraphVec3(location.position))) {
+      throw new Error("invalid graph node location");
+    }
+    return location;
+  }
+
+  async neighborhood(renderId: number, signal?: AbortSignal) {
+    validateRenderId(renderId);
+    const result = await this.transport.neighborhood(this.manifest.generationId, renderId, signal);
+    signal?.throwIfAborted();
+    if (!result || !Array.isArray(result.edges) || !isU32(result.totalCount)
+        || result.edges.length !== Math.min(result.totalCount, INCIDENT_EDGE_LIMIT)
+        || result.truncated !== (result.totalCount > INCIDENT_EDGE_LIMIT)
+        || result.edges.some(edge => !edge || (edge.sourceRenderId !== renderId && edge.targetRenderId !== renderId)
+          || !this.isGenerationNode(edge.sourceRenderId) || !this.isGenerationNode(edge.targetRenderId)
+          || !isGraphVec3(edge.sourcePosition) || !isGraphVec3(edge.targetPosition)
+          || typeof edge.directed !== "boolean" || !Number.isFinite(edge.weight) || edge.weight < 0
+          || !isU32(edge.style?.packedColor) || typeof edge.style.relationKind !== "string")) {
+      throw new Error("invalid graph incident relationships");
+    }
+    return result;
+  }
+
+  private isGenerationNode(renderId: unknown) {
+    return isU32(renderId) && renderId < this.manifest.totalNodeCount;
   }
 
   private ensureNodeChunk(descriptor: GraphRenderNodeChunkDescriptor) {

@@ -6,6 +6,7 @@ use crate::graph_render_hierarchy_model::{
 use crate::graph_render_identity::GraphRenderNodeKey;
 use crate::graph_render_identity::RenderNodeId;
 use crate::graph_render_source::{GraphRenderCommunitySource, reject_duplicate_community_ids};
+use std::collections::BTreeMap;
 
 pub(crate) const DEFAULT_GRAPH_RENDER_LEAF_CAPACITY: u32 = 32_768;
 pub(crate) const GRAPH_RENDER_SUBGROUP_LEAF_FANOUT: u32 = 32;
@@ -26,6 +27,7 @@ pub(crate) fn build_graph_render_hierarchy(
         .collect::<Vec<_>>();
     let mut claimed = vec![u32::MAX; node_keys.len()];
     let mut territories = Vec::with_capacity(communities.len() + 1);
+    let mut community_names = BTreeMap::new();
 
     for (community_index, mut community) in communities.into_iter().enumerate() {
         community.members.sort_unstable();
@@ -63,6 +65,9 @@ pub(crate) fn build_graph_render_hierarchy(
             territory.push(RenderNodeId::new(index as u32));
         }
         if !territory.is_empty() {
+            if let Some(name) = community.name.filter(|name| !name.trim().is_empty()) {
+                community_names.insert(community.community_id, name);
+            }
             territories.push((Some(community.community_id), territory));
         }
     }
@@ -81,6 +86,7 @@ pub(crate) fn build_graph_render_hierarchy(
         territories,
         leaf_capacity as usize,
         subgroup_leaf_fanout as usize,
+        community_names,
     )
 }
 
@@ -89,6 +95,7 @@ fn build_tree(
     territories: Vec<(Option<[u8; 32]>, Vec<RenderNodeId>)>,
     leaf_capacity: usize,
     subgroup_leaf_fanout: usize,
+    community_names: BTreeMap<[u8; 32], String>,
 ) -> Result<GraphRenderHierarchy, GraphRenderError> {
     let mut hierarchy = GraphRenderHierarchy {
         nodes: vec![GraphRenderHierarchyNode {
@@ -99,6 +106,7 @@ fn build_tree(
             source_community_id: None,
         }],
         leaves: Vec::new(),
+        community_names,
     };
 
     for (community_id, render_ids) in territories {

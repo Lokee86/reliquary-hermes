@@ -4,6 +4,37 @@ import type {
   GraphRenderNodeChunk,
 } from "./types";
 
+function labelAt(
+  chunk: GraphRenderNodeChunk,
+  index: number,
+  label: string,
+): Omit<GraphRenderLabel, "importance"> {
+  const offset = index * 3;
+  return {
+    renderId: chunk.renderIds[index],
+    label,
+    position: [
+      chunk.positions[offset],
+      chunk.positions[offset + 1],
+      chunk.positions[offset + 2],
+    ],
+    size: chunk.sizes[index],
+    packedColor: chunk.packedColors[index],
+  };
+}
+
+export function findFrameLabel(
+  chunks: readonly GraphRenderNodeChunk[],
+  renderId: number,
+  title: string,
+) {
+  for (const chunk of chunks) {
+    const index = chunk.renderIds.indexOf(renderId);
+    if (index !== -1) return labelAt(chunk, index, title);
+  }
+  return null;
+}
+
 export function selectFrameLabels(
   chunks: readonly GraphRenderNodeChunk[],
 ): GraphRenderLabel[] {
@@ -11,16 +42,9 @@ export function selectFrameLabels(
 
   for (const chunk of chunks) {
     for (const candidate of chunk.labelCandidates) {
-      const offset = candidate.itemIndex * 3;
       candidates.push({
-        renderId: candidate.renderId,
-        label: candidate.label,
+        ...labelAt(chunk, candidate.itemIndex, candidate.label),
         importance: candidate.importance,
-        position: [
-          chunk.positions[offset],
-          chunk.positions[offset + 1],
-          chunk.positions[offset + 2],
-        ],
       });
     }
   }

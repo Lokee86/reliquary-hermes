@@ -23,6 +23,7 @@ fn manifest_serializes_stable_camel_case_contract() {
             bounds,
             node_count: 3,
             chunk_id: None,
+            territory: None,
         }],
         node_chunks: vec![GraphRenderNodeChunkDescriptor {
             chunk_id: 20,
@@ -48,7 +49,7 @@ fn manifest_serializes_stable_camel_case_contract() {
 
     let value = serde_json::to_value(manifest).unwrap();
 
-    assert_eq!(value["schemaVersion"], 2);
+    assert_eq!(value["schemaVersion"], 3);
     assert_eq!(value["generationId"], u64::MAX.to_string());
     assert_eq!(value["sourceCommunityGeneration"], "9007199254740993");
     assert_eq!(value["hierarchy"][0]["kind"], "graph");
