@@ -28,6 +28,7 @@ pub(crate) fn build_graph_render_layout(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn build_graph_render_layout_with_topology(
     hierarchy: &GraphRenderHierarchy,
     node_count: u32,
@@ -151,7 +152,13 @@ pub(crate) fn build_graph_render_layout_with_degrees(
                 );
             }
         }
-        apply_spatial_repulsion(&positions, &node_radii, 1.1, &mut forces, false);
+        apply_spatial_repulsion_between_groups(
+            &positions,
+            &node_radii,
+            1.1,
+            &group_by_render,
+            &mut forces,
+        );
         let cooling = 1.0 - 0.55 * iteration as f32 / node_iterations as f32;
         for ((position, velocity), force) in positions.iter_mut().zip(&mut velocities).zip(forces) {
             *velocity = scale(add(*velocity, force), 0.8);
@@ -301,6 +308,21 @@ fn layout_group_centers(
         .iter()
         .map(|members| 1.0 + (members.len() as f32).cbrt())
         .collect::<Vec<_>>();
+    // Named communities are large semantic bodies in the original clustered
+    // layout. A visual-only unassigned locality is only a packing convenience;
+    // its long-range repulsion should stay at node scale so singleton orphans
+    // do not dominate the camera bounds.
+    let repulsion_strengths = groups
+        .iter()
+        .enumerate()
+        .map(|(index, members)| {
+            if index < semantic_group_count {
+                650.0
+            } else {
+                6.0 * (members.len() as f32).cbrt().max(1.0)
+            }
+        })
+        .collect::<Vec<_>>();
     let occupied_volume = radii
         .iter()
         .enumerate()
@@ -346,7 +368,14 @@ fn layout_group_centers(
             add_to(&mut force[left], pull);
             add_to(&mut force[right], scale(pull, -1.0));
         }
-        apply_group_repulsion(&centers, &radii, &clearances, &masses, &mut force);
+        apply_group_repulsion(
+            &centers,
+            &radii,
+            &clearances,
+            &masses,
+            &repulsion_strengths,
+            &mut force,
+        );
         let cooling = 1.0 - 0.55 * iteration as f32 / group_iterations as f32;
         for (index, ((center, velocity), delta)) in centers
             .iter_mut()
@@ -431,6 +460,7 @@ pub(crate) fn apply_group_repulsion(
     radii: &[f32],
     clearances: &[f32],
     masses: &[f32],
+    repulsion_strengths: &[f32],
     force: &mut [[f32; 3]],
 ) {
     if centers.len() < 2 {
@@ -453,7 +483,9 @@ pub(crate) fn apply_group_repulsion(
                 let amount = if distance < minimum {
                     (minimum - distance) * 0.34
                 } else {
-                    650.0 * (masses[left] * masses[right]).sqrt() / (distance * distance + 1.0)
+                    repulsion_strengths[left].min(repulsion_strengths[right])
+                        * (masses[left] * masses[right]).sqrt()
+                        / (distance * distance + 1.0)
                 };
                 add_to(&mut force[left], scale(direction, -amount));
                 add_to(&mut force[right], scale(direction, amount));
@@ -495,13 +527,6 @@ pub(crate) fn apply_group_repulsion(
             add_to(&mut force[left], scale(direction, -amount));
         }
     }
-}
-
-fn initial_positions(count: usize) -> Vec<[f32; 3]> {
-    // Render IDs are assigned from sorted node keys, so this is stable across runs
-    // and independent of relation iteration order.
-    let radius = (count.max(1) as f32).cbrt() * 2.94;
-    initial_positions_with_radius(count, radius)
 }
 
 fn initial_positions_with_radius(count: usize, radius: f32) -> Vec<[f32; 3]> {
@@ -685,9 +710,40 @@ pub(crate) fn apply_spatial_repulsion(
     force: &mut [[f32; 3]],
     long_range: bool,
 ) {
+    apply_spatial_repulsion_filtered(positions, radii, padding, force, long_range, None);
+}
+
+fn apply_spatial_repulsion_between_groups(
+    positions: &[[f32; 3]],
+    radii: &[f32],
+    padding: f32,
+    group_by_render: &[usize],
+    force: &mut [[f32; 3]],
+) {
+    apply_spatial_repulsion_filtered(
+        positions,
+        radii,
+        padding,
+        force,
+        false,
+        Some(group_by_render),
+    );
+}
+
+fn apply_spatial_repulsion_filtered(
+    positions: &[[f32; 3]],
+    radii: &[f32],
+    padding: f32,
+    force: &mut [[f32; 3]],
+    long_range: bool,
+    group_filter: Option<&[usize]>,
+) {
     if long_range && positions.len() <= 220 {
         for left in 0..positions.len() {
             for right in (left + 1)..positions.len() {
+                if group_filter.is_some_and(|groups| groups[left] == groups[right]) {
+                    continue;
+                }
                 apply_node_pair_repulsion(left, right, positions, radii, padding, force, true);
             }
         }
@@ -711,6 +767,9 @@ pub(crate) fn apply_spatial_repulsion(
     }
     for (left, &(x, y, z)) in coords.iter().enumerate() {
         for right in sample_spatial_candidates(left, (x, y, z), &cells) {
+            if group_filter.is_some_and(|groups| groups[left] == groups[right]) {
+                continue;
+            }
             apply_node_pair_repulsion(left, right, positions, radii, padding, force, false);
         }
     }

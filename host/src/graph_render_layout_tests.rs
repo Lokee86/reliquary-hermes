@@ -253,7 +253,14 @@ fn dense_spatial_repulsion_gives_late_nodes_candidates() {
     let clearances = vec![1.0; centers.len()];
     let masses = vec![1.0; centers.len()];
     let mut group_force = vec![[0.0; 3]; centers.len()];
-    apply_group_repulsion(&centers, &radii, &clearances, &masses, &mut group_force);
+    apply_group_repulsion(
+        &centers,
+        &radii,
+        &clearances,
+        &masses,
+        &vec![6.0; centers.len()],
+        &mut group_force,
+    );
     assert!(distance(group_force[220], [0.0; 3]) > 0.0);
 }
 
