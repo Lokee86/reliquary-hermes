@@ -1,13 +1,13 @@
 .graph-render-scene {
   overflow: hidden;
   isolation: isolate;
-  border: 1px solid rgba(164, 145, 205, 0.18);
+  border: 1px solid var(--reliquary-border);
   border-radius: 10px;
-  background: #06090f;
+  background: var(--reliquary-background);
 }
 
 .graph-render-scene canvas:focus-visible {
-  outline: 2px solid #ad93ed;
+  outline: 2px solid var(--reliquary-ring);
   outline-offset: -3px;
 }
 
@@ -16,11 +16,11 @@
   z-index: 2;
   top: 12px;
   right: 12px;
-  border: 1px solid rgba(196, 180, 230, 0.36);
+  border: 1px solid var(--reliquary-border);
   border-radius: 7px;
   padding: 7px 11px;
-  color: #eee8fb;
-  background: rgba(16, 19, 30, 0.9);
+  color: var(--reliquary-secondary-foreground);
+  background: var(--reliquary-secondary);
   font: inherit;
   font-size: 0.82rem;
   cursor: pointer;
@@ -28,8 +28,9 @@
 
 .graph-render-reset:hover,
 .graph-render-reset:focus-visible {
-  border-color: #bda8ee;
-  background: #242036;
+  border-color: var(--reliquary-ring);
+  background: var(--reliquary-accent);
+  color: var(--reliquary-accent-foreground);
 }
 
 .graph-render-scene .graph-tooltip {
@@ -43,11 +44,11 @@
   gap: 3px;
   max-width: 320px;
   padding: 8px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--reliquary-border);
   border-radius: 8px;
-  background: rgba(18, 16, 27, 0.95);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
-  color: #e6dfed;
+  background: color-mix(in srgb, var(--reliquary-popover) 95%, transparent);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--reliquary-border) 35%, transparent);
+  color: var(--reliquary-popover-foreground);
   white-space: nowrap;
 }
 
@@ -59,7 +60,7 @@
 }
 
 .graph-render-scene .graph-tooltip span {
-  color: #756e7e;
+  color: var(--reliquary-muted-foreground);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.62rem;
 }
@@ -71,15 +72,15 @@
   bottom: 12px;
   display: grid;
   gap: 3px;
-  border: 1px solid rgba(145, 187, 231, 0.32);
+  border: 1px solid var(--reliquary-border);
   border-radius: 7px;
   padding: 7px 10px;
-  color: #dcecff;
-  background: rgba(12, 18, 27, 0.9);
+  color: var(--reliquary-popover-foreground);
+  background: color-mix(in srgb, var(--reliquary-popover) 90%, transparent);
   font-size: 0.76rem;
   pointer-events: none;
 }
 
 .graph-render-relationships span {
-  color: #b2c9e5;
+  color: var(--reliquary-muted-foreground);
 }

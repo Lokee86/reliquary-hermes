@@ -17,7 +17,7 @@ npm --prefix dashboard ci
 npm --prefix dashboard run check
 ```
 
-Both bundles use the host’s React and control primitives. The shared graph stylesheet and Three.js scene preserve the Warlock graph presentation. Web uses the authenticated SDK fetch for binary responses. Desktop needs the SDK’s bounded `restBytes` method for graph chunks. The local patch and its exact upstream revision are recorded in the installation guide.
+Both bundles use the host’s React and control primitives. Surface colors resolve from the active Hermes palette: Desktop publishes `--dt-*`, while Web publishes `--background-base`, `--midground` and semantic `--color-*` tokens. The plugin maps these at `.knowledge-surface`; CSS inheritance follows theme switches without copying presets or maintaining theme state. Native controls inherit the host color scheme. The transparent graph canvas reveals that same themed background; graph data colors and Warlock layout remain unchanged. The shared graph stylesheet and Three.js scene preserve the Warlock graph presentation. Web uses the authenticated SDK fetch for binary responses. Desktop needs the SDK’s bounded `restBytes` method for graph chunks. The local patch and its exact upstream revision are recorded in the installation guide.
 
 ## Related docs
 

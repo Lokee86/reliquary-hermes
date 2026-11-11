@@ -1,5 +1,21 @@
 /* Hermes mounts one Warlock surface inside its own route. */
 .knowledge-surface {
+  --reliquary-background: var(--dt-background, var(--background-base));
+  --reliquary-foreground: var(--dt-foreground, var(--midground));
+  --reliquary-card: var(--dt-card, var(--color-card));
+  --reliquary-muted-foreground: var(--dt-muted-foreground, var(--color-muted-foreground));
+  --reliquary-primary: var(--dt-primary, var(--color-primary));
+  --reliquary-primary-foreground: var(--dt-primary-foreground, var(--color-primary-foreground));
+  --reliquary-secondary: var(--dt-secondary, var(--color-secondary));
+  --reliquary-secondary-foreground: var(--dt-secondary-foreground, var(--color-secondary-foreground));
+  --reliquary-accent: var(--dt-accent, var(--color-accent));
+  --reliquary-accent-foreground: var(--dt-accent-foreground, var(--color-accent-foreground));
+  --reliquary-border: var(--dt-border, var(--color-border));
+  --reliquary-input: var(--dt-input, var(--color-input));
+  --reliquary-ring: var(--dt-ring, var(--color-ring));
+  --reliquary-popover: var(--dt-popover, var(--color-popover));
+  --reliquary-popover-foreground: var(--dt-popover-foreground, var(--color-popover-foreground));
+  --reliquary-destructive: var(--dt-destructive, var(--color-destructive));
   container: reliquary / inline-size;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -8,34 +24,35 @@
   height: 100%;
   max-height: 100dvh;
   overflow: hidden;
-  color: #f4f0fb;
-  color-scheme: dark;
-  background: #09080d;
+  color: var(--reliquary-foreground);
+  color-scheme: inherit;
+  accent-color: var(--reliquary-primary);
+  background: var(--reliquary-background);
 }
 .knowledge-surface *, .knowledge-surface *::before, .knowledge-surface *::after { box-sizing: border-box; }
 :where(.knowledge-surface) :where(button, input, select, textarea) { font: inherit; }
 .knowledge-surface button { cursor: pointer; }
 .knowledge-surface button:disabled { cursor: default; opacity: 0.45; }
-.knowledge-surface :is(button, input, select, textarea, summary):focus-visible { outline: 2px solid #aa8cff; outline-offset: -2px; }
-.reliquary-sections { padding: 6px 14px; border-bottom: 1px solid #211e28; }
+.knowledge-surface :is(button, input, select, textarea, summary):focus-visible { outline: 2px solid var(--reliquary-ring); outline-offset: -2px; }
+.reliquary-sections { padding: 6px 14px; border-bottom: 1px solid var(--reliquary-border); }
 
 /* Scope controls use the Warlock shell's scope arrangement inside Knowledge navigation. */
-.knowledge-surface .eyebrow { font-size: 0.72rem; letter-spacing: 0.2em; color: #aa8cff; font-weight: 700; }
-.knowledge-surface .open-scopes { display: grid; gap: 6px; padding-bottom: 12px; border-bottom: 1px solid #211e28; }
-.knowledge-surface .scope-chip { width: 100%; display: grid; gap: 3px; border: 1px solid #24202b; border-radius: 8px; background: #111016; color: #d5cedf; text-align: left; padding: 9px 10px; }
+.knowledge-surface .eyebrow { font-size: 0.72rem; letter-spacing: 0.2em; color: var(--reliquary-primary); font-weight: 700; }
+.knowledge-surface .open-scopes { display: grid; gap: 6px; padding-bottom: 12px; border-bottom: 1px solid var(--reliquary-border); }
+.knowledge-surface .scope-chip { width: 100%; display: grid; gap: 3px; border: 1px solid var(--reliquary-border); border-radius: 8px; background: var(--reliquary-card); color: var(--reliquary-foreground); text-align: left; padding: 9px 10px; }
 .knowledge-surface .scope-chip strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.knowledge-surface .scope-chip span { color: #7e7788; font-size: 0.68rem; }
-.knowledge-surface .scope-chip.selected { border-color: #7556c2; background: #1c1725; }
-.knowledge-surface .add-scope { border: 0; border-radius: 7px; background: #211d29; color: #cfc7d9; padding: 8px 10px; text-align: left; }
+.knowledge-surface .scope-chip span { color: var(--reliquary-muted-foreground); font-size: 0.68rem; }
+.knowledge-surface .scope-chip.selected { border-color: var(--reliquary-ring); background: var(--reliquary-accent); color: var(--reliquary-accent-foreground); }
+.knowledge-surface .add-scope { border: 0; border-radius: 7px; background: var(--reliquary-secondary); color: var(--reliquary-secondary-foreground); padding: 8px 10px; text-align: left; }
 .knowledge-surface .scope-controls { display: grid; gap: 7px; padding-top: 4px; }
 .knowledge-surface .scope-controls :is(input, select),
 .knowledge-surface :is(.warlock-setup-path, .warlock-source-search) input,
-.knowledge-surface .warlock-source-destination :is(select, [role=combobox]) { min-width: 0; width: 100%; border: 1px solid #373040; background: #0b0a0f; color: #f4f0fb; padding: 7px 8px; border-radius: 7px; }
+.knowledge-surface .warlock-source-destination :is(select, [role=combobox]) { min-width: 0; width: 100%; border: 1px solid var(--reliquary-input); background: var(--reliquary-background); color: var(--reliquary-foreground); padding: 7px 8px; border-radius: 7px; }
 .knowledge-surface .scope-control-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.knowledge-surface :is(.scope-control-actions, .warlock-workflow-actions, .warlock-source-search) button { border: 0; border-radius: 7px; background: #7f5bd6; color: white; padding: 7px 8px; font-size: 0.75rem; }
-.knowledge-surface :is(.scope-control-actions, .warlock-workflow-actions, .warlock-source-search) .secondary { background: #211d29; color: #d6cfdf; }
+.knowledge-surface :is(.scope-control-actions, .warlock-workflow-actions, .warlock-source-search) button { border: 0; border-radius: 7px; background: var(--reliquary-primary); color: var(--reliquary-primary-foreground); padding: 7px 8px; font-size: 0.75rem; }
+.knowledge-surface :is(.scope-control-actions, .warlock-workflow-actions, .warlock-source-search) .secondary { background: var(--reliquary-secondary); color: var(--reliquary-secondary-foreground); }
 .knowledge-surface .scope-options { display: grid; gap: 7px; margin-bottom: 12px; }
 .knowledge-surface .scope-options > summary { cursor: pointer; font-size: 0.72rem; }
 .knowledge-surface .scope-options[open] > summary { margin-bottom: 6px; }
-.knowledge-surface .scope-session { color: #a99db6; font-size: 0.72rem; }
+.knowledge-surface .scope-session { color: var(--reliquary-muted-foreground); font-size: 0.72rem; }
 .knowledge-surface .scope-session label { display: grid; gap: 4px; min-width: 0; }

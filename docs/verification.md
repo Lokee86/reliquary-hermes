@@ -569,6 +569,23 @@ Cleanup removed six UI worktrees (graph, old integration, baseline, details, hos
 | Desktop legal notice | `58A6EF9BD0AC264CC1C582E4BC4200F1D70394FF3CDDAEBF2B78D809AC8B177E` |
 | Shared `manual_delivery.py` | `0DB137E083F31EF899FB019C1A72E042D16DE0DDA04E9E3BCD372F7A22DF752B` |
 
+
+### Active Hermes theme inheritance
+
+The plugin surface now reads the live Hermes palette rather than Warlock's fixed colors. Desktop publishes `--dt-*`; Web publishes `--background-base`, readable `--midground`, and semantic `--color-*` slots. The aliases live on `.knowledge-surface`; compile-time Tailwind aliases are not assumed to exist at runtime. No theme presets, observer, copied host stylesheet, or separate theme state were added. Controls inherit the host color scheme, and the transparent WebGL canvas reveals the same themed background. Graph data colors and layout are unchanged.
+
+Native Chrome on a copied 11-Memory REL switched through the actual Hermes Teal and Nous Blue picker while the graph remained mounted. Computed background, text, input and panel borders, primary/selected controls, focus rings and tooltip colors matched the active host values. The composited canvas corner changed from RGBA `[4,28,28,255]` to `[232,242,253,255]`; canvas identity and surface/graph dimensions stayed unchanged. Both reference and copied REL/PHY hashes were unchanged. The probe is under `host/.test-tmp/theme-follow`; this is a Web theme-switch check, not an installed Desktop session claim.
+
+TypeScript, all four dashboard Node tests, and the combined Web/Desktop build passed. A declaration comparison confirmed unchanged non-color layout, typography, border widths and shadow geometry in all three surface stylesheets. All five installed UI files matched the build hashes below; the running Web route served identical JS/CSS bytes. Provider code, configuration and REL/PHY fingerprints remained unchanged, and no service was restarted.
+
+| Theme-aware artifact | Installed SHA-256 |
+| --- | --- |
+| Web JavaScript | `B919811DB79D0332C384AC44F725511F6949EA4983A2B8368D8D80E163D741FD` |
+| Web stylesheet | `566FC109B0A7546E1A40B1367BCF29C87D7181E993469B93249088C775D0AEE4` |
+| Web legal notice | `8E8D25FD9CF497A25EFB043111B56DF8B0278EA2B38A5E7B2CD200CBC3A443D7` |
+| Desktop module | `73EDC51F8F27DA93C3055543FBC1329FA5C666818023B9DFDCBE94286FAFB7A8` |
+| Desktop legal notice | `58A6EF9BD0AC264CC1C582E4BC4200F1D70394FF3CDDAEBF2B78D809AC8B177E` |
+
 ## Related docs
 
 - [HU09 native file-dialog specification](hu09-native-file-dialogs-onboarding-spec-2026-11-09.md)

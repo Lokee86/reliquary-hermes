@@ -192,16 +192,14 @@ function GraphScene(props: GraphRenderSceneProps) {
     <div className="graph-render-scene" style={{ position: "relative", width: "100%", height: "100%", minHeight: 360 }}>
       <Canvas
         camera={camera}
-        style={{ background: "#06090f" }}
         dpr={[1, 1.5]}
-        gl={{ antialias: false, alpha: false, powerPreference: "high-performance" }}
+        gl={{ antialias: false, alpha: true, powerPreference: "high-performance" }}
         onCreated={({ gl }) => {
           gl.domElement.tabIndex = 0;
           gl.domElement.setAttribute("aria-label", `Interactive memory graph with ${client.manifest.totalNodeCount} memories. Hover a node and press Enter to select it.`);
           gl.domElement.setAttribute("role", "application");
         }}
       >
-        <color attach="background" args={["#06090f"]} />
         <Scene {...interaction} client={client} center={center} extent={extent}
           resetVersion={resetVersion} tooltipRef={tooltipRef} />
       </Canvas>
