@@ -462,6 +462,18 @@ The paired Chrome 156 screenshots used a native GeForce RTX 3060 with D3D11. The
 
 The locked offline host suite passed 95 tests with one ignored scale characterization. The release dashboard typecheck and four Node tests passed, and the same script built both host assets. The focused graph render, dashboard and setup API run passed 12 Python tests.
 
+The full Python run passed 388 tests and skipped five optional live cases. The five failing process cases passed on rerun. The stable-pin retrieval and owner-enumeration cases passed together. The three HU08 capture and manual-import cases passed with the HU08 checkout in a fresh interpreter, avoiding cached imports from the older Hermes pin. All 393 enabled cases passed across these runs.
+
+The release assets passed hosted Chrome and Electron smoke tests with independent copies of the November 8 REL and PHY. Web verified chunk MIME and lengths, forged owner and principal rejection, stale generation and render-ID rejection, title and short-ID hover, settled right-pan, reset, keyboard and pointer selection, selected relationships and the REL lifecycle transition from 11 to 13 and back to 11 Memories. Desktop verified both owner canvases through authenticated binary IPC, pointer selection, Graph and List continuity, the full inspector and Sources. The original and copied owners matched their pre-test SHA-256 hashes.
+
+The verified assets from 565080282836692297737ec479b8df53b3620a6e were deployed to the local Web and Desktop plugin directories. The running Web dashboard returned HTTP 200 with matching JavaScript and stylesheet bytes. The installed Desktop module matched its tested build. Configuration, processing settings, the Rust host pin and the Rust host executable matched their pre-deploy hashes.
+
+| Deployed asset | SHA-256 |
+| --- | --- |
+| Web JavaScript | 871aeb79a23efa3c50855760d8d24938c6253ffbaaa1bfbc5bc356b76edad244 |
+| Web stylesheet | ef872ca9021f633c7ac0a5665dd8dcbafa407ca38275c1f063475aed36eef8db |
+| Desktop module | 130234c081bd730f28a5085385a8ab1014bbee8a3359bf5d955b768199ad8dda |
+
 The fresh release benchmark reran the established paired harness. All 27 production source files used by the prebuilt candidate matched the current Rust files by SHA-256. Each row is one serial run. The baseline is 8136458.
 
 | Nodes / input edges | Baseline prepare | Candidate prepare | Baseline peak working set | Candidate peak working set |
