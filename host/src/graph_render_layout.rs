@@ -47,7 +47,15 @@ pub(crate) fn build_graph_render_layout_with_topology(
     let (groups, group_by_render) = visual_groups(hierarchy, topology, node_count as usize);
     let mut links = strongest_links(topology, node_count as usize);
     links.sort_unstable_by_key(|&(left, right, _)| (left, right));
-    let group_centers = layout_group_centers(&groups, &group_by_render, topology);
+    let semantic_group_count = hierarchy
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.kind == GraphRenderHierarchyKind::Territory && node.source_community_id.is_some()
+        })
+        .count();
+    let group_centers =
+        layout_group_centers(&groups, &group_by_render, semantic_group_count, topology);
     let mut local_slot_by_render = vec![usize::MAX; node_count as usize];
     for members in &groups {
         for (slot, &render_id) in members.iter().enumerate() {
@@ -217,6 +225,7 @@ fn visual_groups(
 fn layout_group_centers(
     groups: &[Vec<usize>],
     group_by_render: &[usize],
+    semantic_group_count: usize,
     topology: &GraphRenderLayoutTopology,
 ) -> Vec<[f32; 3]> {
     if groups.is_empty() {
@@ -224,7 +233,19 @@ fn layout_group_centers(
     }
     let radii = groups
         .iter()
-        .map(|members| (members.len().max(1) as f32).cbrt() * 4.0)
+        .map(|members| (members.len().max(1) as f32).cbrt() * 3.0 + 1.0)
+        .collect::<Vec<_>>();
+    // The original 32-unit group clearance belongs to named community bodies.
+    // Visual-only unassigned locality bodies use node-scale clearance so a large
+    // number of singleton nodes cannot inflate the coarse-world volume.
+    let clearances = (0..groups.len())
+        .map(|index| {
+            if index < semantic_group_count {
+                16.0
+            } else {
+                1.0
+            }
+        })
         .collect::<Vec<_>>();
     let masses = groups
         .iter()
@@ -232,7 +253,8 @@ fn layout_group_centers(
         .collect::<Vec<_>>();
     let occupied_volume = radii
         .iter()
-        .map(|radius| (radius + 32.0).powi(3))
+        .enumerate()
+        .map(|(index, radius)| (radius + clearances[index]).powi(3))
         .sum::<f32>();
     let initial_radius = (70.0_f32 * 1.5).max(occupied_volume.cbrt() * 1.4);
     let mut centers = initial_positions_with_radius(groups.len(), initial_radius);
@@ -264,13 +286,17 @@ fn layout_group_centers(
             }
             let weight = edge_weight_from_units(weight_units);
             let effective = (1.0 + weight.max(0.0).ln_1p()).sqrt();
-            let desired = radii[left] + radii[right] + 32.0 + 70.0 / effective;
+            let desired = radii[left]
+                + radii[right]
+                + clearances[left]
+                + clearances[right]
+                + 70.0 / effective;
             let amount = (distance - desired) * 0.019 * effective.min(4.0);
             let pull = scale(delta, amount / distance);
             add_to(&mut force[left], pull);
             add_to(&mut force[right], scale(pull, -1.0));
         }
-        apply_group_repulsion(&centers, &radii, &masses, &mut force);
+        apply_group_repulsion(&centers, &radii, &clearances, &masses, &mut force);
         let cooling = 1.0 - 0.55 * iteration as f32 / group_iterations as f32;
         for (index, ((center, velocity), delta)) in centers
             .iter_mut()
@@ -353,6 +379,7 @@ fn retain_group_neighbor(neighbors: &mut BTreeMap<usize, u64>, candidate: usize,
 pub(crate) fn apply_group_repulsion(
     centers: &[[f32; 3]],
     radii: &[f32],
+    clearances: &[f32],
     masses: &[f32],
     force: &mut [[f32; 3]],
 ) {
@@ -372,7 +399,7 @@ pub(crate) fn apply_group_repulsion(
                 } else {
                     scale(delta, 1.0 / distance)
                 };
-                let minimum = radii[left] + radii[right] + 32.0;
+                let minimum = radii[left] + radii[right] + clearances[left] + clearances[right];
                 let amount = if distance < minimum {
                     (minimum - distance) * 0.34
                 } else {
@@ -384,7 +411,9 @@ pub(crate) fn apply_group_repulsion(
         }
         return;
     }
-    let cell_size = (radii.iter().copied().fold(0.0_f32, f32::max) * 2.0 + 32.0).max(32.0);
+    let cell_size = (radii.iter().copied().fold(0.0_f32, f32::max) * 2.0
+        + clearances.iter().copied().fold(0.0_f32, f32::max) * 2.0)
+        .max(4.0);
     let mut cells = HashMap::<(i32, i32, i32), Vec<usize>>::new();
     let coords = centers
         .iter()
@@ -403,7 +432,7 @@ pub(crate) fn apply_group_repulsion(
         for right in sample_spatial_candidates(left, (x, y, z), &cells) {
             let delta = subtract(centers[right], centers[left]);
             let distance = length(delta);
-            let minimum = radii[left] + radii[right] + 32.0;
+            let minimum = radii[left] + radii[right] + clearances[left] + clearances[right];
             if distance >= minimum {
                 continue;
             }
