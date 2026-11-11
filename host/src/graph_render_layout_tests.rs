@@ -279,10 +279,11 @@ fn dense_group_keeps_actual_node_radii_clear_of_each_other() {
 
     for left in 0..layout.positions.len() {
         for right in left + 1..layout.positions.len() {
+            let actual = distance(layout.positions[left], layout.positions[right]);
+            let required = radii[left] + radii[right] + 1.1;
             assert!(
-                distance(layout.positions[left], layout.positions[right])
-                    >= radii[left] + radii[right] + 1.1 - 0.05,
-                "nodes {left} and {right} overlap their degree-scaled force radii",
+                actual >= required - 0.05,
+                "nodes {left} and {right} are {actual:.3} apart; required {required:.3} for their degree-scaled force radii",
             );
         }
     }

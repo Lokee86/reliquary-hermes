@@ -102,6 +102,7 @@ pub(crate) fn build_graph_render_layout_with_degrees(
                 &local_radii,
                 &local_links[group],
                 node_count <= 10_000,
+                node_count as usize,
             )
         })
         .collect::<Vec<_>>();
@@ -343,8 +344,8 @@ fn layout_group_centers(
     }
     let group_links = bounded_links.into_iter().collect::<Vec<_>>();
     let group_iterations = match groups.len() {
-        0..=10_000 => GROUP_FORCE_ITERATIONS,
-        10_001..=100_000 => 8,
+        0..=1_000 => GROUP_FORCE_ITERATIONS,
+        1_001..=5_000 => 8,
         _ => 4,
     };
     let mut velocities = vec![[0.0; 3]; groups.len()];
@@ -644,6 +645,7 @@ fn layout_local_members(
     radii: &[f32],
     links: &[(usize, usize, u64)],
     exact_pair_forces: bool,
+    total_node_count: usize,
 ) -> Vec<[f32; 3]> {
     let count = members.len();
     if count == 0 {
@@ -658,7 +660,11 @@ fn layout_local_members(
         .sum::<f32>();
     let initial_radius = (4.5_f32 * 1.5).max(occupied_volume.cbrt() * 1.4);
     let mut positions = initial_positions_with_radius(count, initial_radius);
-    let iterations = if count > 500 {
+    let iterations = if total_node_count > 500_000 {
+        4
+    } else if total_node_count > 100_000 {
+        8
+    } else if count > 500 {
         18
     } else if count < 30 {
         42
@@ -700,7 +706,89 @@ fn layout_local_members(
         }
         recenter(&mut positions);
     }
+    settle_node_collisions(&mut positions, radii, 1.1, exact_pair_forces, total_node_count);
     positions
+}
+
+/// Project residual node overlaps after the attractive solver has cooled.
+/// Small groups use exact pairs with symmetric half-overlap corrections; large
+/// groups use the same bounded spatial candidate sampler as the force pass.
+fn settle_node_collisions(
+    positions: &mut [[f32; 3]],
+    radii: &[f32],
+    padding: f32,
+    allow_exact_pairs: bool,
+    total_node_count: usize,
+) {
+    const EXACT_PAIR_LIMIT: usize = 220;
+    const EXACT_SETTLE_PASSES: usize = 24;
+    const SAMPLED_SETTLE_PASSES: usize = 6;
+    if positions.len() < 2 {
+        return;
+    }
+    let exact = positions.len() <= EXACT_PAIR_LIMIT && allow_exact_pairs;
+    let passes = if exact {
+        EXACT_SETTLE_PASSES
+    } else if total_node_count > 500_000 {
+        1
+    } else if total_node_count > 10_000 {
+        2
+    } else {
+        SAMPLED_SETTLE_PASSES
+    };
+    for _ in 0..passes {
+        if exact {
+            for left in 0..positions.len() {
+                for right in (left + 1)..positions.len() {
+                    let delta = subtract(positions[right], positions[left]);
+                    let distance = length(delta);
+                    let overlap = radii[left] + radii[right] + padding - distance;
+                    if overlap <= 0.0 {
+                        continue;
+                    }
+                    let direction = pair_direction(left, right, delta, distance);
+                    let correction = scale(direction, overlap * 0.5);
+                    positions[left] = subtract(positions[left], correction);
+                    positions[right] = add(positions[right], correction);
+                }
+            }
+            continue;
+        } else {
+            let mut corrections = vec![[0.0; 3]; positions.len()];
+            let max_radius = radii.iter().copied().fold(1.0_f32, f32::max);
+            let cell_size = 4.5_f32.max(max_radius * 2.0 + padding);
+            let mut cells = HashMap::<(i32, i32, i32), Vec<usize>>::new();
+            let coords = positions
+                .iter()
+                .map(|p| {
+                    (
+                        (p[0] / cell_size).floor() as i32,
+                        (p[1] / cell_size).floor() as i32,
+                        (p[2] / cell_size).floor() as i32,
+                    )
+                })
+                .collect::<Vec<_>>();
+            for (index, key) in coords.iter().copied().enumerate() {
+                cells.entry(key).or_default().push(index);
+            }
+            for (left, &(x, y, z)) in coords.iter().enumerate() {
+                for right in sample_spatial_candidates(left, (x, y, z), &cells) {
+                    let delta = subtract(positions[right], positions[left]);
+                    let distance = length(delta);
+                    let overlap = radii[left] + radii[right] + padding - distance;
+                    if overlap <= 0.0 {
+                        continue;
+                    }
+                    let direction = pair_direction(left, right, delta, distance);
+                    add_to(&mut corrections[left], scale(direction, -overlap * 0.5));
+                }
+            }
+            for (position, correction) in positions.iter_mut().zip(corrections) {
+                *position = add(*position, correction);
+            }
+        }
+    }
+    recenter(positions);
 }
 
 pub(crate) fn apply_spatial_repulsion(
