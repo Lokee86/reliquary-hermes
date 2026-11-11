@@ -90,10 +90,23 @@ fn topology_mutation_reencodes_layout_chunks_without_stale_positions() {
 
     assert!(!second.reuse.hierarchy_layout_reused);
     assert_ne!(first_positions, second_positions);
-    assert_eq!(second.reuse.node_chunks_reused, 0);
-    assert_eq!(second.reuse.node_chunks_encoded, 2);
-    assert_eq!(second.reuse.edge_chunks_reused, 0);
-    assert_eq!(second.reuse.edge_chunks_encoded, 2);
+    assert_eq!(
+        second.reuse.node_chunks_reused + second.reuse.node_chunks_encoded,
+        2
+    );
+    for chunk_id in 0..2 {
+        let chunk = crate::graph_render_node_chunk::GraphRenderNodeChunk::decode(
+            service.node_chunk(second.generation_id, chunk_id).unwrap(),
+        )
+        .unwrap();
+        for (render_id, position) in chunk.render_ids.iter().zip(&chunk.positions) {
+            assert_eq!(*position, second_positions[render_id.get() as usize]);
+        }
+    }
+    assert_eq!(
+        second.reuse.edge_chunks_reused + second.reuse.edge_chunks_encoded,
+        2
+    );
 
     let new_first_detail = service.edge_chunk(second.generation_id, 0).unwrap();
     let new_second_detail = service.edge_chunk(second.generation_id, 1).unwrap();
@@ -102,10 +115,14 @@ fn topology_mutation_reencodes_layout_chunks_without_stale_positions() {
         &new_first_detail[GRAPH_RENDER_BINARY_HEADER_LEN..],
         "changed topology must not retain stale edge positions",
     );
-    assert_ne!(
-        &old_second_detail[GRAPH_RENDER_BINARY_HEADER_LEN..],
-        &new_second_detail[GRAPH_RENDER_BINARY_HEADER_LEN..],
-        "all edge payloads must be regenerated after a global position change",
+    let decoded =
+        crate::graph_render_edge_chunk::GraphRenderEdgeChunk::decode(new_second_detail).unwrap();
+    assert_eq!(
+        decoded.endpoints[0],
+        [
+            second_positions[DEFAULT_GRAPH_RENDER_LEAF_CAPACITY as usize],
+            second_positions[DEFAULT_GRAPH_RENDER_LEAF_CAPACITY as usize + 1]
+        ]
     );
 }
 
