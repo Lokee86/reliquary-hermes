@@ -83,7 +83,11 @@ function Scene({
   const drawnChunks = useRef(new Map<number, number>());
   const readyCallback = useRef(onFrameReady);
   readyCallback.current = onFrameReady;
-  const reportDrawReady = useRef(createDrawReadyReporter(() => readyCallback.current?.()));
+  const expectedNodeChunkIds = frame?.nodeChunks.map(chunk => chunk.chunkId) ?? [];
+  const reportDrawReady = useMemo(
+    () => createDrawReadyReporter(expectedNodeChunkIds, () => readyCallback.current?.()),
+    [frame],
+  );
   const { camera } = useThree();
   useFrame(() => {
     drawnChunks.current.clear();
@@ -99,8 +103,8 @@ function Scene({
         [...drawnChunks.current.values()].reduce((total, count) => total + count, 0),
       ));
     }
-    reportDrawReady.current();
-  }, [telemetryRef]);
+    reportDrawReady(chunkId);
+  }, [reportDrawReady, telemetryRef]);
   const registerChunk = useCallback((chunkId: number, pickable: THREE.Points | THREE.InstancedMesh | null) => {
     if (pickable) pointsByChunk.current.set(chunkId, pickable);
     else pointsByChunk.current.delete(chunkId);

@@ -25,7 +25,8 @@ export function useGraphRenderInteraction({
   onSelectionUnavailable,
   onFrameReady,
 }: GraphRenderSceneProps) {
-  const [frame, setFrame] = useState<GraphRenderFrame | null>(null);
+  const [frameState, setFrameState] = useState<{ client: GraphRenderClient; frame: GraphRenderFrame } | null>(null);
+  const frame = frameState?.client === client ? frameState.frame : null;
   const [selectedRenderId, setSelectedRenderId] = useState<number | null>(null);
   const [focusRequest, setFocusRequest] = useState<GraphRenderVec3 | null>(null);
   const [hover, setHover] = useState<{ renderId: number; size: number } | null>(null);
@@ -47,11 +48,11 @@ export function useGraphRenderInteraction({
     try {
       const next = await client.loadViewport(viewport);
       if (version !== requestVersion.current) return;
-      setFrame(next);
+      setFrameState({ client, frame: next });
       setError(null);
-      // Empty graphs have no drawable node object to signal readiness. For a
-      // populated graph, the first node chunk reports readiness after render.
-      if (client.manifest.totalNodeCount === 0) onReady.current?.();
+      // Empty frames have no drawable node object to signal readiness. For a
+      // populated frame, GraphRenderScene waits until every planned chunk draws.
+      if (next.nodeChunks.length === 0) onReady.current?.();
     } catch (reason) {
       if (version === requestVersion.current) setError(String(reason));
     }

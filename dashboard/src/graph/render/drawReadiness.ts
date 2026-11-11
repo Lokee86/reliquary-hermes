@@ -1,7 +1,12 @@
-/** Calls graph-ready once, after a node chunk's onAfterRender callback fires. */
-export function createDrawReadyReporter(onReady: () => void) {
+/** Calls graph-ready once after every planned node chunk has submitted a draw. */
+export function createDrawReadyReporter(expectedChunkIds: readonly number[], onReady: () => void) {
+  const expected = new Set(expectedChunkIds);
+  const drawn = new Set<number>();
   let reported = false;
-  return () => {
+  return (chunkId: number) => {
+    if (!expected.has(chunkId)) return;
+    drawn.add(chunkId);
+    if (drawn.size !== expected.size) return;
     if (reported) return;
     reported = true;
     onReady();
