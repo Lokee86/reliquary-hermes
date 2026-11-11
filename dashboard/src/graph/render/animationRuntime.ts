@@ -7,6 +7,7 @@ export interface AnimationReadiness {
   enabled: boolean;
   focused: boolean;
   visible: boolean;
+  editing: boolean;
   dragging: boolean;
   elapsedMs: number;
   startDelaySeconds: number;
@@ -17,6 +18,7 @@ export function isAnimationReady(state: AnimationReadiness): boolean {
     && state.enabled
     && state.focused
     && state.visible
+    && !state.editing
     && !state.dragging
     && Number.isFinite(state.elapsedMs)
     && state.elapsedMs >= Math.max(0, state.startDelaySeconds) * 1000;

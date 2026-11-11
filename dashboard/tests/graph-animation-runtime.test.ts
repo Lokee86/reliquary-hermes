@@ -18,6 +18,7 @@ const baseReadiness = {
   enabled: true,
   focused: true,
   visible: true,
+  editing: false,
   dragging: false,
   elapsedMs: 60_000,
   startDelaySeconds: 60,
@@ -29,6 +30,7 @@ test("animation readiness honors delay, activity, focus, visibility and settings
   for (const key of ["controlsAvailable", "enabled", "focused", "visible"] as const) {
     assert.equal(isAnimationReady({ ...baseReadiness, [key]: false }), false);
   }
+  assert.equal(isAnimationReady({ ...baseReadiness, editing: true }), false);
   assert.equal(isAnimationReady({ ...baseReadiness, dragging: true }), false);
 });
 
