@@ -32,7 +32,6 @@ mod graph_render_hierarchy_tests;
 mod graph_render_host;
 mod graph_render_identity;
 mod graph_render_layout;
-mod graph_render_layout_grid;
 mod graph_render_layout_model;
 #[cfg(test)]
 mod graph_render_layout_tests;

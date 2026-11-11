@@ -1,27 +1,21 @@
 use crate::graph_render_contract::{GraphRenderBounds, GraphRenderHierarchyKind};
 use crate::graph_render_edge_projection_model::GraphRenderLayoutTopology;
 use crate::graph_render_hierarchy_model::GraphRenderHierarchy;
-use crate::graph_render_layout_grid::{
-    GRAPH_RENDER_CHILD_GAP, GRAPH_RENDER_NODE_RADIUS, GRAPH_RENDER_NODE_SPACING, grid_offset,
-    grid_sphere_extent,
-};
 use crate::graph_render_layout_model::{GraphRenderLayout, GraphRenderLayoutNode, empty_bounds};
 use crate::graph_render_style::edge_weight_from_units;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-/// Hard limits for the local solver. Each population considers at most 128²
-/// candidate pairs once, then reuses only nearby-grid pairs for 12 iterations.
-/// Each node considers at most 16 weighted neighbors. Aggregate groups keep 32
-/// neighbors and refine groups of at most 32 representatives for four steps;
-/// each representative moves at most six units inside the 24-unit base gap.
-pub(crate) const GRAPH_RENDER_LAYOUT_MAX_LOCAL_POPULATION: usize = 128;
-pub(crate) const GRAPH_RENDER_LAYOUT_MAX_ITERATIONS: usize = 12;
-pub(crate) const GRAPH_RENDER_LAYOUT_MAX_NEIGHBORS: usize = 16;
-pub(crate) const GRAPH_RENDER_LAYOUT_MAX_AGGREGATE_FANOUT: usize = 32;
-const GRAPH_RENDER_LAYOUT_MAX_CENTER_POPULATION: usize = 32;
-const GRAPH_RENDER_LAYOUT_CENTER_ITERATIONS: usize = 4;
-const GRAPH_RENDER_LAYOUT_MAX_CENTER_SHIFT: f32 = 6.0;
-const GRAPH_RENDER_LAYOUT_CENTER_CLEARANCE: f32 = GRAPH_RENDER_CHILD_GAP * 0.5;
+/// The global node pass keeps at most 16 weighted neighbors per node and visits
+/// at most 64 nearby collision candidates per node per iteration. Coarse groups
+/// keep at most 32 weighted neighbors and use the same bounded spatial lookup.
+const FORCE_ITERATIONS: usize = 30;
+const GROUP_FORCE_ITERATIONS: usize = 140;
+const MAX_FORCE_NEIGHBORS: usize = 16;
+const MAX_UNASSIGNED_LOCALITY: usize = 128;
+const MAX_GROUP_NEIGHBORS: usize = 32;
+const MAX_REPULSION_CANDIDATES: usize = 64;
+pub(crate) const GRAPH_RENDER_NODE_RADIUS: f32 = 1.0;
+const FORCE_SPATIAL_CELL_SIZE: f32 = 4.0;
 
 #[cfg(test)]
 pub(crate) fn build_graph_render_layout(
@@ -47,27 +41,49 @@ pub(crate) fn build_graph_render_layout_with_topology(
         };
     }
 
-    let sibling_edges = sibling_connectivity(hierarchy, topology, node_count as usize);
-    let children = children_by_parent(hierarchy, &sibling_edges);
-    let local_extents = local_extents(hierarchy, &children);
-    let mut centers = hierarchy_centers(&children, &local_extents);
-    refine_hierarchy_centers(&mut centers, &local_extents, &children, &sibling_edges);
+    // The hierarchy remains the chunking/annotation structure. It does not partition
+    // the solver: every weighted edge, including cross-leaf and cross-community edges,
+    // participates in this single continuous 3D layout.
+    let (groups, group_by_render) = visual_groups(hierarchy, topology, node_count as usize);
+    let group_centers = layout_group_centers(&groups, &group_by_render, topology);
     let mut positions = vec![[0.0; 3]; node_count as usize];
-
-    for leaf in &hierarchy.leaves {
-        let center = centers[leaf.hierarchy_id as usize];
-        let ordered_render_ids = order_leaf_by_connectivity(leaf, topology);
-        for (local_index, render_id) in ordered_render_ids.iter().enumerate() {
-            let offset = grid_offset(
-                local_index,
-                ordered_render_ids.len(),
-                GRAPH_RENDER_NODE_SPACING,
-            );
-            positions[render_id.get() as usize] = add(center, offset);
+    for (group_id, members) in groups.iter().enumerate() {
+        let local = initial_positions(members.len());
+        for (slot, &render_id) in members.iter().enumerate() {
+            // Keep the coarse visual region legible while leaving individual nodes
+            // free to cross it under real relation forces in the global pass.
+            let offset = if members.len() <= 1 {
+                [0.0; 3]
+            } else {
+                local[slot]
+            };
+            positions[render_id] = add(group_centers[group_id], offset);
         }
-        refine_leaf_positions(&ordered_render_ids, &mut positions, topology);
     }
-
+    let mut links = strongest_links(topology, node_count as usize);
+    links.sort_unstable_by_key(|&(left, right, _)| (left, right));
+    let mut velocities = vec![[0.0_f32; 3]; positions.len()];
+    for iteration in 0..FORCE_ITERATIONS {
+        let mut forces = vec![[0.0_f32; 3]; positions.len()];
+        for &(left, right, weight) in &links {
+            apply_global_attraction(&mut forces, left, right, weight, &positions);
+        }
+        apply_spatial_repulsion(&positions, &mut forces);
+        let cooling = 1.0 - 0.55 * iteration as f32 / FORCE_ITERATIONS as f32;
+        for ((position, velocity), force) in positions.iter_mut().zip(&mut velocities).zip(forces) {
+            let gravity = scale(*position, -0.014);
+            *velocity = scale(add(*velocity, add(force, gravity)), 0.8);
+            let magnitude = length(*velocity);
+            let max_step = 1.4 * cooling;
+            if magnitude > max_step {
+                *velocity = scale(*velocity, max_step / magnitude);
+            }
+            *position = add(*position, *velocity);
+        }
+        recenter(&mut positions);
+    }
+    let centers = hierarchy_centroids(hierarchy, node_count as usize, &positions);
+    let children = children_by_parent(hierarchy, &vec![BTreeMap::new(); hierarchy.nodes.len()]);
     let bounds = hierarchy_bounds(hierarchy, &children, &centers, &positions);
     let hierarchy = centers
         .into_iter()
@@ -79,6 +95,463 @@ pub(crate) fn build_graph_render_layout_with_topology(
         positions,
         hierarchy,
     }
+}
+
+/// Authoritative communities each get one coarse layout body. Null-membership
+/// nodes are split only into deterministic topology-locality bodies; these IDs
+/// never leave the layout and do not alter semantic membership.
+fn visual_groups(
+    hierarchy: &GraphRenderHierarchy,
+    topology: &GraphRenderLayoutTopology,
+    node_count: usize,
+) -> (Vec<Vec<usize>>, Vec<usize>) {
+    let mut territories = hierarchy
+        .nodes
+        .iter()
+        .filter(|node| node.kind == GraphRenderHierarchyKind::Territory)
+        .collect::<Vec<_>>();
+    territories.sort_unstable_by_key(|node| node.id);
+    let mut groups = Vec::<Vec<usize>>::new();
+    let mut group_for_territory = BTreeMap::<u32, usize>::new();
+    for territory in &territories {
+        if territory.source_community_id.is_some() {
+            let group = groups.len();
+            groups.push(Vec::new());
+            group_for_territory.insert(territory.id, group);
+        }
+    }
+    let mut group_by_render = vec![usize::MAX; node_count];
+    let mut unassigned = BTreeSet::new();
+    for leaf in &hierarchy.leaves {
+        let mut current = Some(leaf.hierarchy_id);
+        let mut territory_id = None;
+        while let Some(id) = current {
+            if hierarchy.nodes[id as usize].kind == GraphRenderHierarchyKind::Territory {
+                territory_id = Some(id);
+                break;
+            }
+            current = hierarchy.nodes[id as usize].parent_id;
+        }
+        let group = territory_id.and_then(|id| group_for_territory.get(&id).copied());
+        for render_id in &leaf.render_ids {
+            let render_id = render_id.get() as usize;
+            if let Some(group) = group {
+                groups[group].push(render_id);
+                group_by_render[render_id] = group;
+            } else {
+                unassigned.insert(render_id);
+            }
+        }
+    }
+    for members in &mut groups {
+        members.sort_unstable();
+    }
+    while let Some(&seed) = unassigned.first() {
+        unassigned.remove(&seed);
+        let mut members = vec![seed];
+        let mut cursor = 0;
+        while cursor < members.len() && members.len() < MAX_UNASSIGNED_LOCALITY {
+            let source = members[cursor];
+            let mut neighbors = topology
+                .neighbors(source)
+                .iter()
+                .take(MAX_REPULSION_CANDIDATES)
+                .filter(|neighbor| unassigned.contains(&(neighbor.render_id as usize)))
+                .copied()
+                .collect::<Vec<_>>();
+            neighbors.sort_unstable_by(|a, b| {
+                b.weight_units
+                    .cmp(&a.weight_units)
+                    .then_with(|| a.render_id.cmp(&b.render_id))
+            });
+            for neighbor in neighbors {
+                if members.len() == MAX_UNASSIGNED_LOCALITY {
+                    break;
+                }
+                let target = neighbor.render_id as usize;
+                if unassigned.remove(&target) {
+                    members.push(target);
+                }
+            }
+            cursor += 1;
+        }
+        members.sort_unstable();
+        let group = groups.len();
+        for &render_id in &members {
+            group_by_render[render_id] = group;
+        }
+        groups.push(members);
+    }
+    // Defensive coverage for malformed/partial hierarchy input.
+    for render_id in 0..node_count {
+        if group_by_render[render_id] == usize::MAX {
+            let group = groups.len();
+            group_by_render[render_id] = group;
+            groups.push(vec![render_id]);
+        }
+    }
+    (groups, group_by_render)
+}
+
+fn layout_group_centers(
+    groups: &[Vec<usize>],
+    group_by_render: &[usize],
+    topology: &GraphRenderLayoutTopology,
+) -> Vec<[f32; 3]> {
+    if groups.is_empty() {
+        return Vec::new();
+    }
+    let radii = groups
+        .iter()
+        .map(|members| (members.len().max(1) as f32).cbrt() * 4.0)
+        .collect::<Vec<_>>();
+    let occupied_volume = radii
+        .iter()
+        .map(|radius| (radius + 32.0).powi(3))
+        .sum::<f32>();
+    let initial_radius = (70.0_f32 * 1.5).max(occupied_volume.cbrt() * 1.4);
+    let mut centers = initial_positions_with_radius(groups.len(), initial_radius);
+    let mut adjacency = vec![BTreeMap::<usize, u64>::new(); groups.len()];
+    for source in 0..group_by_render.len() {
+        for neighbor in topology.neighbors(source) {
+            let target = neighbor.render_id as usize;
+            if source >= target || target >= group_by_render.len() {
+                continue;
+            }
+            let left = group_by_render[source];
+            let right = group_by_render[target];
+            if left == right {
+                continue;
+            }
+            retain_group_neighbor(&mut adjacency[left], right, neighbor.weight_units);
+            retain_group_neighbor(&mut adjacency[right], left, neighbor.weight_units);
+        }
+    }
+    let mut links = BTreeMap::<(usize, usize), u64>::new();
+    for (left, neighbors) in adjacency.iter().enumerate() {
+        for (&right, &weight) in neighbors {
+            if left < right {
+                links
+                    .entry((left, right))
+                    .and_modify(|current| *current = (*current).max(weight))
+                    .or_insert(weight);
+            }
+        }
+    }
+    let group_links = links.into_iter().collect::<Vec<_>>();
+    let mut velocities = vec![[0.0; 3]; groups.len()];
+    for iteration in 0..GROUP_FORCE_ITERATIONS {
+        let mut force = vec![[0.0; 3]; groups.len()];
+        for &((left, right), weight_units) in &group_links {
+            let delta = subtract(centers[right], centers[left]);
+            let distance = length(delta);
+            if distance <= f32::EPSILON {
+                continue;
+            }
+            let weight = edge_weight_from_units(weight_units);
+            let effective = (1.0 + weight.max(0.0).ln_1p()).sqrt();
+            let desired = radii[left] + radii[right] + 24.0 + 70.0 / effective;
+            let amount = (distance - desired) * 0.019 * effective.min(4.0);
+            let pull = scale(delta, amount / distance);
+            add_to(&mut force[left], pull);
+            add_to(&mut force[right], scale(pull, -1.0));
+        }
+        apply_group_repulsion(&centers, &radii, &mut force);
+        let cooling = 1.0 - 0.55 * iteration as f32 / GROUP_FORCE_ITERATIONS as f32;
+        for ((center, velocity), delta) in centers.iter_mut().zip(&mut velocities).zip(force) {
+            let gravity = scale(*center, -0.0024);
+            *velocity = scale(add(*velocity, add(delta, gravity)), 0.84);
+            let magnitude = length(*velocity);
+            let max_step = 18.0 * cooling;
+            if magnitude > max_step {
+                *velocity = scale(*velocity, max_step / magnitude);
+            }
+            *center = add(*center, *velocity);
+        }
+        recenter(&mut centers);
+    }
+    centers
+}
+
+fn retain_group_neighbor(neighbors: &mut BTreeMap<usize, u64>, candidate: usize, weight: u64) {
+    if let Some(current) = neighbors.get_mut(&candidate) {
+        *current = current.saturating_add(weight);
+        return;
+    }
+    if neighbors.len() < MAX_GROUP_NEIGHBORS {
+        neighbors.insert(candidate, weight);
+        return;
+    }
+    let weakest = neighbors
+        .iter()
+        .min_by(|(left_id, left_weight), (right_id, right_weight)| {
+            left_weight
+                .cmp(right_weight)
+                .then_with(|| right_id.cmp(left_id))
+        })
+        .map(|(&id, &weight)| (id, weight));
+    if let Some((weakest_id, weakest_weight)) = weakest {
+        if weight > weakest_weight || (weight == weakest_weight && candidate < weakest_id) {
+            neighbors.remove(&weakest_id);
+            neighbors.insert(candidate, weight);
+        }
+    }
+}
+
+fn apply_group_repulsion(centers: &[[f32; 3]], radii: &[f32], force: &mut [[f32; 3]]) {
+    if centers.len() < 2 {
+        return;
+    }
+    let cell_size = (radii.iter().copied().fold(0.0_f32, f32::max) * 2.0 + 24.0).max(32.0);
+    let mut cells = BTreeMap::<(i32, i32, i32), Vec<usize>>::new();
+    let coords = centers
+        .iter()
+        .map(|p| {
+            (
+                (p[0] / cell_size).floor() as i32,
+                (p[1] / cell_size).floor() as i32,
+                (p[2] / cell_size).floor() as i32,
+            )
+        })
+        .collect::<Vec<_>>();
+    for (index, key) in coords.iter().copied().enumerate() {
+        cells.entry(key).or_default().push(index);
+    }
+    for (left, &(x, y, z)) in coords.iter().enumerate() {
+        let mut examined = 0;
+        'cells: for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(neighbors) = cells.get(&(x + dx, y + dy, z + dz)) {
+                        for &right in neighbors {
+                            if examined >= MAX_REPULSION_CANDIDATES {
+                                break 'cells;
+                            }
+                            examined += 1;
+                            if right <= left {
+                                continue;
+                            }
+                            let delta = subtract(centers[right], centers[left]);
+                            let distance = length(delta);
+                            let minimum = radii[left] + radii[right] + 24.0;
+                            if distance >= minimum {
+                                continue;
+                            }
+                            let direction = if distance <= f32::EPSILON {
+                                let axis = (left.wrapping_mul(31).wrapping_add(right)) % 3;
+                                let mut v = [0.0; 3];
+                                v[axis] = 1.0;
+                                v
+                            } else {
+                                scale(delta, 1.0 / distance)
+                            };
+                            let amount = if distance <= f32::EPSILON {
+                                1.0
+                            } else {
+                                (minimum - distance) * 0.25
+                            };
+                            add_to(&mut force[left], scale(direction, -amount));
+                            add_to(&mut force[right], scale(direction, amount));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn initial_positions(count: usize) -> Vec<[f32; 3]> {
+    // Render IDs are assigned from sorted node keys, so this is stable across runs
+    // and independent of relation iteration order.
+    let radius = (count.max(1) as f32).cbrt() * 2.94;
+    initial_positions_with_radius(count, radius)
+}
+
+fn initial_positions_with_radius(count: usize, radius: f32) -> Vec<[f32; 3]> {
+    let golden = 2.399_963_1_f32;
+    (0..count)
+        .map(|index| {
+            let fraction = (index as f32 + 0.5) / count.max(1) as f32;
+            let z = 1.0 - 2.0 * fraction;
+            let ring = (1.0 - z * z).max(0.0).sqrt();
+            let phase = stable_phase(index as u64);
+            let angle = index as f32 * golden + phase;
+            let shell = fraction.cbrt() * radius;
+            [
+                angle.cos() * ring * shell,
+                angle.sin() * ring * shell,
+                z * shell,
+            ]
+        })
+        .collect()
+}
+
+fn stable_phase(seed: u64) -> f32 {
+    let mut value = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^= value >> 31;
+    (value as u32) as f32 / u32::MAX as f32 * std::f32::consts::TAU
+}
+
+fn strongest_links(topology: &GraphRenderLayoutTopology, count: usize) -> Vec<(usize, usize, u64)> {
+    let mut links = BTreeMap::<(usize, usize), u64>::new();
+    for source in 0..count {
+        let mut selected = Vec::with_capacity(MAX_FORCE_NEIGHBORS);
+        for neighbor in topology.neighbors(source) {
+            if neighbor.render_id as usize >= count || neighbor.render_id as usize == source {
+                continue;
+            }
+            let insert_at = selected
+                .iter()
+                .position(|candidate: &&crate::graph_render_edge_projection_model::GraphRenderLayoutNeighbor| {
+                    neighbor.weight_units > candidate.weight_units
+                        || (neighbor.weight_units == candidate.weight_units
+                            && neighbor.render_id < candidate.render_id)
+                })
+                .unwrap_or(selected.len());
+            if insert_at < MAX_FORCE_NEIGHBORS {
+                selected.insert(insert_at, neighbor);
+                selected.truncate(MAX_FORCE_NEIGHBORS);
+            }
+        }
+        for neighbor in selected {
+            let target = neighbor.render_id as usize;
+            let pair = (source.min(target), source.max(target));
+            links
+                .entry(pair)
+                .and_modify(|weight| *weight = (*weight).max(neighbor.weight_units))
+                .or_insert(neighbor.weight_units);
+        }
+    }
+    links
+        .into_iter()
+        .map(|((left, right), weight)| (left, right, weight))
+        .collect()
+}
+
+fn apply_global_attraction(
+    force: &mut [[f32; 3]],
+    left: usize,
+    right: usize,
+    weight_units: u64,
+    positions: &[[f32; 3]],
+) {
+    let delta = subtract(positions[right], positions[left]);
+    let distance = length(delta);
+    if distance <= f32::EPSILON {
+        return;
+    }
+    let weight = edge_weight_from_units(weight_units);
+    let effective = (1.0 + weight.max(0.0).ln_1p()).sqrt();
+    let desired = GRAPH_RENDER_NODE_RADIUS * 2.0 + 1.1 + 4.5 / effective;
+    let amount = (distance - desired) * 0.055 * effective.min(4.0);
+    let pull = scale(delta, amount / distance);
+    add_to(&mut force[left], pull);
+    add_to(&mut force[right], scale(pull, -1.0));
+}
+
+fn apply_spatial_repulsion(positions: &[[f32; 3]], force: &mut [[f32; 3]]) {
+    let cell_size = FORCE_SPATIAL_CELL_SIZE;
+    let mut cells = BTreeMap::<(i32, i32, i32), Vec<usize>>::new();
+    let coords = positions
+        .iter()
+        .map(|p| {
+            (
+                (p[0] / cell_size).floor() as i32,
+                (p[1] / cell_size).floor() as i32,
+                (p[2] / cell_size).floor() as i32,
+            )
+        })
+        .collect::<Vec<_>>();
+    for (index, key) in coords.iter().copied().enumerate() {
+        cells.entry(key).or_default().push(index);
+    }
+    for (left, &(x, y, z)) in coords.iter().enumerate() {
+        let mut examined = 0;
+        'cells: for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(neighbors) = cells.get(&(x + dx, y + dy, z + dz)) {
+                        for &right in neighbors {
+                            if examined >= MAX_REPULSION_CANDIDATES {
+                                break 'cells;
+                            }
+                            examined += 1;
+                            if right <= left {
+                                continue;
+                            }
+                            let delta = subtract(positions[right], positions[left]);
+                            let distance = length(delta);
+                            if distance >= 2.0 {
+                                continue;
+                            }
+                            let direction = if distance <= f32::EPSILON {
+                                let axis = (left.wrapping_mul(31).wrapping_add(right)) % 3;
+                                let mut v = [0.0; 3];
+                                v[axis] = 1.0;
+                                v
+                            } else {
+                                scale(delta, 1.0 / distance)
+                            };
+                            let amount = if distance <= f32::EPSILON {
+                                0.2
+                            } else {
+                                (2.0 - distance) * 0.34
+                            };
+                            add_to(&mut force[left], scale(direction, -amount));
+                            add_to(&mut force[right], scale(direction, amount));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn recenter(positions: &mut [[f32; 3]]) {
+    if positions.is_empty() {
+        return;
+    }
+    let mut center = [0.0; 3];
+    for position in positions.iter() {
+        add_to(&mut center, *position);
+    }
+    center = scale(center, 1.0 / positions.len() as f32);
+    for position in positions {
+        *position = subtract(*position, center);
+    }
+}
+
+fn hierarchy_centroids(
+    hierarchy: &GraphRenderHierarchy,
+    count: usize,
+    positions: &[[f32; 3]],
+) -> Vec<[f32; 3]> {
+    let mut sums = vec![[0.0; 3]; hierarchy.nodes.len()];
+    let mut counts = vec![0_usize; hierarchy.nodes.len()];
+    for leaf in &hierarchy.leaves {
+        for id in &leaf.render_ids {
+            let point = positions[id.get() as usize];
+            let mut current = Some(leaf.hierarchy_id);
+            while let Some(id) = current {
+                add_to(&mut sums[id as usize], point);
+                counts[id as usize] += 1;
+                current = hierarchy.nodes[id as usize].parent_id;
+            }
+        }
+    }
+    let _ = count;
+    sums.iter()
+        .zip(counts)
+        .map(|(sum, count)| {
+            if count == 0 {
+                [0.0; 3]
+            } else {
+                scale(*sum, 1.0 / count as f32)
+            }
+        })
+        .collect()
 }
 
 fn children_by_parent(
@@ -120,260 +593,6 @@ fn children_by_parent(
     children
 }
 
-fn sibling_connectivity(
-    hierarchy: &GraphRenderHierarchy,
-    topology: &GraphRenderLayoutTopology,
-    node_count: usize,
-) -> Vec<BTreeMap<u32, Vec<(u32, u64)>>> {
-    let mut leaf_by_render = vec![u32::MAX; node_count];
-    let mut leaf_paths = Vec::with_capacity(hierarchy.leaves.len());
-    for (leaf_slot, leaf) in hierarchy.leaves.iter().enumerate() {
-        let mut path = Vec::new();
-        let mut current = leaf.hierarchy_id;
-        while let Some(parent) = hierarchy.nodes[current as usize].parent_id {
-            path.push((parent, current));
-            current = parent;
-        }
-        leaf_paths.push(path);
-        for render_id in &leaf.render_ids {
-            leaf_by_render[render_id.get() as usize] = leaf_slot as u32;
-        }
-    }
-    let mut edges = vec![BTreeMap::new(); hierarchy.nodes.len()];
-    for source in 0..node_count {
-        for neighbor in topology.neighbors(source) {
-            let target = neighbor.render_id as usize;
-            if source >= target || target >= node_count {
-                continue;
-            }
-            if leaf_by_render[source] == leaf_by_render[target] {
-                continue;
-            }
-            let source_path = &leaf_paths[leaf_by_render[source] as usize];
-            let target_path = &leaf_paths[leaf_by_render[target] as usize];
-            for (parent, source_child) in source_path {
-                if let Some((_, target_child)) = target_path
-                    .iter()
-                    .find(|(candidate, _)| candidate == parent)
-                {
-                    if source_child != target_child {
-                        let pair = (
-                            (*source_child).min(*target_child),
-                            (*source_child).max(*target_child),
-                        );
-                        let total: &mut u64 = edges[*parent as usize].entry(pair).or_default();
-                        *total = total.saturating_add(neighbor.weight_units);
-                    }
-                }
-            }
-        }
-    }
-    edges
-        .into_iter()
-        .map(|parent_edges| {
-            let mut neighbors = BTreeMap::<u32, Vec<(u32, u64)>>::new();
-            for ((left, right), weight) in parent_edges {
-                neighbors.entry(left).or_default().push((right, weight));
-                neighbors.entry(right).or_default().push((left, weight));
-            }
-            for adjacent in neighbors.values_mut() {
-                adjacent.sort_unstable_by(|left, right| {
-                    right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0))
-                });
-                adjacent.truncate(GRAPH_RENDER_LAYOUT_MAX_AGGREGATE_FANOUT);
-            }
-            neighbors
-        })
-        .collect()
-}
-
-fn order_leaf_by_connectivity(
-    leaf: &crate::graph_render_hierarchy_model::GraphRenderLeaf,
-    topology: &GraphRenderLayoutTopology,
-) -> Vec<crate::graph_render_identity::RenderNodeId> {
-    if leaf.render_ids.len() < 2 {
-        return leaf.render_ids.clone();
-    }
-    let mut remaining = leaf
-        .render_ids
-        .iter()
-        .map(|render_id| render_id.get())
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut ordered = Vec::with_capacity(leaf.render_ids.len());
-    let mut current = *remaining.first().expect("nonempty leaf");
-    while !remaining.is_empty() {
-        remaining.remove(&current);
-        ordered.push(crate::graph_render_identity::RenderNodeId::new(current));
-        let next = topology
-            .neighbors(current as usize)
-            .iter()
-            .filter(|neighbor| remaining.contains(&neighbor.render_id))
-            .max_by(|left, right| {
-                left.weight_units
-                    .cmp(&right.weight_units)
-                    .then_with(|| right.render_id.cmp(&left.render_id))
-            })
-            .map(|neighbor| neighbor.render_id)
-            .or_else(|| remaining.first().copied());
-        let Some(next) = next else { break };
-        current = next;
-    }
-    ordered
-}
-
-fn refine_leaf_positions(
-    ordered_render_ids: &[crate::graph_render_identity::RenderNodeId],
-    positions: &mut [[f32; 3]],
-    topology: &GraphRenderLayoutTopology,
-) {
-    for population in ordered_render_ids.chunks(GRAPH_RENDER_LAYOUT_MAX_LOCAL_POPULATION) {
-        if population.len() < 2 {
-            continue;
-        }
-        let mut slots = population
-            .iter()
-            .enumerate()
-            .map(|(slot, id)| (id.get(), slot))
-            .collect::<Vec<_>>();
-        slots.sort_unstable_by_key(|&(id, _)| id);
-        let mut links = Vec::new();
-        for (source_local, render_id) in population.iter().enumerate() {
-            let source = render_id.get() as usize;
-            for (target_local, weight) in strongest_local_neighbors(source, &slots, topology) {
-                links.push((
-                    source_local.min(target_local),
-                    source_local.max(target_local),
-                    weight,
-                ));
-            }
-        }
-        links.sort_unstable();
-        links.dedup();
-        if links.is_empty() {
-            continue;
-        }
-        let initial_positions = population
-            .iter()
-            .map(|render_id| positions[render_id.get() as usize])
-            .collect::<Vec<_>>();
-        let mut local_positions = initial_positions.clone();
-        let repulsion_pairs = nearby_repulsion_pairs(&local_positions);
-        for _ in 0..GRAPH_RENDER_LAYOUT_MAX_ITERATIONS {
-            let mut force = vec![[0.0_f32; 3]; population.len()];
-            for &(source, target, weight) in &links {
-                apply_attraction(&mut force, source, target, weight, &local_positions);
-            }
-            for &(left, right) in &repulsion_pairs {
-                apply_repulsion(&mut force, left, right, &local_positions);
-            }
-            for ((position, initial), delta) in local_positions
-                .iter_mut()
-                .zip(&initial_positions)
-                .zip(force)
-            {
-                let step = length(delta);
-                let candidate = add(
-                    *position,
-                    scale(delta, if step > 0.35 { 0.35 / step } else { 1.0 }),
-                );
-                let displacement = subtract(candidate, *initial);
-                let distance = length(displacement);
-                *position = if distance > MAX_LOCAL_DISPLACEMENT {
-                    add(
-                        *initial,
-                        scale(displacement, MAX_LOCAL_DISPLACEMENT / distance),
-                    )
-                } else {
-                    candidate
-                };
-            }
-        }
-        for (render_id, position) in population.iter().zip(local_positions) {
-            positions[render_id.get() as usize] = position;
-        }
-    }
-}
-
-fn strongest_local_neighbors(
-    source: usize,
-    slots: &[(u32, usize)],
-    topology: &GraphRenderLayoutTopology,
-) -> Vec<(usize, u64)> {
-    let mut selected = Vec::with_capacity(GRAPH_RENDER_LAYOUT_MAX_NEIGHBORS);
-    for neighbor in topology.neighbors(source) {
-        let Ok(index) = slots.binary_search_by_key(&neighbor.render_id, |&(id, _)| id) else {
-            continue;
-        };
-        let insert_at = selected
-            .iter()
-            .position(|&(_, weight)| neighbor.weight_units > weight)
-            .unwrap_or(selected.len());
-        if insert_at < GRAPH_RENDER_LAYOUT_MAX_NEIGHBORS {
-            selected.insert(insert_at, (slots[index].1, neighbor.weight_units));
-            selected.truncate(GRAPH_RENDER_LAYOUT_MAX_NEIGHBORS);
-        }
-    }
-    selected
-}
-
-fn apply_attraction(
-    force: &mut [[f32; 3]],
-    source: usize,
-    target: usize,
-    weight_units: u64,
-    positions: &[[f32; 3]],
-) {
-    let delta = subtract(positions[target], positions[source]);
-    let distance = length(delta);
-    if distance <= f32::EPSILON {
-        return;
-    }
-    let weight = edge_weight_from_units(weight_units);
-    let strength = weight / (1.0 + weight);
-    let target_distance = 2.0 + 1.7 / (1.0 + weight);
-    let amount = (distance - target_distance) * strength * 0.12;
-    let unit = scale(delta, 1.0 / distance);
-    add_to(&mut force[source], scale(unit, amount));
-    add_to(&mut force[target], scale(unit, -amount));
-}
-
-fn apply_repulsion(force: &mut [[f32; 3]], left: usize, right: usize, positions: &[[f32; 3]]) {
-    let delta = subtract(positions[right], positions[left]);
-    let distance = length(delta);
-    if distance >= 2.1 {
-        return;
-    }
-    if distance <= f32::EPSILON {
-        // The base grid avoids coincident points; this branch is deterministic protection
-        // against future layout seeds that do not.
-        let axis = ((left.wrapping_mul(31) + right) % 3) as usize;
-        force[left][axis] -= 0.05;
-        force[right][axis] += 0.05;
-        return;
-    }
-    let amount = (2.1 - distance) * 0.2;
-    let unit = scale(delta, 1.0 / distance);
-    add_to(&mut force[left], scale(unit, -amount));
-    add_to(&mut force[right], scale(unit, amount));
-}
-
-// Each node stays inside its own grid cell's clearance, including at
-// population boundaries where the bounded solver does not compare the pair.
-const MAX_LOCAL_DISPLACEMENT: f32 =
-    GRAPH_RENDER_NODE_SPACING * 0.5 - GRAPH_RENDER_NODE_RADIUS - 0.01;
-
-fn nearby_repulsion_pairs(positions: &[[f32; 3]]) -> Vec<(usize, usize)> {
-    let mut pairs = Vec::new();
-    for left in 0..positions.len() {
-        for right in (left + 1)..positions.len() {
-            if length(subtract(positions[right], positions[left])) <= 6.0 {
-                pairs.push((left, right));
-            }
-        }
-    }
-    pairs
-}
-
 fn add_to(target: &mut [f32; 3], delta: [f32; 3]) {
     for axis in 0..3 {
         target[axis] += delta[axis];
@@ -390,203 +609,6 @@ fn scale(value: [f32; 3], factor: f32) -> [f32; 3] {
 
 fn length(value: [f32; 3]) -> f32 {
     (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt()
-}
-
-fn local_extents(hierarchy: &GraphRenderHierarchy, children: &[Vec<u32>]) -> Vec<f32> {
-    let mut extents = vec![GRAPH_RENDER_NODE_RADIUS; hierarchy.nodes.len()];
-    for node in hierarchy.nodes.iter().rev() {
-        let index = node.id as usize;
-        if node.kind == GraphRenderHierarchyKind::Leaf {
-            extents[index] =
-                grid_sphere_extent(node.node_count as usize, GRAPH_RENDER_NODE_SPACING)
-                    + GRAPH_RENDER_NODE_RADIUS
-                    + MAX_LOCAL_DISPLACEMENT;
-            continue;
-        }
-
-        let child_ids = &children[index];
-        if child_ids.is_empty() {
-            continue;
-        }
-        let child_extent = child_ids
-            .iter()
-            .map(|child_id| extents[*child_id as usize])
-            .fold(0.0_f32, f32::max);
-        let spacing = child_extent * 2.0 + GRAPH_RENDER_CHILD_GAP;
-        extents[index] = grid_sphere_extent(child_ids.len(), spacing)
-            + child_extent
-            + GRAPH_RENDER_LAYOUT_MAX_CENTER_SHIFT;
-    }
-    extents
-}
-
-fn hierarchy_centers(children: &[Vec<u32>], extents: &[f32]) -> Vec<[f32; 3]> {
-    let mut centers = vec![[0.0; 3]; children.len()];
-    for parent_id in 0..children.len() {
-        let child_ids = &children[parent_id];
-        if child_ids.is_empty() {
-            continue;
-        }
-        let child_extent = child_ids
-            .iter()
-            .map(|child_id| extents[*child_id as usize])
-            .fold(0.0_f32, f32::max);
-        let spacing = child_extent * 2.0 + GRAPH_RENDER_CHILD_GAP;
-        for (index, child_id) in child_ids.iter().enumerate() {
-            centers[*child_id as usize] = add(
-                centers[parent_id],
-                grid_offset(index, child_ids.len(), spacing),
-            );
-        }
-    }
-    centers
-}
-
-fn refine_hierarchy_centers(
-    centers: &mut [[f32; 3]],
-    extents: &[f32],
-    children: &[Vec<u32>],
-    sibling_edges: &[BTreeMap<u32, Vec<(u32, u64)>>],
-) {
-    let grid_centers = centers.to_vec();
-    for (parent_id, child_ids) in children.iter().enumerate() {
-        // A parent is visited before its descendants. Carry its accumulated
-        // translation into the child grid before refining those siblings.
-        let translation = subtract(centers[parent_id], grid_centers[parent_id]);
-        if translation != [0.0; 3] {
-            for &id in child_ids {
-                centers[id as usize] = add(centers[id as usize], translation);
-            }
-        }
-        for population in child_ids.chunks(GRAPH_RENDER_LAYOUT_MAX_CENTER_POPULATION) {
-            if population.len() < 2 {
-                continue;
-            }
-            let slot_by_id = population
-                .iter()
-                .enumerate()
-                .map(|(slot, child_id)| (*child_id, slot))
-                .collect::<BTreeMap<_, _>>();
-            let mut links = BTreeMap::<(usize, usize), u64>::new();
-            for child_id in population {
-                let Some(neighbors) = sibling_edges[parent_id].get(child_id) else {
-                    continue;
-                };
-                let source = slot_by_id[child_id];
-                for (neighbor, weight) in neighbors {
-                    let Some(&target) = slot_by_id.get(neighbor) else {
-                        continue;
-                    };
-                    if source == target {
-                        continue;
-                    }
-                    let pair = (source.min(target), source.max(target));
-                    links
-                        .entry(pair)
-                        .and_modify(|current| *current = (*current).max(*weight))
-                        .or_insert(*weight);
-                }
-            }
-            if links.is_empty() {
-                continue;
-            }
-
-            let original = population
-                .iter()
-                .map(|child_id| centers[*child_id as usize])
-                .collect::<Vec<_>>();
-            let mut local = original.clone();
-            let local_extents = population
-                .iter()
-                .map(|child_id| extents[*child_id as usize])
-                .collect::<Vec<_>>();
-            for _ in 0..GRAPH_RENDER_LAYOUT_CENTER_ITERATIONS {
-                let mut force = vec![[0.0_f32; 3]; population.len()];
-                for (&(left, right), &weight) in &links {
-                    let minimum = local_extents[left]
-                        + local_extents[right]
-                        + GRAPH_RENDER_LAYOUT_CENTER_CLEARANCE;
-                    apply_center_attraction(&mut force, left, right, weight, minimum, &local);
-                }
-                for left in 0..local.len() {
-                    for right in (left + 1)..local.len() {
-                        apply_center_repulsion(
-                            &mut force,
-                            left,
-                            right,
-                            local_extents[left] + local_extents[right],
-                            &local,
-                        );
-                    }
-                }
-                for (index, (position, delta)) in local.iter_mut().zip(force).enumerate() {
-                    let step = length(delta);
-                    let factor = if step > 2.0 { 2.0 / step } else { 1.0 };
-                    let mut candidate = add(*position, scale(delta, factor));
-                    let displacement = subtract(candidate, original[index]);
-                    let displacement_length = length(displacement);
-                    if displacement_length > GRAPH_RENDER_LAYOUT_MAX_CENTER_SHIFT {
-                        candidate = add(
-                            original[index],
-                            scale(
-                                displacement,
-                                GRAPH_RENDER_LAYOUT_MAX_CENTER_SHIFT / displacement_length,
-                            ),
-                        );
-                    }
-                    *position = candidate;
-                }
-            }
-            for (child_id, center) in population.iter().zip(local) {
-                centers[*child_id as usize] = center;
-            }
-        }
-    }
-}
-
-fn apply_center_attraction(
-    force: &mut [[f32; 3]],
-    left: usize,
-    right: usize,
-    weight_units: u64,
-    minimum_distance: f32,
-    centers: &[[f32; 3]],
-) {
-    let delta = subtract(centers[right], centers[left]);
-    let distance = length(delta);
-    if distance <= minimum_distance || distance <= f32::EPSILON {
-        return;
-    }
-    let weight = edge_weight_from_units(weight_units);
-    let strength = weight / (1.0 + weight);
-    let amount = (distance - minimum_distance) * strength * 0.15;
-    let unit = scale(delta, 1.0 / distance);
-    add_to(&mut force[left], scale(unit, amount));
-    add_to(&mut force[right], scale(unit, -amount));
-}
-
-fn apply_center_repulsion(
-    force: &mut [[f32; 3]],
-    left: usize,
-    right: usize,
-    minimum_distance: f32,
-    centers: &[[f32; 3]],
-) {
-    let delta = subtract(centers[right], centers[left]);
-    let distance = length(delta);
-    if distance >= minimum_distance {
-        return;
-    }
-    if distance <= f32::EPSILON {
-        let axis = (left.wrapping_mul(31).wrapping_add(right) % 3) as usize;
-        force[left][axis] -= 0.1;
-        force[right][axis] += 0.1;
-        return;
-    }
-    let unit = scale(delta, 1.0 / distance);
-    let amount = (minimum_distance - distance) * 0.25;
-    add_to(&mut force[left], scale(unit, -amount));
-    add_to(&mut force[right], scale(unit, amount));
 }
 
 fn hierarchy_bounds(

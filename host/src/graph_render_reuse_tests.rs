@@ -49,7 +49,7 @@ fn local_label_mutation_reuses_unaffected_leaf_and_aggregate_chunk() {
 }
 
 #[test]
-fn local_relation_mutation_reencodes_only_the_changed_detail_chunk() {
+fn topology_mutation_reencodes_layout_chunks_without_stale_positions() {
     let mut service = GraphRenderService::default();
     let count = DEFAULT_GRAPH_RENDER_LEAF_CAPACITY + 2;
     let first_relations = vec![
@@ -68,6 +68,7 @@ fn local_relation_mutation_reencodes_only_the_changed_detail_chunk() {
         .unwrap()
         .positions
         .clone();
+    let old_first_detail = service.edge_chunk(first.generation_id, 0).unwrap().to_vec();
     let old_second_detail = service.edge_chunk(first.generation_id, 1).unwrap().to_vec();
 
     let second_relations = vec![
@@ -89,15 +90,22 @@ fn local_relation_mutation_reencodes_only_the_changed_detail_chunk() {
 
     assert!(!second.reuse.hierarchy_layout_reused);
     assert_ne!(first_positions, second_positions);
-    assert_eq!(second.reuse.node_chunks_reused, 1);
-    assert_eq!(second.reuse.node_chunks_encoded, 1);
+    assert_eq!(second.reuse.node_chunks_reused, 0);
+    assert_eq!(second.reuse.node_chunks_encoded, 2);
     assert_eq!(second.reuse.edge_chunks_reused, 0);
     assert_eq!(second.reuse.edge_chunks_encoded, 2);
 
+    let new_first_detail = service.edge_chunk(second.generation_id, 0).unwrap();
     let new_second_detail = service.edge_chunk(second.generation_id, 1).unwrap();
-    assert_eq!(
+    assert_ne!(
+        &old_first_detail[GRAPH_RENDER_BINARY_HEADER_LEN..],
+        &new_first_detail[GRAPH_RENDER_BINARY_HEADER_LEN..],
+        "changed topology must not retain stale edge positions",
+    );
+    assert_ne!(
         &old_second_detail[GRAPH_RENDER_BINARY_HEADER_LEN..],
         &new_second_detail[GRAPH_RENDER_BINARY_HEADER_LEN..],
+        "all edge payloads must be regenerated after a global position change",
     );
 }
 

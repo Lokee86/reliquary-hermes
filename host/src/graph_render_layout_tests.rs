@@ -5,18 +5,14 @@ use crate::graph_render_edge_projection_model::{
 use crate::graph_render_error::GraphRenderError;
 use crate::graph_render_hierarchy::build_graph_render_hierarchy;
 use crate::graph_render_identity::{GraphRenderNodeKey, GraphRenderNodeTarget};
+use crate::graph_render_layout::GRAPH_RENDER_NODE_RADIUS;
 use crate::graph_render_layout::build_graph_render_layout;
 use crate::graph_render_layout::build_graph_render_layout_with_topology;
-use crate::graph_render_layout_grid::{
-    GRAPH_RENDER_CHILD_GAP, GRAPH_RENDER_NODE_RADIUS, GRAPH_RENDER_NODE_SPACING,
-};
 use crate::graph_render_source::GraphRenderCommunitySource;
 
 #[test]
 fn production_layout_constants_are_frozen() {
-    assert_eq!(GRAPH_RENDER_NODE_SPACING, 4.0);
     assert_eq!(GRAPH_RENDER_NODE_RADIUS, 1.0);
-    assert_eq!(GRAPH_RENDER_CHILD_GAP, 24.0);
 }
 
 #[test]
@@ -33,7 +29,7 @@ fn empty_graph_layout_is_finite_and_bounded() {
 }
 
 #[test]
-fn one_leaf_uses_deterministic_centered_node_grid() {
+fn one_leaf_uses_deterministic_continuous_positions() {
     let memories = (1..=5).map(memory_id).collect::<Vec<_>>();
     let hierarchy = build_graph_render_hierarchy(&memories, vec![], 8, 2).unwrap();
 
@@ -41,24 +37,23 @@ fn one_leaf_uses_deterministic_centered_node_grid() {
     let second = build_graph_render_layout(&hierarchy, memories.len() as u32);
 
     assert_eq!(first, second);
-    assert_eq!(
-        first.positions,
-        vec![
-            [-2.0, -2.0, -2.0],
-            [2.0, -2.0, -2.0],
-            [-2.0, 2.0, -2.0],
-            [2.0, 2.0, -2.0],
-            [-2.0, -2.0, 2.0],
-        ],
+    assert!(
+        first
+            .positions
+            .iter()
+            .flatten()
+            .all(|value| value.is_finite())
     );
-    assert_eq!(
-        first.global_bounds(),
-        GraphRenderBounds::new([-3.0, -3.0, -3.0], [3.0, 3.0, 3.0]),
+    assert!(
+        first
+            .positions
+            .iter()
+            .any(|point| point.iter().any(|axis| axis.fract().abs() > 0.01))
     );
 }
 
 #[test]
-fn sibling_territories_are_packed_with_clear_sphere_separation() {
+fn sibling_territories_share_the_same_continuous_world() {
     let memories = vec![memory_id(1), memory_id(2)];
     let hierarchy = build_graph_render_hierarchy(
         &memories,
@@ -72,9 +67,14 @@ fn sibling_territories_are_packed_with_clear_sphere_separation() {
     .unwrap();
     let layout = build_graph_render_layout(&hierarchy, 2);
 
-    assert_eq!(layout.positions[0][0], -layout.positions[1][0]);
-    assert!(layout.positions[0][0] < 0.0);
-    assert!(distance(layout.positions[0], layout.positions[1]) >= GRAPH_RENDER_CHILD_GAP + 2.0);
+    assert!(distance(layout.positions[0], layout.positions[1]) > 0.0);
+    assert!(
+        layout
+            .positions
+            .iter()
+            .flatten()
+            .all(|coordinate| coordinate.is_finite())
+    );
 }
 
 #[test]
@@ -143,6 +143,21 @@ fn weighted_walk_keeps_cross_population_neighbors_together() {
             .flatten()
             .all(|value| value.is_finite())
     );
+}
+
+#[test]
+fn changing_chunk_leaf_capacity_does_not_change_spatial_partition_or_positions() {
+    let memories = (1..=130).map(memory_id).collect::<Vec<_>>();
+    let many_leaves = build_graph_render_hierarchy(&memories, vec![], 64, 2).unwrap();
+    let one_leaf = build_graph_render_hierarchy(&memories, vec![], 256, 2).unwrap();
+    let topology = pair_topology(memories.len(), 32_000);
+
+    let first =
+        build_graph_render_layout_with_topology(&many_leaves, memories.len() as u32, &topology);
+    let second =
+        build_graph_render_layout_with_topology(&one_leaf, memories.len() as u32, &topology);
+
+    assert_eq!(first.positions, second.positions);
 }
 
 #[test]
