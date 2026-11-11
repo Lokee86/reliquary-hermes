@@ -5,6 +5,7 @@ import type { HostControls, JsonTransport } from "../host";
 import { graphSelectionEligible } from "../host";
 import { createKnowledgeClient, type KnowledgeScope } from "./client";
 import { KnowledgeGraph } from "./KnowledgeGraph";
+import type { StorageLike } from "../graph/model/scopedStorage";
 import { KnowledgeInspector } from "./KnowledgeInspector";
 import { KnowledgeNavigation } from "./KnowledgeNavigation";
 import { communityLabel } from "./knowledgeUi";
@@ -17,6 +18,8 @@ interface Props {
   transport: JsonTransport;
   graphTransportFor: (owner: OwnerBinding, sessionId: string | null, signal?: AbortSignal) => GraphRenderTransport | undefined;
   controls: HostControls;
+  preferenceProfileKey: string | null;
+  preferenceSession?: StorageLike;
   scopeControls: ReactNode;
   mutationBlocked?: string;
   onOwnerRefresh: (memoryId?: string, includeArchived?: boolean, view?: ViewMode) => void;
@@ -36,7 +39,7 @@ interface CommunityPageState {
   page: Page<Community>;
 }
 
-export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor, controls, scopeControls,
+export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor, controls, scopeControls, preferenceProfileKey, preferenceSession,
   mutationBlocked, onOwnerRefresh, initialMemoryId, initialView, includeArchived = false }: Props) {
   const client = useMemo(() => createKnowledgeClient(transport), [transport]);
   const scope = useMemo<KnowledgeScope>(() => ({ owner, sessionId }), [owner, sessionId]);
@@ -231,7 +234,8 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
           <div className="knowledge-state error" role="status">Graph viewing is not granted for this owner. List remains available.</div>
         ) : graphTransport ? (
           <Suspense fallback={<div className="knowledge-state" role="status">Loading graph renderer…</div>}>
-            <KnowledgeGraph key={`${owner.owner_id}:${owner.generation}:${owner.cut}`} ownerId={owner.owner_id}
+            <KnowledgeGraph key={JSON.stringify([preferenceProfileKey, owner.owner_id, owner.generation, owner.cut])} ownerId={owner.owner_id}
+              controls={controls} preferenceProfileKey={preferenceProfileKey} preferenceSession={preferenceSession}
               transport={graphTransport} filters={graphFilters} selectedMemoryId={selectedMemoryId}
               onSelectMemoryId={graphSelected} />
           </Suspense>

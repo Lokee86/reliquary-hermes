@@ -296,3 +296,7 @@
     gap: 0.35rem;
   }
 }
+
+.knowledge-surface .graph-display-controls { position: absolute; z-index: 3; right: 12px; top: 3.5rem; }
+.knowledge-surface .graph-animation-controls { position: absolute; z-index: 3; right: 12px; bottom: 12px; display: grid; justify-items: end; gap: 3px; }
+.knowledge-surface .graph-preferences-session-note { color: var(--reliquary-muted-foreground); font-size: 0.58rem; }

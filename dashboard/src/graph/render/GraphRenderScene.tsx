@@ -12,17 +12,24 @@ import { RenderNodeChunk } from "./RenderNodeChunk";
 import { RenderLabels } from "./RenderLabels";
 import { RenderSelectionEdges } from "./RenderSelectionEdges";
 import { RenderTerritories } from "./RenderTerritories";
-import { useGraphRenderInteraction, type GraphRenderSceneProps } from "./useGraphRenderInteraction";
+import { useGraphRenderInteraction, type GraphRenderSceneProps as InteractionProps } from "./useGraphRenderInteraction";
+import { GraphCameraBridge } from "./GraphCameraBridge";
+import { GraphAnimationController } from "./GraphAnimationController";
+import { CameraCenterPseudoNode } from "./CameraCenterPseudoNode";
+import type { GraphPresentation } from "./presentation";
 import type { GraphRenderManifest, GraphRenderNodeInspection, GraphRenderVec3 } from "./types";
 import "./graph-render-scene.css";
 
 const EMPTY_CHUNKS = [] as const;
+
+export type GraphRenderSceneProps = InteractionProps & { presentation: GraphPresentation };
 
 type SceneProps = ReturnType<typeof useGraphRenderInteraction> & {
   client: GraphRenderSceneProps["client"];
   center: GraphRenderVec3;
   extent: number;
   resetVersion: number;
+  presentation: GraphPresentation;
   tooltipRef: RefObject<HTMLDivElement | null>;
 };
 
@@ -64,9 +71,10 @@ function TooltipAnchor({ node, tooltipRef }: {
 
 function Scene({
   client, frame, center, extent, selectedRenderId, hoveredRenderId, hoverNode, selectedTitle,
-  neighborhood, focusRequest, resetVersion, pick, publishHover, loadViewport, tooltipRef,
+  neighborhood, focusRequest, resetVersion, pick, publishHover, loadViewport, tooltipRef, presentation,
 }: SceneProps) {
   const controlsRef = useRef<TrackballControlsImpl | null>(null);
+  const animationActivity = useRef(false);
   const pointsByChunk = useRef(new Map<number, THREE.Points | THREE.InstancedMesh>());
   const { camera } = useThree();
   const registerChunk = useCallback((chunkId: number, pickable: THREE.Points | THREE.InstancedMesh | null) => {
@@ -90,48 +98,23 @@ function Scene({
   );
   const visibleSegmentCount = frame?.edgeChunks.reduce((count, chunk) => count + chunk.segmentCount, 0) ?? 0;
 
-  useEffect(() => {
-    const controls = controlsRef.current;
-    if (!controls) return;
-    controls.target.set(...center);
-    controls.update();
-  }, [center]);
-
-  useEffect(() => {
-    if (!focusRequest || !controlsRef.current) return;
-    const controls = controlsRef.current;
-    const nextTarget = new THREE.Vector3(...focusRequest);
-    const delta = nextTarget.clone().sub(controls.target);
-    // Translate both ends of the view to preserve the current orientation and zoom.
-    controls.target.copy(nextTarget);
-    camera.position.add(delta);
-    controls.update();
-  }, [camera, focusRequest]);
-
-  useEffect(() => {
-    if (!resetVersion || !controlsRef.current) return;
-    const controls = controlsRef.current;
-    controls.target.set(...center);
-    camera.position.set(center[0], center[1], center[2] + extent * 2.4);
-    camera.up.set(0, 1, 0);
-    controls.update();
-  }, [camera, center, extent, resetVersion]);
-
   return (
     <>
       <ambientLight intensity={0.5} />
       <pointLight position={[500, 500, 500]} intensity={0.6} />
       <pointLight position={[-300, -200, -300]} intensity={0.4} color="#6040ff" />
-      {frame && <RenderTerritories hierarchy={frame.hierarchy} isolated={isolatedTerritory} />}
+      {frame && <RenderTerritories hierarchy={frame.hierarchy} isolated={isolatedTerritory}
+        territoryOpacity={presentation.display.territoryOpacity} communityShellLimit={presentation.display.communityShellLimit}
+        selectedCommunityId={presentation.selectedCommunityId} />}
       {frame?.edgeChunks.map((chunk) => (
         <RenderEdgeChunk key={chunk.chunkId} chunk={chunk}
           lod={lodById.get(chunk.chunkId) ?? frame.lod} visibleSegmentCount={visibleSegmentCount}
-          muted={selectedRenderId !== null} />
+          muted={selectedRenderId !== null} edgeBrightness={presentation.display.edgeBrightness} />
       ))}
       <RenderSelectionEdges neighborhood={neighborhood} />
       {nodeChunks.map((chunk) => (
         <RenderNodeChunk key={chunk.chunkId} chunk={chunk}
-          totalNodeCount={client.manifest.totalNodeCount}
+          totalNodeCount={client.manifest.totalNodeCount} nodeGlow={presentation.display.nodeGlow}
           selectedRenderId={selectedRenderId} hoveredRenderId={hoveredRenderId}
           register={registerChunk} />
       ))}
@@ -139,8 +122,8 @@ function Scene({
       {hoverNode && <TooltipAnchor node={hoverNode} tooltipRef={tooltipRef} />}
       <BoundedPicker client={client} chunks={nodeChunks} pointsByChunk={pointsByChunk.current}
         selectedRenderId={selectedRenderId} onHover={publishHover} onPick={pick} />
-      <EffectComposer multisampling={0}>
-        <Bloom luminanceThreshold={0.3} luminanceSmoothing={0.7} intensity={1.45} mipmapBlur radius={0.6} />
+      <EffectComposer multisampling={0} enabled={presentation.display.bloom > 0}>
+        <Bloom luminanceThreshold={0.3} luminanceSmoothing={0.7} intensity={1.45 * presentation.display.bloom} mipmapBlur radius={0.6} />
       </EffectComposer>
       <TrackballControls
         ref={controlsRef}
@@ -151,6 +134,11 @@ function Scene({
         minDistance={10}
         maxDistance={Math.max(50000, extent * 20)}
       />
+      <GraphCameraBridge controlsRef={controlsRef} center={center} extent={extent} focusRequest={focusRequest}
+        resetVersion={resetVersion} preferences={presentation.camera} />
+      <GraphAnimationController controlsRef={controlsRef} settings={presentation.animation}
+        rerollToken={presentation.rerollToken} activityRef={animationActivity} />
+      {presentation.display.cameraCenterIndicator && <CameraCenterPseudoNode controlsRef={controlsRef} />}
       <CameraViewport controlsRef={controlsRef} fallbackCenter={center} onViewport={loadViewport} />
     </>
   );
@@ -201,7 +189,7 @@ function GraphScene(props: GraphRenderSceneProps) {
         }}
       >
         <Scene {...interaction} client={client} center={center} extent={extent}
-          resetVersion={resetVersion} tooltipRef={tooltipRef} />
+          resetVersion={resetVersion} tooltipRef={tooltipRef} presentation={props.presentation} />
       </Canvas>
       {interaction.hoverNode && <Tooltip node={interaction.hoverNode} tooltipRef={tooltipRef} />}
       <button className="graph-render-reset" type="button" onClick={() => setResetVersion((value) => value + 1)}>

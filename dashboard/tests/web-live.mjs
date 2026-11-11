@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { exerciseGraphPreferences } from "./graph-preferences-live.mjs";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { exerciseKnowledge, verifyLocalFixture, verifyOwnerScope } from "./knowledge-live.mjs";
@@ -75,6 +76,7 @@ try {
     assert((await reply.body()).length > 32);
   }
   await exerciseGraphSelection(page, fixture, manifestValues, nodeChunks, nodeChunkBodies);
+  if (fixture.verifyGraphPreferences) console.log(JSON.stringify(await exerciseGraphPreferences(page, fixture, "web")));
 } finally {
   await browser.close();
 }

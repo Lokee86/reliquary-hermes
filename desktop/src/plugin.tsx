@@ -45,7 +45,7 @@ function nativeError(error: unknown): RequestError {
   return new RequestError(match ? Number(match[1]) : 503, detail);
 }
 
-function desktopBoundary(ctx: PluginContext, current: () => boolean): HostBoundary {
+function desktopBoundary(ctx: PluginContext, current: () => boolean, preferenceProfileKey?: string): HostBoundary {
   function assertCurrent(signal?: AbortSignal) {
     signal?.throwIfAborted();
     if (!current()) throw new DOMException("The active Hermes connection changed.", "AbortError");
@@ -65,7 +65,7 @@ function desktopBoundary(ctx: PluginContext, current: () => boolean): HostBounda
     return request(pick, signal);
   }
   return {
-    surface: "Desktop", controls,
+    surface: "Desktop", controls, preferenceProfileKey,
     json(path, { method = "GET", body, signal }: RequestOptions = {}) {
       const timeoutMs = path.endsWith("/prepare") ? 45000 : path === "/setup-v1/apply" || path === "/dashboard-v1" ? 25000 : undefined;
       return request(() => ctx.rest(path, { method, body, timeoutMs }), signal);
@@ -91,7 +91,9 @@ function ReliquaryPane({ ctx }: { ctx: PluginContext }) {
   const connection = useValue(host.state.connectionId);
   const boundary = useMemo(() => desktopBoundary(ctx, () =>
     gatewayActivationEpoch() === epoch && host.state.profile.get() === profile &&
-    host.state.connectionId.get() === connection), [ctx, epoch, profile, connection]);
+    host.state.connectionId.get() === connection,
+    typeof profile === "string" && profile.length > 0 && typeof connection === "string" && connection.length > 0
+      ? JSON.stringify(["Desktop", connection, profile]) : undefined), [ctx, epoch, profile, connection]);
   return <>
     <style>{styles}</style>
     <ReliquaryApp key={JSON.stringify([epoch, profile, connection])} host={boundary} />

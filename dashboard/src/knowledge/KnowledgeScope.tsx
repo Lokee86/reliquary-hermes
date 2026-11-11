@@ -4,9 +4,11 @@ import { createGraphTransport } from "../host";
 import type { HostBoundary } from "../host";
 import { KnowledgePanel, type ViewMode } from "./KnowledgePanel";
 import { createKnowledgeClient } from "./client";
+import { createPreferenceSessionStore } from "../graph/model/scopedStorage";
 
 export function KnowledgeScope({ host, mutationBlocked }: { host: HostBoundary; mutationBlocked?: string }) {
   const { Button, Input } = host.controls;
+  const preferenceSession = useMemo(createPreferenceSessionStore, [host.preferenceProfileKey]);
   const client = useMemo(() => createKnowledgeClient(host.json), [host.json]);
   const [draftSession, setDraftSession] = useState("");
   const [session, setSession] = useState<string | null>(null);
@@ -86,6 +88,8 @@ export function KnowledgeScope({ host, mutationBlocked }: { host: HostBoundary; 
 
   if (owner) return <KnowledgePanel key={JSON.stringify([owner.owner_id, owner.generation, owner.cut, sessionId, attempt])}
     owner={owner} sessionId={sessionId} transport={host.json} controls={host.controls} scopeControls={scopeControls}
+    preferenceProfileKey={host.preferenceProfileKey ?? null}
+    preferenceSession={host.preferenceProfileKey ? preferenceSession : undefined}
     graphTransportFor={graphTransportFor} mutationBlocked={mutationBlocked} onOwnerRefresh={refresh}
     initialMemoryId={preferred?.ownerId === owner.owner_id ? preferred.memoryId : undefined}
     initialView={preferred?.ownerId === owner.owner_id ? preferred.view : undefined}

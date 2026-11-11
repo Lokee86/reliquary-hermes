@@ -586,6 +586,40 @@ TypeScript, all four dashboard Node tests, and the combined Web/Desktop build pa
 | Desktop module | `73EDC51F8F27DA93C3055543FBC1329FA5C666818023B9DFDCBE94286FAFB7A8` |
 | Desktop legal notice | `58A6EF9BD0AC264CC1C582E4BC4200F1D70394FF3CDDAEBF2B78D809AC8B177E` |
 
+## Warlock v1 graph preferences
+
+This UI implementation restores the original v1 Display and Animation menus described in the [adaptation specification](warlock-v1-graph-preferences-reliquary-adaptation-spec-2026-11-10.md). The user explicitly limited final verification to the outstanding Desktop bridge, active themes, menu clipping and a focused point-mode check. Renderer/backend scalability was already validated; those suites were not repeated and no new acceptance gates were added.
+
+`npm --prefix dashboard run check` passes TypeScript, 25 focused Node tests and canonical Web/Desktop builds. The tests cover defaults, clamping/malformed data, unavailable or failing storage, profile/owner isolation, finite and overflow-safe camera vectors/bounds, rotation, animation readiness/delta, marker geometry, shell factors/selection, node glow and all-LOD brightness composition. No production Rust or Python behavior changed.
+
+The actual Web smoke passes on a copied 11-active-Memory REL and 4-Memory PHY: the existing Knowledge/List/inspector/Sources and authenticated binary/picking checks pass before preferences. Display min/default/max checks compare raw WebGL pixels rather than overlaid HTML menu screenshots. All sliders affect the graph; zero shell opacity retains labels. Delay, camera motion, keyboard interruption, pause, reset, view capture/factory restore, unchanged canvas and zero cosmetic graph requests pass. Web writes no global preference keys when the public host has no safe profile namespace.
+
+The existing Desktop Knowledge smoke passes in an isolated native Electron profile. Its preferences check observes the real main-process HTTP bridge, rather than incorrectly treating renderer-page network events as native REST traffic. The focused Desktop preferences run passes all slider/frame, menu, animation, profile storage and factory-reset checks. Example changed-pixel counts at minimum/maximum are 806/1,005 for edge brightness, 203,397/61,573 for node glow, and 380,435/85,629 for bloom. Shell opacity zero retains 3,801 label-colored pixels. Three-axis motion changes 205,283 pixels; cosmetic controls issue no extra prepare/chunk/read requests and retain the canvas. Desktop software framebuffer capture uses a three-second delay window so capture overhead does not exhaust the one-second Web test interval.
+
+Menus are measured after resize layout settles, avoiding a stale pre-resize rectangle. Clipping checks cover the viewport and overflow ancestors; theme-menu checks additionally hit-test all four corners and verify Escape focus return. Source component screenshots and DOM measurements use the original v1 files at 1440/493/390 pixels. Source hashes and justified visual differences are recorded in the specification’s parity ledger.
+
+Theme/menu checks pass through the actual Web theme picker (Hermes Teal and Nous Blue) and Desktop’s real Shift+X appearance toggle (dark and light). All 15 palette aliases match active host values, including background, readable text, primary/secondary/accent, borders, inputs, rings and popovers. Painted menu text/background/borders match those aliases; every corner is hit-testable at 390/493/1440 pixels, and Escape restores trigger focus. The Web canvas remains mounted through its theme switch. Desktop native control color-scheme changes with its host; Web inherits its host’s normal color-scheme while its explicit colors and accents follow the palette.
+
+The focused point-component check bundles the canonical `RenderNodeChunk.tsx`, renders a three-node resident chunk with `totalNodeCount=75001`, and confirms that its public registration callback receives `THREE.Points`. Glow zero/default/max each changes 3,100 raw WebGL pixels; all 3,100 base-colored pixels remain visible at zero glow. Canvas identity is unchanged and there are no browser errors. This deliberately avoids another backend/scaling test.
+
+One earlier copied 80,000-Memory REL end-to-end attempt timed out after 90 seconds before graph-ready. It did not reach the point-mode assertions. The source/copy REL/PHY hashes remained unchanged. That attempt was stopped and recorded; the backend was not investigated or rerun under the final scope. No product failure was observed in the completed focused UI checks.
+
+The implementation keeps the existing binary client, bounded picker, cache/residency policy and selected relationship overlay. Preferences only update renderer presentation and camera state. Backend regression, exhaustive cross-profile browser scenarios and additional scaling tiers were not rerun under the user’s narrowed scope. Web preferences are intentionally session-local when no safe host profile namespace is available; Desktop uses its public profile/connection key. The isolated fixture REL/PHY and their original sources are hash-checked after each run.
+
+The canonical build artifacts used by the focused UI runs have these hashes. All five are deployed together; the final install receipt records source/installed and served Web hash equality.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `dashboard/dist/index.js` | `88620CABFF156C47D755183FB5C4B4E8B484B0C246219FFE91B96912D4E6C48E` |
+| `dashboard/dist/index.css` | `01293A38365421DEB440652FBB96D474EE025A1314086DB1C34AE9AC5E9059B4` |
+| `dashboard/dist/index.js.LEGAL.txt` | `280E12E511A5320B190D121018E006ADDBE8852E760DF3E41FCF6684788ACC95` |
+| `desktop/plugin.js` | `E7FB300D25EB8305EA828D26678AF9A5B3870518223F0E0701B64BD7A9ED19CE` |
+| `desktop/plugin.js.LEGAL.txt` | `3860F9BFFED9DCAB2DB8714AD7AAA166FE376B4A916377FE3B77B533F59CC660` |
+
+The five installed files and the running Web route’s JS/CSS match these exact hashes. Provider code, protected configuration, host/pin, and configured REL/PHY hashes are unchanged across installation; no live service was restarted. Native Desktop acceptance used a fresh isolated Electron session with the same plugin hash; this does not claim an already-open Desktop process reloaded the installed module.
+
+Temporary fixture generators, copied RELs, browser profiles, caches and the three merged execution worktrees/branches were removed after retaining the compact verification receipt and representative screenshots. No pre-existing worktree, unrelated work, configuration or live REL/PHY is part of that cleanup.
+
 ## Related docs
 
 - [HU09 native file-dialog specification](hu09-native-file-dialogs-onboarding-spec-2026-11-09.md)

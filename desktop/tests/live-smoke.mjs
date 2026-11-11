@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { exerciseThemedMenus } from "../../dashboard/tests/graph-theme-live.mjs";
+import { installGraphRequestProbe } from "./graph-request-probe.mjs";
+import { exerciseGraphPreferences } from "../../dashboard/tests/graph-preferences-live.mjs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -66,6 +69,7 @@ const app = await _electron.launch({
 });
 
 try {
+  const readGraphTraffic = fixture.verifyGraphPreferences ? await installGraphRequestProbe(app) : undefined;
   if (fixture.candidate) {
     await app.evaluate(({ dialog }, candidate) => {
       const open = dialog.showOpenDialog.bind(dialog);
@@ -102,8 +106,21 @@ try {
   const nav = page.getByRole("button", { name: "Reliquary", exact: true })
     .or(page.getByRole("link", { name: "Reliquary", exact: true }));
   await nav.first().click({ timeout: 240000 });
-  await exerciseKnowledge(page, fixture, "desktop");
-  await exerciseGraphSelection(page, fixture, "desktop");
+  if (!fixture.preferencesOnly) {
+    await exerciseKnowledge(page, fixture, "desktop");
+    await exerciseGraphSelection(page, fixture, "desktop");
+  }
+  if (fixture.verifyGraphPreferences) console.log(JSON.stringify(await exerciseGraphPreferences(page, fixture, "desktop", readGraphTraffic)));
+  if (fixture.verifyThemeMenus) {
+    const themes = [];
+    for (const mode of ["dark", "light"]) {
+      const currentMode = await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
+      if (currentMode !== mode) await page.keyboard.press("Shift+X");
+      await page.waitForFunction(mode => getComputedStyle(document.documentElement).colorScheme === mode, mode);
+      themes.push({ mode, ...await exerciseThemedMenus(page, fixture, "desktop") });
+    }
+    console.log(JSON.stringify({ desktopThemes: themes }));
+  }
 } catch (error) {
   const page = app.windows()[0];
   if (page) await page.screenshot({ path: join(scratch, "failed-desktop.png"), timeout: 10000 }).catch(() => {});

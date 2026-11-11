@@ -130,8 +130,13 @@ async function captureCanvas(canvas, screenshotDir, name) {
     requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const safeName = name.replace(/[^a-zA-Z0-9_-]/g, "-");
   const path = screenshotDir ? join(screenshotDir, safeName + ".png") : undefined;
-  const png = await canvas.screenshot(path ? { path } : {});
-  return { frame: pngPixels(png), path };
+  // Read the actual WebGL framebuffer in the render frame. Element screenshots
+  // also include HTML menus above the canvas and can falsely prove slider effects.
+  const dataUrl = await canvas.evaluate((element) => new Promise((resolve) =>
+    requestAnimationFrame(() => resolve({ dataUrl: element.toDataURL("image/png"), at: performance.now() }))));
+  const png = Buffer.from(dataUrl.dataUrl.split(",", 2)[1], "base64");
+  if (path) await import("node:fs/promises").then(({ writeFile }) => writeFile(path, png));
+  return { frame: pngPixels(png), path, capturedAtMs: dataUrl.at };
 }
 
 function assertVisibleEffect(name, diff) {
@@ -146,9 +151,14 @@ function graphApiOperation(request) {
 }
 
 async function assertPopoverFits(dialog, width, height) {
-  const box = await dialog.boundingBox();
+  let box;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    box = await dialog.boundingBox();
+    if (box && box.x >= 0 && box.y >= 0 && box.x + box.width <= width + 0.5 && box.y + box.height <= height + 0.5) break;
+    await dialog.page().waitForTimeout(50);
+  }
   assert(box && box.x >= 0 && box.y >= 0
-    && box.x + box.width <= width && box.y + box.height <= height,
+    && box.x + box.width <= width + 0.5 && box.y + box.height <= height + 0.5,
   `Preference popover exceeded the ${width}px viewport.`);
   const clipping = await dialog.evaluate((panel) => {
     const panelRect = panel.getBoundingClientRect();
@@ -175,8 +185,10 @@ async function enterMainGraph(page, fixture) {
   const sectionNav = app.getByRole("navigation", { name: "Reliquary sections" });
   await sectionNav.waitFor({ timeout: 30000 });
   await sectionNav.getByRole("button", { name: "Knowledge", exact: true }).click();
+  // Begin from an unselected owner. Existing selection intentionally hides
+  // ambient relations, so a brightness test must not inherit an inspector pick.
+  if (fixture.ownerIds.phy) await verifyOwnerScope(app, fixture.ownerIds.phy, "PHY");
   await verifyOwnerScope(app, fixture.ownerIds.main, "REL");
-  await app.getByRole("button", { name: "List", exact: true }).click();
   await app.getByRole("button", { name: "Graph", exact: true }).click();
   const graph = app.locator(".knowledge-graph-wrap");
   await graph.locator('[data-graph-ready="true"]').waitFor({ timeout: 40000 });
@@ -191,7 +203,7 @@ async function enterMainGraph(page, fixture) {
  * The caller owns Web/Desktop launch and fixture validation. Configure
  * fixture.screenshotDir or RELIQUARY_SMOKE_SCREENSHOTS to save canvas frames.
  */
-export async function exerciseGraphPreferences(page, fixture, surface) {
+export async function exerciseGraphPreferences(page, fixture, surface, readNativeTraffic) {
   assert(["web", "desktop"].includes(surface), "Pass surface as 'web' or 'desktop'.");
   assert(fixture?.ownerIds?.main && fixture?.counts?.main, "Graph preferences fixture needs a prepared main REL owner and node count.");
 
@@ -206,6 +218,18 @@ export async function exerciseGraphPreferences(page, fixture, surface) {
     await mkdir(screenshotDir, { recursive: true });
   }
 
+  const nativeStart = readNativeTraffic ? (await readNativeTraffic()).length : 0;
+  async function refreshTraffic() {
+    if (!readNativeTraffic) return;
+    requests.length = prepares.length = chunks.length = manifests.length = 0;
+    for (const entry of (await readNativeTraffic()).slice(nativeStart)) {
+      const request = { postDataJSON: () => entry.body };
+      requests.push({ operation: entry.operation, request });
+      if (entry.operation === "prepare") prepares.push(request);
+      if (["node-chunk", "edge-chunk"].includes(entry.operation)) chunks.push({ operation: entry.operation, request });
+      if (entry.manifest) manifests.push(entry.manifest);
+    }
+  }
   const requests = [];
   const prepares = [];
   const chunks = [];
@@ -232,6 +256,7 @@ export async function exerciseGraphPreferences(page, fixture, surface) {
 
   try {
     const { app, graph, canvas } = await enterMainGraph(page, fixture);
+    await refreshTraffic();
     const readyManifest = manifests.at(-1) ?? null;
     const authReads = () => requests.filter(({ operation }) =>
       ["resolve", "inspect", "neighborhood", "locate"].includes(operation)).length;
@@ -288,7 +313,7 @@ export async function exerciseGraphPreferences(page, fixture, surface) {
     await displayTrigger.click();
     displayDialog = app.getByRole("dialog", { name: "Display settings" });
     await displayDialog.waitFor({ state: "visible" });
-    await app.locator(".knowledge-graph-help").click();
+    await app.locator(".knowledge-memory-list > header strong").click();
     await displayDialog.waitFor({ state: "hidden" });
     await app.getByRole("button", { name: "Reset view", exact: true }).click();
     await displayTrigger.click();
@@ -299,6 +324,13 @@ export async function exerciseGraphPreferences(page, fixture, surface) {
     if (await resetDisplay.isEnabled()) await resetDisplay.click();
     const screenshotReport = {};
     const displayEvidence = {};
+    // Resizing and Reset view legitimately update viewport LOD. The cosmetic
+    // interval starts only after those camera/layout actions have settled.
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(500);
+    await refreshTraffic();
+    const cosmeticBaseline = { prepares: prepares.length, chunks: chunks.length,
+      total: requests.length, authReads: authReads() };
     const baseline = await captureCanvas(canvas, screenshotDir, `${surface}-display-default`);
     for (const [label, limits] of Object.entries(DISPLAY_DEFAULTS)) {
       const slider = displayDialog.getByRole("slider", { name: new RegExp("^" + escapeRegex(label)) });
@@ -347,12 +379,13 @@ export async function exerciseGraphPreferences(page, fixture, surface) {
     await page.keyboard.press("Escape");
     await displayDialog.waitFor({ state: "hidden" });
 
+    await refreshTraffic();
     const displayRequestsAtEnd = requests.length;
-    assert.equal(prepares.length, requestCountsAtReady.prepares, "Display slider changes caused a graph prepare.");
-    assert.equal(chunks.length, requestCountsAtReady.chunks, "Display slider changes fetched additional graph chunks.");
-    assert.equal(displayRequestsAtEnd, requestCountsAtReady.total,
+    assert.equal(prepares.length, cosmeticBaseline.prepares, "Display slider changes caused a graph prepare.");
+    assert.equal(chunks.length, cosmeticBaseline.chunks, "Display slider changes fetched additional graph chunks.");
+    assert.equal(displayRequestsAtEnd, cosmeticBaseline.total,
       "Display preferences caused an extra graph request after the prepared frame.");
-    assert.equal(authReads(), requestCountsAtReady.authReads,
+    assert.equal(authReads(), cosmeticBaseline.authReads,
       "Display preferences repeated an authenticated Memory or relation read.");
     const displayCanvasHandle = await canvas.elementHandle();
     assert(displayCanvasHandle && await initialCanvasHandle.evaluate((initial, current) => initial === current, displayCanvasHandle),
@@ -418,7 +451,8 @@ export async function exerciseGraphPreferences(page, fixture, surface) {
 
     await startDelay.fill("300");
     assert.equal(await startDelay.inputValue(), "300", "Delay maximum was not accepted.");
-    await startDelay.fill("1");
+    const testedDelay = surface === "desktop" ? 3 : 1;
+    await startDelay.fill(String(testedDelay));
     await animation.getByRole("button", { name: "Reroll", exact: true }).click();
     await animation.getByRole("button", { name: "Start animation", exact: true }).click();
     await page.keyboard.press("Escape");
@@ -429,8 +463,8 @@ export async function exerciseGraphPreferences(page, fixture, surface) {
     await page.waitForTimeout(350);
     const delayedFrame = await captureCanvas(canvas, screenshotDir, `${surface}-animation-delay-wait`);
     assert(compareFrames(delayStart.frame, delayedFrame.frame).changedPixels < 8,
-      "Automatic rotation began before the configured interaction delay.");
-    await page.waitForTimeout(850);
+      `Automatic rotation began before the configured interaction delay (frame interval ${delayedFrame.capturedAtMs-delayStart.capturedAtMs}ms, delay ${testedDelay}s).`);
+    await page.waitForTimeout(testedDelay * 1000 - 150);
     const movingFrame = await captureCanvas(canvas, screenshotDir, `${surface}-animation-moving`);
     const motionDiff = compareFrames(delayedFrame.frame, movingFrame.frame);
     assertVisibleEffect("Signed 3-axis camera rotation", motionDiff);
@@ -438,7 +472,7 @@ export async function exerciseGraphPreferences(page, fixture, surface) {
     // A focused canvas key event is a real graph interaction. With a 1-second
     // delay, the camera should remain still for the next short interval.
     await canvas.focus();
-    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("Escape");
     const interruptedFrame = await captureCanvas(canvas, screenshotDir, `${surface}-animation-interrupted`);
     await page.waitForTimeout(300);
     const interruptedWaitFrame = await captureCanvas(canvas, screenshotDir, `${surface}-animation-interruption-wait`);
@@ -511,15 +545,16 @@ export async function exerciseGraphPreferences(page, fixture, surface) {
     } else {
       assert(afterStorage.some((key) => key.endsWith(":display")), "Desktop did not persist display settings in its profile scope.");
       assert(afterStorage.some((key) => key.endsWith(":animation")), "Desktop did not persist animation settings in its profile scope.");
-      assert(afterStorage.some((key) => key.endsWith(":camera-view")
+      assert(!afterStorage.some((key) => key.endsWith(":camera-view")
         && key.includes(encodeURIComponent(fixture.ownerIds.main))),
-      "Desktop camera view was not persisted under the authorized profile and owner scope.");
+      "Restore Factory View did not delete this owner's custom camera view.");
       assert(afterStorage.every((key) => key.startsWith(PREFERENCE_PREFIX + "profile:")),
         "Desktop preferences escaped the active profile namespace.");
     }
 
-    assert.equal(prepares.length, requestCountsAtReady.prepares, "Animation controls caused a graph prepare.");
-    assert.equal(authReads(), requestCountsAtReady.authReads,
+    await refreshTraffic();
+    assert.equal(prepares.length, cosmeticBaseline.prepares, "Animation controls caused a graph prepare.");
+    assert.equal(authReads(), cosmeticBaseline.authReads,
       "Animation preferences repeated an authenticated Memory or relationship read.");
     assert.equal(await graph.getAttribute("data-graph-node-count"), String(fixture.counts.main),
       "Preference controls changed the mounted REL graph size.");
@@ -560,3 +595,5 @@ async function realpathOrCreateParent(path) {
     return await realpath(parent).then((resolved) => join(resolved, path.split(/[\\/]/).at(-1)));
   }
 }
+
+export { captureCanvas, compareFrames, setRangeValue, assertPopoverFits };

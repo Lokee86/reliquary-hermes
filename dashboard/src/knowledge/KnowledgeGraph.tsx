@@ -1,16 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GraphRenderClient, GraphRenderScene } from "../graph/render";
 import type { GraphRenderFilterScope, GraphRenderNodeResolution, GraphRenderTransport } from "../graph/render";
+import type { HostControls } from "../host";
+import type { StorageLike } from "../graph/model/scopedStorage";
+import { useGraphPreferences } from "../graph/useGraphPreferences";
+import { DisplaySettingsMenu } from "../graph/controls/DisplaySettingsMenu";
+import { AnimationControlsMenu } from "../graph/controls/AnimationControlsMenu";
 
 interface Props {
   ownerId: string;
+  controls: HostControls;
+  preferenceProfileKey: string | null;
+  preferenceSession?: StorageLike;
   transport: GraphRenderTransport;
   filters: GraphRenderFilterScope;
   selectedMemoryId: string | null;
   onSelectMemoryId: (memoryId: string | null) => void;
 }
 
-export function KnowledgeGraph({ ownerId, transport, filters, selectedMemoryId, onSelectMemoryId }: Props) {
+export function KnowledgeGraph({ ownerId, transport, filters, selectedMemoryId, onSelectMemoryId, controls, preferenceProfileKey, preferenceSession }: Props) {
+  const preferences = useGraphPreferences(preferenceProfileKey, ownerId, preferenceSession);
   const [client, setClient] = useState<GraphRenderClient | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [renderReady, setRenderReady] = useState(false);
@@ -81,7 +90,21 @@ export function KnowledgeGraph({ ownerId, transport, filters, selectedMemoryId, 
           : renderReady ? `Graph canvas ready · ${client.manifest.totalNodeCount} nodes` : `Preparing canvas · ${client.manifest.totalNodeCount} nodes`}
       </div>
       <GraphRenderScene client={client} selectedMemoryId={selectedMemoryId} onSelect={handleSelect}
-        onSelectionUnavailable={handleSelectionUnavailable} onFrameReady={markReady} />
+        onSelectionUnavailable={handleSelectionUnavailable} onFrameReady={markReady}
+        presentation={{ display: preferences.display, animation: preferences.animation, rerollToken: preferences.rerollToken,
+          selectedCommunityId: filters.communityId ?? null,
+          camera: { defaultView: preferences.defaultView, captureRequest: preferences.captureRequest,
+            resetRequest: preferences.resetRequest, onCaptured: preferences.captureView, onReady: preferences.setCameraReady } }} />
+      <div className="graph-display-controls">
+        <DisplaySettingsMenu settings={preferences.display} onChange={preferences.updateDisplay} Button={controls.Button} />
+      </div>
+      <div className="graph-animation-controls">
+        <AnimationControlsMenu settings={preferences.animation} onChange={preferences.updateAnimation}
+          onReroll={preferences.reroll} hasCustomDefaultView={preferences.defaultView !== null}
+          canSetCurrentView={preferences.cameraReady} onSetCurrentViewAsDefault={preferences.requestCapture}
+          onRestoreFactoryView={preferences.restoreFactoryView} Button={controls.Button} />
+        {!preferenceProfileKey && <small className="graph-preferences-session-note">Saved for this graph session</small>}
+      </div>
       <div className="knowledge-graph-help">Drag to rotate · wheel to zoom · right-drag to pan</div>
     </div>
   );

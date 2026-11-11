@@ -27,7 +27,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 function isGraphControlTarget(target: EventTarget | null, canvas: HTMLCanvasElement): boolean {
   return target === canvas
-    || (target instanceof Element && target.closest(".graph-render-reset") !== null);
+    || (target instanceof Element && target.closest(".graph-render-reset, .graph-preferences-trigger") !== null);
 }
 
 export function GraphAnimationController({

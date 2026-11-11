@@ -1,7 +1,7 @@
 # Warlock v1 graph preferences — Reliquary/Hermes adaptation specification
 
 **Date:** 2026-11-10
-**Status:** Proposed implementation; no runtime changes made by this specification.
+**Status:** Implemented. Final verification follows the user’s focused UI scope recorded below.
 **Target:** `C:\!bin\workspace\reliquary-hermes` (`main` inspected at `f80c2f7b0814fc8bade889c1206c585603498225`; clean before this document).
 **Primary source:** `C:\!bin\workspace\warlock-toolchain\ui\src\features\graph` (`warlock-toolchain` HEAD `4ca9627760e64ff95dc6c00b1079135534ebf76f`; unrelated dirty documentation files are **not** part of the source port).
 **Existing renderer authority:** current Hermes `dashboard/src/graph/render/*`, `host/src/graph_render*.rs`, and prepared `graph-render-v1` contract. This is a *control restoration*, not a renderer migration.
@@ -123,6 +123,25 @@ Rotate the **camera around `controlsRef.current.target`**, never mutate Memory n
 9. **Documentation:** update source-parity/verification records, run the shared documentation checker and confirm that source, compiled Web assets and Desktop bundle are in sync.
 
 **Completion definition:** both original v1 menus are visible and operational in the real Reliquary graph, visually integrated with the active Hermes theme, and all mandatory gates are evidenced. Static TypeScript compilation alone is not acceptance.
+
+## Implementation and source-parity ledger
+
+The source remains `warlock-toolchain` commit `4ca9627760e64ff95dc6c00b1079135534ebf76f`. Display source SHA-256 is `91461a6e35772b7803d4e63e7f44efe48bb568510b7553ac8065ff8f64fe24f6`; Animation source is `902296c19da14b0b148511a94c85264e42d2088087fe34fed4266aff43830237`. No original Warlock source was edited.
+
+| Preserved v1 behavior | Deliberate Reliquary/Hermes adaptation |
+| --- | --- |
+| Five Display sliders, compact value labels, center indicator, Reset and menu hierarchy | Memory/Relation/Community wording; community shell limit defaults/maxes at the existing 128-descriptor budget |
+| Full X/Y/Z speed/range/counterspin controls, delay, reroll, pause, motion reset and view actions | Existing Trackball camera only; validated owner/profile view records and current-bounds fallback |
+| Excess node glow, density × user edge brightness, bloom, shell factors and zoom-responsive non-pickable marker | Existing resident binary chunks, all edge LODs, selected-edge priority and semantic territory colors remain authoritative |
+| Outside-click dismissal, Escape and focus return | Shared popover owner clamps the portal to the visible Hermes pane and permits internal scrolling |
+| Compact v1 layout and native controls | Host React/Button bridge, live `--reliquary-*` palette aliases; no cyan palette, copied theme preset or new UI runtime |
+| Display/motion defaults and robust normalization | New namespace; Desktop partitions by its public connection/profile and camera owner; Web without a safe public profile key stays mount-session-local |
+
+P1–P3 are implemented in pure settings/storage/rotation modules, the two source-derived menus, `useGraphPreferences`, and the existing scene’s presentation inputs. `GraphCameraBridge` owns capture/reset/focus; `GraphAnimationController` owns idle-gated camera motion. The graph client, protocol, authorization, binary decoder, LOD budgets and Root/backend implementation were not changed.
+
+The original menu components were rendered locally with their original compiled CSS at 1440, 493 and 390 pixels. The isolated reference frame was adjusted to put Display’s anchor at the right edge; the component itself was unchanged. Source panels measured 256×589 (Display) and 340×602.5 (Animation). Target sizes follow the active host font and available pane height: Desktop retains 256/340-pixel widths; Web measured 240/318.75 pixels. Narrow panes scroll the panels internally. Differences in palette, terminology, shell cap and host placement are intentional; this is component/interaction parity, not a claim that the full Warlock graph was migrated or that differently themed screenshots are pixel-identical.
+
+The user’s final direction narrowed P4 to the outstanding Desktop preferences bridge, theme inheritance, menu clipping and a focused point-mode check, followed by documentation, cleanup and commit. Existing backend/scalability validation remains authoritative; no additional backend regression or large-scale acceptance gate is required by this execution. The focused outcomes and current artifact hashes are recorded in [verification](verification.md#warlock-v1-graph-preferences).
 
 ## Related docs
 

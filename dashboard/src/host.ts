@@ -36,6 +36,8 @@ export interface HostBoundary {
   json: JsonTransport;
   bytes?: ByteTransport;
   surface: "Web" | "Desktop";
+  /** Stable host-routed connection/profile identity; absent hosts use session-only preferences. */
+  preferenceProfileKey?: string;
   pickOpenPath?: import("../types").SetupPicker;
   pickSavePath?: import("../types").SetupPicker;
 }

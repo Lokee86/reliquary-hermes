@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ComponentType, type RefObject, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useState, type ComponentType } from "react";
+import { usePreferencePopover, stopPreferenceEvent } from "./usePreferencePopover";
 import { createPortal } from "react-dom";
 import type { ButtonProps } from "../../host";
 import {
@@ -61,89 +62,6 @@ function SliderRow({
   );
 }
 
-function stopDialogEvent(event: ReactPointerEvent | ReactWheelEvent | ReactKeyboardEvent) {
-  event.stopPropagation();
-}
-
-/* Anchor the compact v1-style popover to its control while keeping it inside the viewport. */
-function usePopoverPosition(
-  open: boolean,
-  triggerRef: RefObject<HTMLElement | null>,
-  panelRef: RefObject<HTMLDivElement | null>,
-) {
-  useLayoutEffect(() => {
-    if (!open) return;
-    const trigger = triggerRef.current;
-    const panel = panelRef.current;
-    if (!trigger || !panel) return;
-
-    const position = () => {
-      const anchor = trigger.getBoundingClientRect();
-      const menu = panel.getBoundingClientRect();
-      const margin = 8;
-      const left = Math.max(margin, Math.min(anchor.right - menu.width, window.innerWidth - menu.width - margin));
-      const preferredAbove = panel.dataset.placement === "above";
-      const aboveTop = anchor.top - menu.height - margin;
-      const belowTop = anchor.bottom + margin;
-      const fitsAbove = aboveTop >= margin;
-      const fitsBelow = belowTop + menu.height <= window.innerHeight - margin;
-      const top = preferredAbove
-        ? (fitsAbove || !fitsBelow ? aboveTop : belowTop)
-        : (fitsBelow || !fitsAbove ? belowTop : aboveTop);
-      panel.style.left = `${Math.round(left)}px`;
-      panel.style.top = `${Math.max(margin, Math.min(top, window.innerHeight - menu.height - margin))}px`;
-    };
-
-    position();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(position);
-    observer?.observe(panel);
-    observer?.observe(trigger);
-    window.addEventListener("resize", position);
-    window.addEventListener("scroll", position, true);
-    return () => {
-      observer?.disconnect();
-      window.removeEventListener("resize", position);
-      window.removeEventListener("scroll", position, true);
-    };
-  }, [open, panelRef, triggerRef]);
-}
-
-function usePreferencePopover(open: boolean, onClose: () => void) {
-  const triggerRef = useRef<HTMLDivElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
-  usePopoverPosition(open, triggerRef, panelRef);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (triggerRef.current?.contains(target) || panelRef.current?.contains(target)) return;
-      onClose();
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
-      triggerRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
-    };
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown, true);
-      document.removeEventListener("keydown", onKeyDown, true);
-    };
-  }, [onClose, open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const firstControl = panelRef.current?.querySelector<HTMLElement>("input, button");
-    firstControl?.focus();
-  }, [open]);
-
-  return { triggerRef, panelRef };
-}
-
 /* Contrast / brightness preferences compose with automatic density compensation. */
 export function DisplaySettingsMenu({
   settings,
@@ -188,11 +106,11 @@ export function DisplaySettingsMenu({
           aria-modal="false"
           data-placement="below"
           className="graph-preferences-popover graph-preferences-display"
-          onPointerDown={stopDialogEvent}
-          onPointerUp={stopDialogEvent}
-          onClick={stopDialogEvent}
-          onKeyDown={stopDialogEvent}
-          onWheel={stopDialogEvent}
+          onPointerDown={stopPreferenceEvent}
+          onPointerUp={stopPreferenceEvent}
+          onClick={stopPreferenceEvent}
+          onKeyDown={stopPreferenceEvent}
+          onWheel={stopPreferenceEvent}
         >
           <div className="graph-preferences-section-heading">
             <span>Contrast</span>
