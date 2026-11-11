@@ -84,3 +84,23 @@
 .graph-render-relationships span {
   color: var(--reliquary-muted-foreground);
 }
+
+.graph-render-telemetry {
+  position: absolute;
+  z-index: 2;
+  left: 12px;
+  top: 12px;
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--reliquary-border);
+  border-radius: 7px;
+  padding: 7px 10px;
+  color: var(--reliquary-popover-foreground);
+  background: color-mix(in srgb, var(--reliquary-popover) 90%, transparent);
+  font-size: 0.72rem;
+  pointer-events: none;
+}
+
+.graph-render-telemetry span {
+  color: var(--reliquary-muted-foreground);
+}

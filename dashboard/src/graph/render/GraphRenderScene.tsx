@@ -5,7 +5,7 @@ import type { TrackballControls as TrackballControlsImpl } from "three-stdlib";
 import { Bloom, EffectComposer } from "@react-three/postprocessing";
 import * as THREE from "three";
 import { BoundedPicker } from "./BoundedPicker";
-import { boundsCenter, boundsExtent, CameraViewport } from "./CameraViewport";
+import { boundsCenter, CameraViewport } from "./CameraViewport";
 import { findFrameLabel } from "./labels";
 import { RenderEdgeChunk } from "./RenderEdgeChunk";
 import { RenderNodeChunk } from "./RenderNodeChunk";
@@ -144,25 +144,24 @@ function Scene({
   );
 }
 
-function framingExtent(manifest: GraphRenderManifest, center: GraphRenderVec3) {
+function framingExtent(manifest: GraphRenderManifest) {
   // Rust's compact layouts need a tighter frame than Warlock's 180-unit floor.
-  // Fit actual node bounds and community geometry, without framing the label sprites.
-  let extent = Math.max(8, boundsExtent(manifest.globalBounds));
-  for (const { territory } of manifest.hierarchy) {
-    if (territory?.kind !== "community") continue;
-    const distance = Math.hypot(...territory.center.map((axis, index) => axis - center[index]));
-    extent = Math.max(extent, distance + territory.radius);
-  }
-  return extent;
+  // Territory shells may be synthetic and must not inflate the node-world frame.
+  const halfWidths = manifest.globalBounds.max.map((max, axis) =>
+    (max - manifest.globalBounds.min[axis]) * 0.5,
+  );
+  return Math.max(8, Math.hypot(...halfWidths));
 }
 
 function GraphScene(props: GraphRenderSceneProps) {
   const { client } = props;
   const interaction = useGraphRenderInteraction(props);
+  const frame = interaction.frame;
+  const loadedNodeCount = frame?.nodeChunks.reduce((total, chunk) => total + chunk.nodeCount, 0) ?? 0;
   const [resetVersion, setResetVersion] = useState(0);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const center = useMemo(() => boundsCenter(client.manifest.globalBounds), [client]);
-  const extent = useMemo(() => framingExtent(client.manifest, center), [client, center]);
+  const extent = useMemo(() => framingExtent(client.manifest), [client]);
   const camera = useMemo(() => ({
     position: [center[0], center[1], center[2] + extent * 2.4] as [number, number, number],
     fov: 50,
@@ -203,6 +202,12 @@ function GraphScene(props: GraphRenderSceneProps) {
         </div>
       )}
       {error && <div className="knowledge-graph-status error" role="alert">{error}</div>}
+      <div className="graph-render-telemetry" role="status" aria-live="polite">
+        {loadedNodeCount.toLocaleString()} / {client.manifest.totalNodeCount.toLocaleString()} Memories drawn
+        <span>{frame?.nodeChunks.length ?? 0} / {client.manifest.nodeChunks.length} node chunks loaded</span>
+        {!client.nodeOverviewFits && <span>Overview downsampling active · max 32 chunks / 16 MiB</span>}
+        {frame && <span>Edges: {frame.lod}</span>}
+      </div>
     </div>
   );
 }

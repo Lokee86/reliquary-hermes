@@ -38,7 +38,10 @@ import type {
 const RESOLUTION_CACHE_LIMIT = 128;
 const INCIDENT_EDGE_LIMIT = 128;
 const RESIDENT_CHUNK_LIMIT = 2 * GRAPH_RENDER_DETAIL_CHUNK_BUDGET;
-const SMALL_GRAPH_NODE_LIMIT = 256;
+// Overview may eagerly admit modest complete point clouds, independently of edge LOD.
+// The cap bounds raw chunk residency even if a future host changes chunk sizing.
+export const GRAPH_RENDER_NODE_OVERVIEW_BYTE_BUDGET = 16 * 1024 * 1024;
+const GRAPH_RENDER_DETAIL_EDGE_BYTE_BUDGET = 16 * 1024 * 1024;
 
 function retain<T>(cache: Map<number, T>, id: number, value: T, limit = RESIDENT_CHUNK_LIMIT) {
   cache.delete(id);
@@ -54,7 +57,8 @@ export class GraphRenderClient {
   readonly manifest: GraphRenderManifest;
 
   private readonly transport: GraphRenderTransport;
-  private readonly detailFits: boolean;
+  readonly nodeOverviewFits: boolean;
+  private readonly detailEdgesFit: boolean;
   private readonly hierarchyIndex: GraphRenderBoundsIndex<GraphRenderHierarchyDescriptor>;
   private readonly nodeIndex: GraphRenderBoundsIndex<GraphRenderNodeChunkDescriptor>;
   private readonly edgeIndexes: Record<GraphRenderEdgeLod, GraphRenderBoundsIndex<GraphRenderEdgeChunkDescriptor>>;
@@ -77,10 +81,14 @@ export class GraphRenderClient {
     this.transport = transport;
     const detailEdgeCount = manifest.edgeChunks.filter(chunk => chunk.lod === "detail").length;
     const intermediateEdgeCount = manifest.edgeChunks.filter(chunk => chunk.lod === "intermediate").length;
-    this.detailFits = manifest.totalNodeCount <= SMALL_GRAPH_NODE_LIMIT
-      && manifest.nodeChunks.length <= GRAPH_RENDER_DETAIL_CHUNK_BUDGET
-      && detailEdgeCount + intermediateEdgeCount <= GRAPH_RENDER_DETAIL_CHUNK_BUDGET
-      && intermediateEdgeCount <= GRAPH_RENDER_INTERMEDIATE_EDGE_BUDGET;
+    const nodeBytes = manifest.nodeChunks.reduce((total, chunk) => total + chunk.byteLen, 0);
+    this.nodeOverviewFits = manifest.nodeChunks.length <= GRAPH_RENDER_DETAIL_CHUNK_BUDGET
+      && nodeBytes <= GRAPH_RENDER_NODE_OVERVIEW_BYTE_BUDGET;
+    const detailEdgeBytes = manifest.edgeChunks
+      .filter(chunk => chunk.lod === "detail")
+      .reduce((total, chunk) => total + chunk.byteLen, 0);
+    this.detailEdgesFit = detailEdgeCount <= GRAPH_RENDER_DETAIL_CHUNK_BUDGET
+      && detailEdgeBytes <= GRAPH_RENDER_DETAIL_EDGE_BYTE_BUDGET;
     this.hierarchyIndex = new GraphRenderBoundsIndex(
       manifest.hierarchy.map((value) => ({ bounds: value.bounds, value })),
     );
@@ -100,29 +108,24 @@ export class GraphRenderClient {
 
   planViewport(viewport: GraphRenderViewport) {
     validateViewport(viewport);
-    // Small owners fit in the existing detail budgets at the initial camera distance.
-    const lod = this.detailFits ? "detail" : selectGraphRenderLod(viewport, this.manifest.globalBounds);
+    // Node residency is based on bounded chunk count and bytes. Edge LOD is independent.
+    const lod = selectGraphRenderLod(viewport, this.manifest.globalBounds);
     const hierarchy = this.hierarchyIndex.querySphere(
       viewport.center,
       viewport.radius,
       GRAPH_RENDER_HIERARCHY_BUDGET,
     );
-    const nodeChunks = lod === "detail"
-      ? this.nodeIndex.querySphere(viewport.center, viewport.radius, GRAPH_RENDER_DETAIL_CHUNK_BUDGET)
-      : [];
-    const edgeChunks = this.detailFits
-      ? [
-        ...this.edgeIndexes.detail.querySphere(
+    const nodeChunks = this.nodeIndex.querySphere(
+      viewport.center,
+      viewport.radius,
+      GRAPH_RENDER_DETAIL_CHUNK_BUDGET,
+    );
+    const edgeChunks = this.detailEdgesFit
+      ? this.edgeIndexes.detail.querySphere(
           viewport.center,
           viewport.radius,
           GRAPH_RENDER_DETAIL_CHUNK_BUDGET,
-        ),
-        ...this.edgeIndexes.intermediate.querySphere(
-          viewport.center,
-          viewport.radius,
-          GRAPH_RENDER_INTERMEDIATE_EDGE_BUDGET,
-        ),
-      ]
+        )
       : this.edgeIndexes[lod].querySphere(
         viewport.center,
         viewport.radius,

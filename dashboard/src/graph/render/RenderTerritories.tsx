@@ -86,6 +86,9 @@ export function RenderTerritories({ hierarchy, isolated, territoryOpacity, commu
   );
   const territories = useMemo(() => hierarchy.flatMap(({ id, kind, nodeCount, territory }) => {
     if (kind !== "territory" || !territory) return [];
+    // Unassigned is a truthful legend/filter category, not a fabricated region.
+    // Its nodes stay visible in the shared graph without a synthetic cage or label.
+    if (territory.kind === "unassigned") return [];
     const [x, y, z] = territory.center;
     return [{
       id, label: territory.label, nodeCount, kind: territory.kind, communityId: territory.communityId, radius: territory.radius,

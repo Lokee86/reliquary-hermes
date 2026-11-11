@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
+import * as THREE from "three";
 import type { TrackballControls as TrackballControlsImpl } from "three-stdlib";
 import { isStoredGraphViewWithinBounds, parseStoredGraphView } from "../model/viewDefaults";
 import type { StoredGraphView, GraphCameraBounds } from "../model/viewDefaults";
@@ -43,7 +44,11 @@ export function GraphCameraBridge({ controlsRef, center, extent, focusRequest, r
     if (reset.current !== resetKey) {
       const parsed = parseStoredGraphView(preferences.defaultView);
       const saved = parsed && isStoredGraphViewWithinBounds(parsed, bounds) ? parsed : null;
-      camera.position.fromArray(saved?.position ?? [center[0], center[1], center[2] + extent * 2.4]);
+      const fieldOfView = camera instanceof THREE.PerspectiveCamera ? camera.fov : 50;
+      const aspect = camera instanceof THREE.PerspectiveCamera ? camera.aspect : 1;
+      const halfAngle = Math.atan(Math.tan(THREE.MathUtils.degToRad(fieldOfView * 0.5)) * Math.min(1, aspect));
+      const fitDistance = extent / Math.max(Math.sin(halfAngle), 0.1) * 1.08;
+      camera.position.fromArray(saved?.position ?? [center[0], center[1], center[2] + fitDistance]);
       camera.up.fromArray(saved?.up ?? [0, 1, 0]);
       controls.target.fromArray(saved?.target ?? center);
       camera.lookAt(controls.target);

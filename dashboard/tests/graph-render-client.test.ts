@@ -108,17 +108,17 @@ assert.equal(await client.locateMemory("b".repeat(64)), null);
 assert.equal((await client.neighborhood(0)).edges[0].targetRenderId, 1);
 await assert.rejects(client.neighborhood(2), /invalid graph incident relationships/);
 const overview = client.planViewport({ center:[0,0,0], radius:100 });
-assert.equal(overview.lod, "detail");
+assert.equal(overview.lod, "overview");
 assert.equal(overview.nodeChunks.length, 1);
-assert.equal(overview.edgeChunks.length, 2);
-assert.deepEqual(overview.edgeChunks.map(chunk => chunk.chunkId).sort(), [1, 2]);
+assert.equal(overview.edgeChunks.length, 1);
+assert.deepEqual(overview.edgeChunks.map(chunk => chunk.chunkId), [1]);
 
 const detailView = { center:[0,0,0] as const, radius:5 };
 const first = await client.loadViewport(detailView);
 assert.equal(first.lod, "detail");
 assert.equal(first.nodeChunks.length, 1);
-assert.equal(first.edgeChunks.length, 2);
-assert.deepEqual(first.edgeChunks.map(chunk => chunk.chunkId).sort(), [1, 2]);
+assert.equal(first.edgeChunks.length, 1);
+assert.deepEqual(first.edgeChunks.map(chunk => chunk.chunkId), [1]);
 assert.equal(first.nodeChunks[0].positions[3], 4);
 assert.equal(first.nodeChunks[0].renderIds[1], 11);
 assert.equal(first.nodeChunks[0].positions.buffer, first.nodeChunks[0].raw.buffer);
@@ -151,11 +151,11 @@ assert.deepEqual(
   [],
 );
 assert.equal(nodeFetches, 1);
-assert.equal(edgeFetches, 2);
+assert.equal(edgeFetches, 1);
 
 await client.loadViewport(detailView);
 assert.equal(nodeFetches, 1);
-assert.equal(edgeFetches, 2);
+assert.equal(edgeFetches, 1);
 
 assert.deepEqual(await client.resolveNode(11), { memoryId:"m-11" });
 assert.deepEqual(await client.resolveNode(11), { memoryId:"m-11" });
@@ -222,6 +222,30 @@ const labelFrame = await labelHeavy.loadViewport(detailView);
 assert.equal(labelFrame.labels.length, 48);
 assert.ok(labelFrame.labels[0].importance >= labelFrame.labels[47].importance);
 assert.equal(labelHeavy.pickNodeChunkIds([0,0,-100], [0,0,1]).length, 8);
+
+const relChunks: GraphRenderManifest["nodeChunks"] = Array.from({ length: 13 }, (_, chunkId) => ({
+  chunkId,
+  parentHierarchyId: 1,
+  bounds,
+  nodeCount: chunkId < 7 ? 169 : 168,
+  byteLen: 5_408,
+  labelCandidates: [],
+}));
+const relManifest: GraphRenderManifest = {
+  ...manifest,
+  totalNodeCount: 2_191,
+  nodeChunks: relChunks,
+  edgeChunks: [manifest.edgeChunks[0]],
+};
+const rel = await GraphRenderClient.prepare("owner", {
+  ...transport,
+  async prepare() { return relManifest; },
+});
+const relOverview = rel.planViewport({ center: [0, 0, 0], radius: 100 });
+assert.equal(relOverview.lod, "overview", "edge LOD remains coarse at the overview camera");
+assert.equal(relOverview.nodeChunks.length, 13, "all bounded node chunks are requested at overview");
+assert.equal(relOverview.nodeChunks.reduce((count, chunk) => count + chunk.nodeCount, 0), 2_191);
+assert.equal(rel.nodeOverviewFits, true);
 
 console.log("Hermes graph render client checks passed");
 
