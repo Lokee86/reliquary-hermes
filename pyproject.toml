@@ -1,4 +1,0 @@
-[tool.pytest.ini_options]
-pythonpath = ["src", "tests"]
-testpaths = ["tests"]
-addopts = "-ra --strict-markers -p no:cacheprovider"
