@@ -29,10 +29,15 @@ fn projection_counts_degrees_and_separates_edge_lods() {
     assert_eq!(projection.overview.len(), 1);
     assert_eq!(projection.intermediate.len(), 1);
     assert_eq!(projection.detail_by_leaf.len(), 2);
-    assert_eq!(projection.detail_by_leaf[0].len(), 1);
+    assert_eq!(projection.detail_by_leaf[0].len(), 2);
     assert_eq!(projection.detail_by_leaf[1].len(), 1);
-    assert_eq!(projection.detail_by_leaf[0][0].source.get(), 0);
-    assert_eq!(projection.detail_by_leaf[0][0].target.get(), 1);
+    let endpoints = projection
+        .detail_by_leaf
+        .iter()
+        .flatten()
+        .map(|edge| (edge.source.get(), edge.target.get()))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(endpoints, [(0, 1), (1, 2), (2, 3)].into_iter().collect());
 }
 
 #[test]

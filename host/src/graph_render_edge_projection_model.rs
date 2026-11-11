@@ -7,6 +7,7 @@ pub(crate) struct GraphRenderDetailEdge {
     pub(crate) source: RenderNodeId,
     pub(crate) target: RenderNodeId,
     pub(crate) style: GraphRenderEdgeStyle,
+    pub(crate) cross_community: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

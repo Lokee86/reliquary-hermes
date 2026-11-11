@@ -78,7 +78,18 @@ pub(crate) fn push_detail_edge_payload(
         .collect::<Vec<_>>();
     let weights = edges
         .iter()
-        .map(|edge| edge_weight_from_units(edge.style.weight_units as u64))
+        .map(|edge| {
+            // Original Warlock EdgeLines.tsx uses 0.06 for cross-group edges
+            // versus 0.25 inside a group. Fold that display ratio into the
+            // renderer-only strength; authoritative relation/layout weights
+            // and bounded neighborhood inspection remain unchanged.
+            let attenuation = if edge.cross_community {
+                0.06 / 0.25
+            } else {
+                1.0
+            };
+            edge_weight_from_units(edge.style.weight_units as u64) * attenuation
+        })
         .collect::<Vec<_>>();
     let packed_colors = edges
         .iter()

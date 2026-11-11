@@ -98,12 +98,16 @@ impl GraphRenderEdgeProjectionBuilder {
         );
 
         let source_slot = self.leaf_slot_by_render[source];
-        let target_slot = self.leaf_slot_by_render[target];
-        if source_slot == target_slot && source_slot != u32::MAX && self.detail_limit > 0 {
+        // A leaf owns a bounded set of real relationships, including links to
+        // other leaves/communities. Partition boundaries must not replace the
+        // visible Memory-to-Memory graph with center-to-center proxies.
+        if source_slot != u32::MAX && self.detail_limit > 0 {
             let edge = GraphRenderDetailEdge {
                 source: crate::graph_render_identity::RenderNodeId::new(source as u32),
                 target: crate::graph_render_identity::RenderNodeId::new(target as u32),
                 style: relation.style,
+                cross_community: self.territory_by_render[source]
+                    != self.territory_by_render[target],
             };
             retain_detail(
                 &mut self.detail[source_slot as usize],

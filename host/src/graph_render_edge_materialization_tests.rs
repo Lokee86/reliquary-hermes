@@ -53,11 +53,20 @@ fn materialization_emits_overview_intermediate_and_detail_payloads() {
         store.edge_payloads[3].descriptor.lod,
         GraphRenderEdgeLod::Detail
     );
-    assert!(
+    assert_eq!(
         store
             .edge_payloads
             .iter()
-            .all(|payload| payload.descriptor.segment_count == 1)
+            .map(|payload| payload.descriptor.segment_count)
+            .collect::<Vec<_>>(),
+        vec![1, 1, 2, 1]
+    );
+    // The cross-community relationship remains a real node segment in detail.
+    let detail = GraphRenderEdgeChunk::decode(&store.edge_payloads[2].bytes).unwrap();
+    assert!(
+        detail
+            .endpoints
+            .contains(&[layout.positions[1], layout.positions[2]])
     );
 
     for payload in &store.edge_payloads {
@@ -96,7 +105,7 @@ fn aggregate_weight_sums_logical_relationships_without_extra_segments() {
 
     let (reused, encoded) =
         append_edge_chunks(1, &hierarchy, &layout, &projection, &mut store, None).unwrap();
-    assert_eq!((reused, encoded), (0, 2));
+    assert_eq!((reused, encoded), (0, 3));
 
     let overview = GraphRenderEdgeChunk::decode(&store.edge_payloads[0].bytes).unwrap();
     assert_eq!(overview.endpoints.len(), 1);

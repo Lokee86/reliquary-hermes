@@ -21,7 +21,7 @@ fn local_label_mutation_reuses_unaffected_leaf_and_aggregate_chunk() {
         .prepare(source("owner", 1, count, relations.clone()))
         .unwrap();
     assert_eq!(first.reuse.node_chunks_encoded, 2);
-    assert_eq!(first.reuse.edge_chunks_encoded, 1);
+    assert_eq!(first.reuse.edge_chunks_encoded, 2);
 
     let old_leaf = service.node_chunk(first.generation_id, 1).unwrap().to_vec();
     let old_edge = service.edge_chunk(first.generation_id, 0).unwrap().to_vec();
@@ -33,7 +33,7 @@ fn local_label_mutation_reuses_unaffected_leaf_and_aggregate_chunk() {
     assert!(second.reuse.hierarchy_layout_reused);
     assert_eq!(second.reuse.node_chunks_reused, 1);
     assert_eq!(second.reuse.node_chunks_encoded, 1);
-    assert_eq!(second.reuse.edge_chunks_reused, 1);
+    assert_eq!(second.reuse.edge_chunks_reused, 2);
     assert_eq!(second.reuse.edge_chunks_encoded, 0);
 
     let new_leaf = service.node_chunk(second.generation_id, 1).unwrap();
