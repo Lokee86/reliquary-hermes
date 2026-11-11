@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_DISPLAY_SETTINGS, DISPLAY_LIMITS, clampDisplaySettings,
-  loadDisplaySettings, saveDisplaySettings, edgeIntensityScale,
+  loadDisplaySettings, saveDisplaySettings,
 } from "../src/graph/model/displaySettings";
 import {
   DEFAULT_ANIMATION_SETTINGS, clampAnimationSettings, loadAnimationSettings,
@@ -40,8 +40,6 @@ test("display settings clamp bounds, reject nonfinite values, and use REL shell 
   assert.equal(DEFAULT_DISPLAY_SETTINGS.communityShellLimit, 128);
   assert.deepEqual(clampDisplaySettings(null), DEFAULT_DISPLAY_SETTINGS);
   assert.deepEqual(clampDisplaySettings(42), DEFAULT_DISPLAY_SETTINGS);
-  assert.equal(edgeIntensityScale(10000), 0.5);
-  assert.equal(edgeIntensityScale(Infinity), 1);
 });
 
 test("animation defaults, strict bounds and injected random resolution", () => {
@@ -160,4 +158,60 @@ test("a session fallback write overrides an older browser value after quota fail
   useBrowserStorage(failingWrite);
   saveDisplaySettings({ ...DEFAULT_DISPLAY_SETTINGS, bloom: 0.75 }, scope, session);
   assert.equal(loadDisplaySettings(scope, session).bloom, 0.75);
+});
+
+
+test("a recovered primary write clears the fallback overlay", () => {
+  const browser = new MemoryStorage();
+  useBrowserStorage(browser);
+  const session = createPreferenceSessionStore();
+  const scope = { profileKey: "profile-recovery" };
+  saveDisplaySettings({ ...DEFAULT_DISPLAY_SETTINGS, bloom: 0.25 }, scope);
+
+  useBrowserStorage({
+    getItem: (key) => browser.getItem(key),
+    setItem() { throw new Error("quota"); },
+    removeItem: (key) => browser.removeItem(key),
+  });
+  saveDisplaySettings({ ...DEFAULT_DISPLAY_SETTINGS, bloom: 0.75 }, scope, session);
+  assert.equal(loadDisplaySettings(scope, session).bloom, 0.75);
+
+  useBrowserStorage(browser);
+  saveDisplaySettings({ ...DEFAULT_DISPLAY_SETTINGS, bloom: 1.5 }, scope, session);
+  assert.equal(loadDisplaySettings(scope, session).bloom, 1.5);
+});
+
+test("failed camera view clear keeps a session tombstone until storage recovers", () => {
+  const browser = new MemoryStorage();
+  useBrowserStorage(browser);
+  const session = createPreferenceSessionStore();
+  const scope = { profileKey: "profile-clear", ownerKey: "owner-a" };
+  const view = { position: [0, 0, 10] as [number, number, number], target: [0, 0, 0] as [number, number, number], up: [0, 1, 0] as [number, number, number] };
+  saveStoredGraphView(view, scope);
+  const failingRemove: StorageLike = {
+    getItem: (key) => browser.getItem(key),
+    setItem: (key, value) => browser.setItem(key, value),
+    removeItem() { throw new Error("storage unavailable"); },
+  };
+  useBrowserStorage(failingRemove);
+  clearStoredGraphView(scope, session);
+  assert.equal(loadStoredGraphView(scope, session), null);
+
+  useBrowserStorage(browser);
+  assert.equal(loadStoredGraphView(scope, session), null);
+  clearStoredGraphView(scope, session);
+  assert.equal(loadStoredGraphView(scope, session), null);
+});
+
+test("long Unicode profile and owner scopes remain distinct and persist", () => {
+  const browser = new MemoryStorage();
+  useBrowserStorage(browser);
+  const profileKey = JSON.stringify(["Desktop", `connection-${"c".repeat(120)}`, `profile-${"é".repeat(100)}`]);
+  const ownerA = { profileKey, ownerKey: `owner-${"🧭".repeat(30)}-a` };
+  const ownerB = { profileKey, ownerKey: `owner-${"🧭".repeat(30)}-b` };
+  const view = { position: [0, 0, 10] as [number, number, number], target: [0, 0, 0] as [number, number, number], up: [0, 1, 0] as [number, number, number] };
+  saveStoredGraphView(view, ownerA);
+  assert.ok(browser.values.size > 0);
+  assert.deepEqual(loadStoredGraphView(ownerA)?.position, [0, 0, 10]);
+  assert.equal(loadStoredGraphView(ownerB), null);
 });
