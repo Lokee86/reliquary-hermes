@@ -5,7 +5,7 @@ import type { TrackballControls as TrackballControlsImpl } from "three-stdlib";
 import { Bloom, EffectComposer } from "@react-three/postprocessing";
 import * as THREE from "three";
 import { BoundedPicker } from "./BoundedPicker";
-import { boundsCenter, CameraViewport } from "./CameraViewport";
+import { boundsCenter, CameraViewport, type GraphCameraDiagnostic } from "./CameraViewport";
 import { findFrameLabel } from "./labels";
 import { RenderEdgeChunk } from "./RenderEdgeChunk";
 import { RenderNodeChunk } from "./RenderNodeChunk";
@@ -105,6 +105,17 @@ function Scene({
     }
     reportDrawReady(chunkId);
   }, [reportDrawReady, telemetryRef]);
+  const recordCameraSample = useCallback((sample: GraphCameraDiagnostic) => {
+    const telemetry = telemetryRef.current;
+    if (!telemetry) return;
+    const vector = (value: readonly [number, number, number]) => value
+      .map(component => Number.isFinite(component) ? component.toFixed(3) : "invalid")
+      .join(",");
+    telemetry.setAttribute("data-camera-position", vector(sample.position));
+    telemetry.setAttribute("data-camera-target", vector(sample.target));
+    telemetry.setAttribute("data-camera-fov", Number.isFinite(sample.fov) ? sample.fov.toFixed(3) : "invalid");
+    telemetry.setAttribute("data-camera-aspect", Number.isFinite(sample.aspect) ? sample.aspect.toFixed(3) : "invalid");
+  }, [telemetryRef]);
   const registerChunk = useCallback((chunkId: number, pickable: THREE.Points | THREE.InstancedMesh | null) => {
     if (pickable) pointsByChunk.current.set(chunkId, pickable);
     else pointsByChunk.current.delete(chunkId);
@@ -167,7 +178,8 @@ function Scene({
       <GraphAnimationController controlsRef={controlsRef} settings={presentation.animation}
         rerollToken={presentation.rerollToken} activityRef={animationActivity} />
       {presentation.display.cameraCenterIndicator && <CameraCenterPseudoNode controlsRef={controlsRef} />}
-      <CameraViewport controlsRef={controlsRef} fallbackCenter={center} onViewport={loadViewport} />
+      <CameraViewport controlsRef={controlsRef} fallbackCenter={center} onViewport={loadViewport}
+        onCameraSample={recordCameraSample} />
     </>
   );
 }
@@ -226,6 +238,10 @@ function GraphScene(props: GraphRenderSceneProps) {
       data-downsampled={!client.nodeOverviewFits}
       data-camera-lod={frame?.lod ?? "pending"}
       data-edge-lod={renderedEdgeLod}
+      data-camera-position="pending"
+      data-camera-target="pending"
+      data-camera-fov="pending"
+      data-camera-aspect="pending"
       style={{ position: "relative", width: "100%", height: "100%", minHeight: 360 }}
     >
       <Canvas

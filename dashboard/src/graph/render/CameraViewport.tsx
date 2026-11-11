@@ -7,14 +7,23 @@ import type {
   GraphRenderViewport,
 } from "./types";
 
+export interface GraphCameraDiagnostic {
+  position: readonly [number, number, number];
+  target: readonly [number, number, number];
+  fov: number;
+  aspect: number;
+}
+
 export function CameraViewport({
   controlsRef,
   fallbackCenter,
   onViewport,
+  onCameraSample,
 }: {
   controlsRef: React.RefObject<TrackballControlsImpl | null>;
   fallbackCenter: readonly [number, number, number];
   onViewport: (viewport: GraphRenderViewport) => void;
+  onCameraSample: (sample: GraphCameraDiagnostic) => void;
 }) {
   const elapsed = useRef(0);
   const previous = useRef<GraphRenderViewport | null>(null);
@@ -32,6 +41,13 @@ export function CameraViewport({
     scratch.current.set(...center);
     const distance = camera.position.distanceTo(scratch.current);
     const fov = camera instanceof THREE.PerspectiveCamera ? camera.fov : 50;
+    const aspect = camera instanceof THREE.PerspectiveCamera ? camera.aspect : 1;
+    onCameraSample({
+      position: [camera.position.x, camera.position.y, camera.position.z],
+      target: center,
+      fov,
+      aspect,
+    });
     const radius = Math.max(
       1,
       distance * Math.tan(THREE.MathUtils.degToRad(fov * 0.5)) * 1.6,
