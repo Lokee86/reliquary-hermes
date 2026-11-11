@@ -12,6 +12,7 @@ use crate::graph_render_layout::bounded_group_adjacency;
 use crate::graph_render_layout::build_graph_render_layout;
 use crate::graph_render_layout::build_graph_render_layout_with_topology;
 use crate::graph_render_source::GraphRenderCommunitySource;
+use crate::graph_render_style::node_size_from_degree;
 
 #[test]
 fn production_layout_constants_are_frozen() {
@@ -105,6 +106,16 @@ fn weighted_edges_pull_connected_nodes_closer_with_deterministic_positions() {
             .iter()
             .flatten()
             .all(|coordinate| coordinate.is_finite())
+    );
+}
+
+#[test]
+fn layout_fingerprint_includes_degree_scaled_radius_inputs() {
+    let topology = pair_topology(3, 20_000);
+    assert_ne!(
+        topology.fingerprint_with_degrees(&[1, 1, 0]),
+        topology.fingerprint_with_degrees(&[2, 2, 0]),
+        "degree changes alter force radii even when weighted pairs are unchanged",
     );
 }
 
@@ -228,7 +239,13 @@ fn coarse_fanout_keeps_cumulative_weak_relation_weight() {
 fn dense_spatial_repulsion_gives_late_nodes_candidates() {
     let positions = vec![[0.0; 3]; 128];
     let mut force = vec![[0.0; 3]; positions.len()];
-    apply_spatial_repulsion(&positions, &mut force);
+    apply_spatial_repulsion(
+        &positions,
+        &vec![1.0; positions.len()],
+        1.1,
+        &mut force,
+        false,
+    );
     assert!(distance(force[127], [0.0; 3]) > 0.0);
 
     let centers = vec![[0.0; 3]; 221];
@@ -238,6 +255,30 @@ fn dense_spatial_repulsion_gives_late_nodes_candidates() {
     let mut group_force = vec![[0.0; 3]; centers.len()];
     apply_group_repulsion(&centers, &radii, &clearances, &masses, &mut group_force);
     assert!(distance(group_force[220], [0.0; 3]) > 0.0);
+}
+
+#[test]
+fn dense_group_keeps_actual_node_radii_clear_of_each_other() {
+    let memories = (1..=48).map(memory_id).collect::<Vec<_>>();
+    let hierarchy =
+        build_graph_render_hierarchy(&memories, vec![community(1, memories.clone())], 256, 2)
+            .unwrap();
+    let topology = complete_topology(memories.len(), 30_000);
+    let layout =
+        build_graph_render_layout_with_topology(&hierarchy, memories.len() as u32, &topology);
+    let radii = (0..memories.len())
+        .map(|node| (node_size_from_degree((memories.len() - 1) as u32) * 0.8).max(1.0))
+        .collect::<Vec<_>>();
+
+    for left in 0..layout.positions.len() {
+        for right in left + 1..layout.positions.len() {
+            assert!(
+                distance(layout.positions[left], layout.positions[right])
+                    >= radii[left] + radii[right] + 1.1 - 0.05,
+                "nodes {left} and {right} overlap their degree-scaled force radii",
+            );
+        }
+    }
 }
 
 #[test]
@@ -403,6 +444,16 @@ fn topology_from_edges(
         offsets.push(neighbors.len());
     }
     GraphRenderLayoutTopology { offsets, neighbors }
+}
+
+fn complete_topology(node_count: usize, weight_units: u64) -> GraphRenderLayoutTopology {
+    let mut edges = Vec::with_capacity(node_count * (node_count - 1) / 2);
+    for left in 0..node_count {
+        for right in left + 1..node_count {
+            edges.push((left, right, weight_units));
+        }
+    }
+    topology_from_edges(node_count, &edges)
 }
 
 fn distance(left: [f32; 3], right: [f32; 3]) -> f32 {

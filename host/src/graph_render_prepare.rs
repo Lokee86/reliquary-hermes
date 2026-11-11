@@ -8,7 +8,7 @@ use crate::graph_render_hierarchy::{
     DEFAULT_GRAPH_RENDER_LEAF_CAPACITY, GRAPH_RENDER_SUBGROUP_LEAF_FANOUT,
     build_graph_render_hierarchy,
 };
-use crate::graph_render_layout::build_graph_render_layout_with_topology;
+use crate::graph_render_layout::build_graph_render_layout_with_degrees;
 use crate::graph_render_manifest::build_graph_render_manifest;
 use crate::graph_render_node_materialization::{GraphRenderNodeReuse, build_node_chunk_store};
 use crate::graph_render_source::GraphRenderSource;
@@ -45,17 +45,20 @@ pub(crate) fn build_graph_render_generation(
     });
     let mut edge_projection =
         build_edge_projection(&node_keys, &source.relations, &candidate_hierarchy)?;
-    let layout_fingerprint = edge_projection.layout_topology.fingerprint();
+    let layout_fingerprint = edge_projection
+        .layout_topology
+        .fingerprint_with_degrees(&edge_projection.degrees);
     let layout_reused = previous.is_some_and(|previous| {
         structure_reused && previous.layout_fingerprint == layout_fingerprint
     });
     let (hierarchy, layout) = match previous.filter(|_| layout_reused) {
         Some(previous) => (previous.hierarchy.clone(), previous.layout.clone()),
         None => {
-            let layout = build_graph_render_layout_with_topology(
+            let layout = build_graph_render_layout_with_degrees(
                 &candidate_hierarchy,
                 node_keys.len() as u32,
                 &edge_projection.layout_topology,
+                &edge_projection.degrees,
             );
             (candidate_hierarchy, layout)
         }

@@ -2,7 +2,7 @@ use crate::graph_render_contract::{GraphRenderBounds, GraphRenderHierarchyKind};
 use crate::graph_render_edge_projection_model::GraphRenderLayoutTopology;
 use crate::graph_render_hierarchy_model::GraphRenderHierarchy;
 use crate::graph_render_layout_model::{GraphRenderLayout, GraphRenderLayoutNode, empty_bounds};
-use crate::graph_render_style::edge_weight_from_units;
+use crate::graph_render_style::{edge_weight_from_units, node_size_from_degree};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// The global node pass keeps at most 16 weighted neighbors per node and visits
@@ -15,7 +15,6 @@ const MAX_UNASSIGNED_LOCALITY: usize = 128;
 const MAX_GROUP_NEIGHBORS: usize = 32;
 const MAX_REPULSION_CANDIDATES: usize = 64;
 pub(crate) const GRAPH_RENDER_NODE_RADIUS: f32 = 1.0;
-const FORCE_SPATIAL_CELL_SIZE: f32 = 4.0;
 
 #[cfg(test)]
 pub(crate) fn build_graph_render_layout(
@@ -34,6 +33,18 @@ pub(crate) fn build_graph_render_layout_with_topology(
     node_count: u32,
     topology: &GraphRenderLayoutTopology,
 ) -> GraphRenderLayout {
+    let degrees = (0..node_count as usize)
+        .map(|render_id| topology.neighbors(render_id).len() as u32)
+        .collect::<Vec<_>>();
+    build_graph_render_layout_with_degrees(hierarchy, node_count, topology, &degrees)
+}
+
+pub(crate) fn build_graph_render_layout_with_degrees(
+    hierarchy: &GraphRenderHierarchy,
+    node_count: u32,
+    topology: &GraphRenderLayoutTopology,
+    degrees: &[u32],
+) -> GraphRenderLayout {
     if hierarchy.nodes.is_empty() {
         return GraphRenderLayout {
             positions: vec![[0.0; 3]; node_count as usize],
@@ -47,6 +58,12 @@ pub(crate) fn build_graph_render_layout_with_topology(
     let (groups, group_by_render) = visual_groups(hierarchy, topology, node_count as usize);
     let mut links = strongest_links(topology, node_count as usize);
     links.sort_unstable_by_key(|&(left, right, _)| (left, right));
+    let node_radii = (0..node_count as usize)
+        .map(|render_id| {
+            let degree = degrees.get(render_id).copied().unwrap_or(0);
+            (node_size_from_degree(degree) * 0.8).max(1.0)
+        })
+        .collect::<Vec<_>>();
     let semantic_group_count = hierarchy
         .nodes
         .iter()
@@ -54,8 +71,6 @@ pub(crate) fn build_graph_render_layout_with_topology(
             node.kind == GraphRenderHierarchyKind::Territory && node.source_community_id.is_some()
         })
         .count();
-    let group_centers =
-        layout_group_centers(&groups, &group_by_render, semantic_group_count, topology);
     let mut local_slot_by_render = vec![usize::MAX; node_count as usize];
     for members in &groups {
         for (slot, &render_id) in members.iter().enumerate() {
@@ -73,18 +88,47 @@ pub(crate) fn build_graph_render_layout_with_topology(
             ));
         }
     }
+    let local_layouts = groups
+        .iter()
+        .enumerate()
+        .map(|(group, members)| {
+            let local_radii = members
+                .iter()
+                .map(|&render_id| node_radii[render_id])
+                .collect::<Vec<_>>();
+            layout_local_members(
+                members,
+                &local_radii,
+                &local_links[group],
+                node_count <= 10_000,
+            )
+        })
+        .collect::<Vec<_>>();
+    let local_group_radii = groups
+        .iter()
+        .zip(&local_layouts)
+        .map(|(members, local)| {
+            members
+                .iter()
+                .zip(local)
+                .map(|(&render_id, point)| length(*point) + node_radii[render_id])
+                .fold(0.0_f32, f32::max)
+                + 6.0
+        })
+        .collect::<Vec<_>>();
+    let group_centers = layout_group_centers(
+        &groups,
+        &group_by_render,
+        semantic_group_count,
+        &local_group_radii,
+        topology,
+    );
     let mut positions = vec![[0.0; 3]; node_count as usize];
     for (group_id, members) in groups.iter().enumerate() {
-        let local = layout_local_members(members.len(), &local_links[group_id]);
         for (slot, &render_id) in members.iter().enumerate() {
             // Keep the coarse visual region legible while leaving individual nodes
             // free to cross it under real relation forces in the global pass.
-            let offset = if members.len() <= 1 {
-                [0.0; 3]
-            } else {
-                local[slot]
-            };
-            positions[render_id] = add(group_centers[group_id], offset);
+            positions[render_id] = add(group_centers[group_id], local_layouts[group_id][slot]);
         }
     }
     let mut velocities = vec![[0.0_f32; 3]; positions.len()];
@@ -96,9 +140,18 @@ pub(crate) fn build_graph_render_layout_with_topology(
     for iteration in 0..node_iterations {
         let mut forces = vec![[0.0_f32; 3]; positions.len()];
         for &(left, right, weight) in &links {
-            apply_global_attraction(&mut forces, left, right, weight, &positions);
+            if group_by_render[left] != group_by_render[right] {
+                apply_cross_group_attraction(
+                    &mut forces,
+                    left,
+                    right,
+                    weight,
+                    &positions,
+                    &node_radii,
+                );
+            }
         }
-        apply_spatial_repulsion(&positions, &mut forces);
+        apply_spatial_repulsion(&positions, &node_radii, 1.1, &mut forces, false);
         let cooling = 1.0 - 0.55 * iteration as f32 / node_iterations as f32;
         for ((position, velocity), force) in positions.iter_mut().zip(&mut velocities).zip(forces) {
             *velocity = scale(add(*velocity, force), 0.8);
@@ -109,11 +162,11 @@ pub(crate) fn build_graph_render_layout_with_topology(
             }
             *position = add(*position, *velocity);
         }
-        recenter(&mut positions);
+        recenter_groups(&mut positions, &group_centers, &groups);
     }
     let centers = hierarchy_centroids(hierarchy, node_count as usize, &positions);
     let children = children_by_parent(hierarchy, &vec![BTreeMap::new(); hierarchy.nodes.len()]);
-    let bounds = hierarchy_bounds(hierarchy, &children, &centers, &positions);
+    let bounds = hierarchy_bounds(hierarchy, &children, &centers, &positions, &node_radii);
     let hierarchy = centers
         .into_iter()
         .zip(bounds)
@@ -226,15 +279,12 @@ fn layout_group_centers(
     groups: &[Vec<usize>],
     group_by_render: &[usize],
     semantic_group_count: usize,
+    radii: &[f32],
     topology: &GraphRenderLayoutTopology,
 ) -> Vec<[f32; 3]> {
     if groups.is_empty() {
         return Vec::new();
     }
-    let radii = groups
-        .iter()
-        .map(|members| (members.len().max(1) as f32).cbrt() * 3.0 + 1.0)
-        .collect::<Vec<_>>();
     // The original 32-unit group clearance belongs to named community bodies.
     // Visual-only unassigned locality bodies use node-scale clearance so a large
     // number of singleton nodes cannot inflate the coarse-world volume.
@@ -517,12 +567,15 @@ fn strongest_links(topology: &GraphRenderLayoutTopology, count: usize) -> Vec<(u
         .collect()
 }
 
-fn apply_global_attraction(
+fn apply_weighted_attraction(
     force: &mut [[f32; 3]],
     left: usize,
     right: usize,
     weight_units: u64,
     positions: &[[f32; 3]],
+    radii: &[f32],
+    padding: f32,
+    attraction: f32,
 ) {
     let delta = subtract(positions[right], positions[left]);
     let distance = length(delta);
@@ -530,19 +583,56 @@ fn apply_global_attraction(
         return;
     }
     let weight = edge_weight_from_units(weight_units);
-    let effective = (1.0 + weight.max(0.0).ln_1p()).sqrt();
-    let desired = GRAPH_RENDER_NODE_RADIUS * 2.0 + 1.1 + 4.5 / effective;
-    let amount = (distance - desired) * 0.055 * effective.min(4.0);
+    let effective_weight = 1.0 + weight.max(0.0).ln_1p();
+    let effective = effective_weight.sqrt();
+    let desired = radii[left] + radii[right] + padding + 4.5 / effective;
+    let amount = (distance - desired) * attraction * effective.min(4.0);
     let pull = scale(delta, amount / distance);
     add_to(&mut force[left], pull);
     add_to(&mut force[right], scale(pull, -1.0));
 }
 
-fn layout_local_members(count: usize, links: &[(usize, usize, u64)]) -> Vec<[f32; 3]> {
-    let mut positions = initial_positions(count);
-    if count < 2 {
-        return positions;
+fn apply_cross_group_attraction(
+    force: &mut [[f32; 3]],
+    left: usize,
+    right: usize,
+    weight_units: u64,
+    positions: &[[f32; 3]],
+    radii: &[f32],
+) {
+    // Coarse centers already encode cross-group relationship strength. This pass
+    // only nudges linked boundary nodes while group recentering holds those centers.
+    apply_weighted_attraction(
+        force,
+        left,
+        right,
+        weight_units,
+        positions,
+        radii,
+        1.1,
+        0.006,
+    );
+}
+
+fn layout_local_members(
+    members: &[usize],
+    radii: &[f32],
+    links: &[(usize, usize, u64)],
+    exact_pair_forces: bool,
+) -> Vec<[f32; 3]> {
+    let count = members.len();
+    if count == 0 {
+        return Vec::new();
     }
+    if count == 1 {
+        return vec![[0.0; 3]];
+    }
+    let occupied_volume = radii
+        .iter()
+        .map(|radius| (radius + 1.1).powi(3))
+        .sum::<f32>();
+    let initial_radius = (4.5_f32 * 1.5).max(occupied_volume.cbrt() * 1.4);
+    let mut positions = initial_positions_with_radius(count, initial_radius);
     let iterations = if count > 500 {
         18
     } else if count < 30 {
@@ -554,9 +644,24 @@ fn layout_local_members(count: usize, links: &[(usize, usize, u64)]) -> Vec<[f32
     for iteration in 0..iterations {
         let mut forces = vec![[0.0_f32; 3]; count];
         for &(left, right, weight) in links {
-            apply_global_attraction(&mut forces, left, right, weight, &positions);
+            apply_weighted_attraction(
+                &mut forces,
+                left,
+                right,
+                weight,
+                &positions,
+                radii,
+                1.1,
+                0.055,
+            );
         }
-        apply_spatial_repulsion(&positions, &mut forces);
+        apply_spatial_repulsion(
+            &positions,
+            radii,
+            1.1,
+            &mut forces,
+            count <= 220 && exact_pair_forces,
+        );
         let cooling = 1.0 - 0.55 * iteration as f32 / iterations as f32;
         for ((position, velocity), force) in positions.iter_mut().zip(&mut velocities).zip(forces) {
             let gravity = scale(*position, -0.014);
@@ -573,8 +678,23 @@ fn layout_local_members(count: usize, links: &[(usize, usize, u64)]) -> Vec<[f32
     positions
 }
 
-pub(crate) fn apply_spatial_repulsion(positions: &[[f32; 3]], force: &mut [[f32; 3]]) {
-    let cell_size = FORCE_SPATIAL_CELL_SIZE;
+pub(crate) fn apply_spatial_repulsion(
+    positions: &[[f32; 3]],
+    radii: &[f32],
+    padding: f32,
+    force: &mut [[f32; 3]],
+    long_range: bool,
+) {
+    if long_range && positions.len() <= 220 {
+        for left in 0..positions.len() {
+            for right in (left + 1)..positions.len() {
+                apply_node_pair_repulsion(left, right, positions, radii, padding, force, true);
+            }
+        }
+        return;
+    }
+    let max_radius = radii.iter().copied().fold(1.0_f32, f32::max);
+    let cell_size = 4.5_f32.max(max_radius * 2.0 + padding);
     let mut cells = HashMap::<(i32, i32, i32), Vec<usize>>::new();
     let coords = positions
         .iter()
@@ -591,19 +711,41 @@ pub(crate) fn apply_spatial_repulsion(positions: &[[f32; 3]], force: &mut [[f32;
     }
     for (left, &(x, y, z)) in coords.iter().enumerate() {
         for right in sample_spatial_candidates(left, (x, y, z), &cells) {
-            let delta = subtract(positions[right], positions[left]);
-            let distance = length(delta);
-            if distance >= 2.0 {
-                continue;
-            }
-            let direction = pair_direction(left, right, delta, distance);
-            let amount = if distance <= f32::EPSILON {
-                0.2
-            } else {
-                (2.0 - distance) * 0.34
-            };
-            add_to(&mut force[left], scale(direction, -amount));
+            apply_node_pair_repulsion(left, right, positions, radii, padding, force, false);
         }
+    }
+}
+
+fn apply_node_pair_repulsion(
+    left: usize,
+    right: usize,
+    positions: &[[f32; 3]],
+    radii: &[f32],
+    padding: f32,
+    force: &mut [[f32; 3]],
+    long_range: bool,
+) {
+    let delta = subtract(positions[right], positions[left]);
+    let distance = length(delta);
+    let minimum = radii[left] + radii[right] + padding;
+    let amount = if distance < minimum {
+        (minimum - distance) * 0.34
+    } else if long_range {
+        6.0 / (distance * distance + 1.0)
+    } else if distance < minimum * 2.5 {
+        6.0 * 0.08 / (distance + 1.0)
+    } else {
+        0.0
+    };
+    if amount == 0.0 {
+        return;
+    }
+    let direction = pair_direction(left, right, delta, distance);
+    add_to(&mut force[left], scale(direction, -amount));
+    // In sampled large populations each node receives its own directed forces.
+    // In the exact small-population pass preserve equal-and-opposite pair forces.
+    if long_range {
+        add_to(&mut force[right], scale(direction, amount));
     }
 }
 
@@ -669,6 +811,23 @@ fn recenter(positions: &mut [[f32; 3]]) {
     center = scale(center, 1.0 / positions.len() as f32);
     for position in positions {
         *position = subtract(*position, center);
+    }
+}
+
+fn recenter_groups(positions: &mut [[f32; 3]], centers: &[[f32; 3]], groups: &[Vec<usize>]) {
+    for (group_id, members) in groups.iter().enumerate() {
+        if members.is_empty() {
+            continue;
+        }
+        let mut centroid = [0.0; 3];
+        for &render_id in members {
+            add_to(&mut centroid, positions[render_id]);
+        }
+        centroid = scale(centroid, 1.0 / members.len() as f32);
+        let translation = subtract(centers[group_id], centroid);
+        for &render_id in members {
+            positions[render_id] = add(positions[render_id], translation);
+        }
     }
 }
 
@@ -781,11 +940,12 @@ fn hierarchy_bounds(
     children: &[Vec<u32>],
     centers: &[[f32; 3]],
     positions: &[[f32; 3]],
+    node_radii: &[f32],
 ) -> Vec<GraphRenderBounds> {
     let mut bounds = vec![empty_bounds(); hierarchy.nodes.len()];
 
     for leaf in &hierarchy.leaves {
-        bounds[leaf.hierarchy_id as usize] = bounds_for_render_ids(leaf, positions);
+        bounds[leaf.hierarchy_id as usize] = bounds_for_render_ids(leaf, positions, node_radii);
     }
 
     for node in hierarchy.nodes.iter().rev() {
@@ -802,11 +962,12 @@ fn hierarchy_bounds(
 fn bounds_for_render_ids(
     leaf: &crate::graph_render_hierarchy_model::GraphRenderLeaf,
     positions: &[[f32; 3]],
+    node_radii: &[f32],
 ) -> GraphRenderBounds {
     let mut bounds = None;
     for render_id in &leaf.render_ids {
         let point = positions[render_id.get() as usize];
-        let point_bounds = bounds_around(point, GRAPH_RENDER_NODE_RADIUS);
+        let point_bounds = bounds_around(point, node_radii[render_id.get() as usize]);
         bounds = Some(match bounds {
             Some(current) => union(current, point_bounds),
             None => point_bounds,

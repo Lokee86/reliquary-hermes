@@ -63,6 +63,21 @@ impl GraphRenderLayoutTopology {
         }
         hash
     }
+
+    pub(crate) fn fingerprint_with_degrees(&self, degrees: &[u32]) -> u64 {
+        // Node force radii depend on the rendered degree, which can differ even
+        // when distinct relation multisets collapse to the same weighted pair sum.
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        for byte in b"graph-render-degree-layout-v1" {
+            hash_byte(&mut hash, *byte);
+        }
+        hash_u64(&mut hash, self.fingerprint());
+        hash_u64(&mut hash, degrees.len() as u64);
+        for degree in degrees {
+            hash_u64(&mut hash, *degree as u64);
+        }
+        hash
+    }
 }
 
 fn hash_u64(hash: &mut u64, value: u64) {
