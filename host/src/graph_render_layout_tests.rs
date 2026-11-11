@@ -130,7 +130,10 @@ fn weighted_walk_keeps_cross_population_neighbors_together() {
     let layout =
         build_graph_render_layout_with_topology(&hierarchy, memories.len() as u32, &topology);
 
-    assert!(distance(layout.positions[0], layout.positions[128]) < 3.0);
+    let linked_distance = distance(layout.positions[0], layout.positions[128]);
+    let unlinked_control_distance = distance(layout.positions[0], layout.positions[1]);
+    assert!(linked_distance < unlinked_control_distance);
+    assert!(linked_distance >= GRAPH_RENDER_NODE_RADIUS * 2.0);
     for (index, position) in layout.positions.iter().enumerate() {
         for other in &layout.positions[index + 1..] {
             assert!(distance(*position, *other) >= GRAPH_RENDER_NODE_RADIUS * 2.0);

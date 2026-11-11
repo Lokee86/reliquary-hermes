@@ -45,10 +45,29 @@ pub(crate) fn build_graph_render_layout_with_topology(
     // the solver: every weighted edge, including cross-leaf and cross-community edges,
     // participates in this single continuous 3D layout.
     let (groups, group_by_render) = visual_groups(hierarchy, topology, node_count as usize);
+    let mut links = strongest_links(topology, node_count as usize);
+    links.sort_unstable_by_key(|&(left, right, _)| (left, right));
     let group_centers = layout_group_centers(&groups, &group_by_render, topology);
+    let mut local_slot_by_render = vec![usize::MAX; node_count as usize];
+    for members in &groups {
+        for (slot, &render_id) in members.iter().enumerate() {
+            local_slot_by_render[render_id] = slot;
+        }
+    }
+    let mut local_links = vec![Vec::<(usize, usize, u64)>::new(); groups.len()];
+    for &(left, right, weight) in &links {
+        let group = group_by_render[left];
+        if group == group_by_render[right] {
+            local_links[group].push((
+                local_slot_by_render[left],
+                local_slot_by_render[right],
+                weight,
+            ));
+        }
+    }
     let mut positions = vec![[0.0; 3]; node_count as usize];
     for (group_id, members) in groups.iter().enumerate() {
-        let local = initial_positions(members.len());
+        let local = layout_local_members(members.len(), &local_links[group_id]);
         for (slot, &render_id) in members.iter().enumerate() {
             // Keep the coarse visual region legible while leaving individual nodes
             // free to cross it under real relation forces in the global pass.
@@ -60,8 +79,6 @@ pub(crate) fn build_graph_render_layout_with_topology(
             positions[render_id] = add(group_centers[group_id], offset);
         }
     }
-    let mut links = strongest_links(topology, node_count as usize);
-    links.sort_unstable_by_key(|&(left, right, _)| (left, right));
     let mut velocities = vec![[0.0_f32; 3]; positions.len()];
     let node_iterations = match positions.len() {
         0..=100_000 => FORCE_ITERATIONS,
@@ -76,8 +93,7 @@ pub(crate) fn build_graph_render_layout_with_topology(
         apply_spatial_repulsion(&positions, &mut forces);
         let cooling = 1.0 - 0.55 * iteration as f32 / node_iterations as f32;
         for ((position, velocity), force) in positions.iter_mut().zip(&mut velocities).zip(forces) {
-            let gravity = scale(*position, -0.014);
-            *velocity = scale(add(*velocity, add(force, gravity)), 0.8);
+            *velocity = scale(add(*velocity, force), 0.8);
             let magnitude = length(*velocity);
             let max_step = 1.4 * cooling;
             if magnitude > max_step {
@@ -210,6 +226,10 @@ fn layout_group_centers(
         .iter()
         .map(|members| (members.len().max(1) as f32).cbrt() * 4.0)
         .collect::<Vec<_>>();
+    let masses = groups
+        .iter()
+        .map(|members| 1.0 + (members.len() as f32).cbrt())
+        .collect::<Vec<_>>();
     let occupied_volume = radii
         .iter()
         .map(|radius| (radius + 32.0).powi(3))
@@ -260,17 +280,25 @@ fn layout_group_centers(
             }
             let weight = edge_weight_from_units(weight_units);
             let effective = (1.0 + weight.max(0.0).ln_1p()).sqrt();
-            let desired = radii[left] + radii[right] + 24.0 + 70.0 / effective;
+            let desired = radii[left] + radii[right] + 32.0 + 70.0 / effective;
             let amount = (distance - desired) * 0.019 * effective.min(4.0);
             let pull = scale(delta, amount / distance);
             add_to(&mut force[left], pull);
             add_to(&mut force[right], scale(pull, -1.0));
         }
-        apply_group_repulsion(&centers, &radii, &mut force);
+        apply_group_repulsion(&centers, &radii, &masses, &mut force);
         let cooling = 1.0 - 0.55 * iteration as f32 / group_iterations as f32;
-        for ((center, velocity), delta) in centers.iter_mut().zip(&mut velocities).zip(force) {
-            let gravity = scale(*center, -0.0024);
-            *velocity = scale(add(*velocity, add(delta, gravity)), 0.84);
+        for (index, ((center, velocity), delta)) in centers
+            .iter_mut()
+            .zip(&mut velocities)
+            .zip(force)
+            .enumerate()
+        {
+            let gravity = scale(*center, -0.0024 * masses[index]);
+            *velocity = scale(
+                add(*velocity, scale(add(delta, gravity), 1.0 / masses[index])),
+                0.84,
+            );
             let magnitude = length(*velocity);
             let max_step = 18.0 * cooling;
             if magnitude > max_step {
@@ -278,7 +306,7 @@ fn layout_group_centers(
             }
             *center = add(*center, *velocity);
         }
-        recenter(&mut centers);
+        recenter_weighted(&mut centers, &masses);
     }
     centers
 }
@@ -308,11 +336,41 @@ fn retain_group_neighbor(neighbors: &mut BTreeMap<usize, u64>, candidate: usize,
     }
 }
 
-fn apply_group_repulsion(centers: &[[f32; 3]], radii: &[f32], force: &mut [[f32; 3]]) {
+fn apply_group_repulsion(
+    centers: &[[f32; 3]],
+    radii: &[f32],
+    masses: &[f32],
+    force: &mut [[f32; 3]],
+) {
     if centers.len() < 2 {
         return;
     }
-    let cell_size = (radii.iter().copied().fold(0.0_f32, f32::max) * 2.0 + 24.0).max(32.0);
+    if centers.len() <= 220 {
+        for left in 0..centers.len() {
+            for right in (left + 1)..centers.len() {
+                let delta = subtract(centers[right], centers[left]);
+                let distance = length(delta);
+                let direction = if distance <= f32::EPSILON {
+                    let axis = (left.wrapping_mul(31).wrapping_add(right)) % 3;
+                    let mut vector = [0.0; 3];
+                    vector[axis] = 1.0;
+                    vector
+                } else {
+                    scale(delta, 1.0 / distance)
+                };
+                let minimum = radii[left] + radii[right] + 32.0;
+                let amount = if distance < minimum {
+                    (minimum - distance) * 0.34
+                } else {
+                    650.0 * (masses[left] * masses[right]).sqrt() / (distance * distance + 1.0)
+                };
+                add_to(&mut force[left], scale(direction, -amount));
+                add_to(&mut force[right], scale(direction, amount));
+            }
+        }
+        return;
+    }
+    let cell_size = (radii.iter().copied().fold(0.0_f32, f32::max) * 2.0 + 32.0).max(32.0);
     let mut cells = HashMap::<(i32, i32, i32), Vec<usize>>::new();
     let coords = centers
         .iter()
@@ -343,7 +401,7 @@ fn apply_group_repulsion(centers: &[[f32; 3]], radii: &[f32], force: &mut [[f32;
                             }
                             let delta = subtract(centers[right], centers[left]);
                             let distance = length(delta);
-                            let minimum = radii[left] + radii[right] + 24.0;
+                            let minimum = radii[left] + radii[right] + 32.0;
                             if distance >= minimum {
                                 continue;
                             }
@@ -461,6 +519,41 @@ fn apply_global_attraction(
     add_to(&mut force[right], scale(pull, -1.0));
 }
 
+fn layout_local_members(count: usize, links: &[(usize, usize, u64)]) -> Vec<[f32; 3]> {
+    let mut positions = initial_positions(count);
+    if count < 2 {
+        return positions;
+    }
+    let iterations = if count > 500 {
+        18
+    } else if count < 30 {
+        42
+    } else {
+        FORCE_ITERATIONS
+    };
+    let mut velocities = vec![[0.0_f32; 3]; count];
+    for iteration in 0..iterations {
+        let mut forces = vec![[0.0_f32; 3]; count];
+        for &(left, right, weight) in links {
+            apply_global_attraction(&mut forces, left, right, weight, &positions);
+        }
+        apply_spatial_repulsion(&positions, &mut forces);
+        let cooling = 1.0 - 0.55 * iteration as f32 / iterations as f32;
+        for ((position, velocity), force) in positions.iter_mut().zip(&mut velocities).zip(forces) {
+            let gravity = scale(*position, -0.014);
+            *velocity = scale(add(*velocity, add(force, gravity)), 0.8);
+            let magnitude = length(*velocity);
+            let max_step = 1.4 * cooling;
+            if magnitude > max_step {
+                *velocity = scale(*velocity, max_step / magnitude);
+            }
+            *position = add(*position, *velocity);
+        }
+        recenter(&mut positions);
+    }
+    positions
+}
+
 fn apply_spatial_repulsion(positions: &[[f32; 3]], force: &mut [[f32; 3]]) {
     let cell_size = FORCE_SPATIAL_CELL_SIZE;
     let mut cells = HashMap::<(i32, i32, i32), Vec<usize>>::new();
@@ -528,6 +621,22 @@ fn recenter(positions: &mut [[f32; 3]]) {
         add_to(&mut center, *position);
     }
     center = scale(center, 1.0 / positions.len() as f32);
+    for position in positions {
+        *position = subtract(*position, center);
+    }
+}
+
+fn recenter_weighted(positions: &mut [[f32; 3]], masses: &[f32]) {
+    if positions.is_empty() {
+        return;
+    }
+    let mut center = [0.0; 3];
+    let mut total_mass = 0.0;
+    for (position, mass) in positions.iter().zip(masses) {
+        add_to(&mut center, scale(*position, *mass));
+        total_mass += mass;
+    }
+    center = scale(center, 1.0 / total_mass.max(1.0));
     for position in positions {
         *position = subtract(*position, center);
     }
