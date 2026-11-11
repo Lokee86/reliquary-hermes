@@ -110,18 +110,13 @@ async function exerciseGraphSelection(page, fixture, manifestValues, nodeChunks,
   const raw = await nodeChunkBodies.get(chunkResponse);
   const count = raw.readUInt32LE(28);
   const center = [0, 1, 2].map(axis => (manifest.globalBounds.min[axis] + manifest.globalBounds.max[axis]) * 0.5);
-  let extent = Math.max(...[0, 1, 2].map(axis => manifest.globalBounds.max[axis] - manifest.globalBounds.min[axis]), 1) * 0.5;
+  let extent = Math.max(8, ...[0, 1, 2].map(axis =>
+    (manifest.globalBounds.max[axis] - manifest.globalBounds.min[axis]) * 0.5));
   for (const node of manifest.hierarchy) {
     const territory = node.kind === "territory" ? node.territory : null;
-    if (!territory) continue;
-    const radius = Math.max(0.1, territory.radius);
-    const labelHeight = Math.max(1.5, Math.min(24, radius * 0.16));
-    const labelHalfWidth = labelHeight * (460 / 112) * 0.5;
-    const labelRadius = Math.hypot(labelHalfWidth, labelHeight * 0.5,
-      radius * 0.82 + labelHeight, radius * 0.62);
-    const territoryRadius = Math.max(radius, labelRadius);
+    if (territory?.kind !== "community") continue;
     const centerDistance = Math.hypot(...territory.center.map((coordinate, axis) => coordinate - center[axis]));
-    extent = Math.max(extent, centerDistance + territoryRadius);
+    extent = Math.max(extent, centerDistance + territory.radius);
   }
   const cameraZ = center[2] + extent * 2.4;
   const tanHalfFov = Math.tan(25 * Math.PI / 180);

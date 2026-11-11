@@ -12,13 +12,13 @@
 
 **Previous evidence:** `docs/warlock-graph-original-vs-scalable-audit-2026-11-10.md` and `docs/warlock-rich-scalable-graph-spec-2026-11-10.md`.
 
-## Problem statement
+## Purpose
 
 The latest graph rebuild restored much of the original Warlock graph's behavior but **re-authored** its visual components rather than reusing the already-designed React scene. The current `RenderTerritories.tsx` is not the original `Territories.tsx`: it introduces a solid shell, a stronger wireframe, gray/neutral treatment for unassigned Memories, and a dark rounded label card. The screenshot shows an enormous gray mesh enclosing dark brown nodes with disproportionately small names. Similar divergences exist in node material/color, scene composition, camera framing, label dimensions and selected-node contrast.
 
 Feature tests and a successful million-node benchmark do **not** prove visual parity. The required target is **the appearance and interaction behavior of the original Warlock components, with the modern scalable data feed**. Do not approximate the original with another hand-styled replacement.
 
-## Target architecture
+## Overview
 
 ```text
 Reliquary authorized graph source
@@ -112,9 +112,13 @@ The UI visual component subtree may temporarily be red during the change. Existi
 - No full `GraphData` bridge, whole-graph JS force loop, duplicate renderer, Tauri dependency or transient compatibility layer remains.
 - Final source and generated bundles have one canonical renderer; all renderer/host regression tests and final integration checks pass.
 
-## References
+## Related docs
 
 - Original React sources: `Warlock-graph-original-review-2026-11-10/src/features/graph/scene/*`.
 - Original visual helpers: `Warlock-graph-original-review-2026-11-10/src/features/graph/model/visuals.ts`.
 - Hermes current implementation: `dashboard/src/graph/render/*`, `host/src/graph_render*.rs`.
 - Prior audit/spec: `docs/warlock-graph-original-vs-scalable-audit-2026-11-10.md` and `docs/warlock-rich-scalable-graph-spec-2026-11-10.md`.
+
+## Notes
+
+The [verification guide](verification.md#original-warlock-react-graph-port) records the implemented release and the specific adaptations for the Rust renderer and Hermes hosts.

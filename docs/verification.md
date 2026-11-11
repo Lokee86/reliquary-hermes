@@ -437,6 +437,46 @@ Hosted Hermes Desktop passed the copied-corpus Electron smoke with both owner ca
 
 The original November 8 REL and PHY and both final hosted copies matched the initial SHA-256 hashes after verification.
 
+## Original Warlock React graph port
+
+The release worktree starts at deployed checkpoint b216487b9e7c3a282149ca5e6a780c5148567315. Its Web JavaScript, Web stylesheet and Desktop module matched the installed files before the port. The release branch carries only the graph component changes and verification. The integration checkout at 9aad11749f226eab410abd380cd55efcd64debee already had 67 changed paths and retains its separate local work.
+
+The component sources are frozen at Warlock d9e38cb9e53dd2f8de345dd90cba08d00c27ac3b. A scripted source comparison checked exact equality of the point sprite, sphere detail policy, node and territory canvas texture functions, glow boost, edge density scale, additive edge material, point material, scene lighting and bloom. The comparison also verified removal of the extra filled shell and rounded territory card.
+
+Frozen Warlock visual sources by SHA-256.
+
+| Source | SHA-256 |
+| --- | --- |
+| GraphScene.tsx | 8d584424c14b2176e5c2d71b61278b2e1c7aeecd5b69e11c52d54159c212487b |
+| NodeCloud.tsx | df47b097f85d27846a8b5a7c65b6535253601642481d03e0968d3484490cd496 |
+| EdgeLines.tsx | ef2569fba67df89ec13785c6ef22a019247c895e38d7183524a04bb5d34e9c21 |
+| NodeLabels.tsx | 4971710448a56bebb2624ae22d22f52a029db97a4b70eea85124842cb2aeff69 |
+| Territories.tsx | 3710ebf57a1450b3df5d17b4cf4bd9d7d92ed7815f3fdb50a7d80bf392319b88 |
+| visuals.ts | 25a240a95a7ca2793dd8a69e32d99c47e76fa5ed1c0fc0fdae7aeef16817529d |
+
+The shared scene renders resident typed chunks and viewport territories from the existing v3 manifest. It retains the original 75,000-node sphere-to-points threshold and the bounded label candidates. The selected Memory can receive its own label from its resident chunk and authorized title. Aggregate segments use the coarse edge intensity and the packed relation weight. The 128-edge selected overlay uses the original additive material and carries the existing direction markers and omitted-count status.
+
+Compact Rust coordinates need a smaller initial extent than the original 180-unit minimum. Initial and reset framing use the node bounds and real territory radii. The label on a single real territory uses zero depth offset to stay in frame. Unassigned keeps the original wireframe and text style at subdued opacity and a lower label position. Both hosts expose their React instance without a DOM renderer. The tooltip retains the original markup, anchor and styling, with the screen position projected from the Three camera into a host-rendered element.
+
+The paired Chrome 156 screenshots used a native GeForce RTX 3060 with D3D11. They cover selected, unselected and hovered states, linked communities, single real and unassigned territories, a dense selection, and 720- and 1280-pixel canvases. The linked case matched closely after accounting for the one-pixel host border. The bounded labels and compact framing differ as described above. The native interaction harness verified title and short ID hover, dismissal, click and keyboard selection, duplicate-click suppression, incident-edge limits, rotate, wheel zoom, reset and right-pan stability during a delayed viewport response.
+
+The locked offline host suite passed 95 tests with one ignored scale characterization. The release dashboard typecheck and four Node tests passed, and the same script built both host assets. The focused graph render, dashboard and setup API run passed 12 Python tests.
+
+The fresh release benchmark reran the established paired harness. All 27 production source files used by the prebuilt candidate matched the current Rust files by SHA-256. Each row is one serial run. The baseline is 8136458.
+
+| Nodes / input edges | Baseline prepare | Candidate prepare | Baseline peak working set | Candidate peak working set |
+| --- | ---: | ---: | ---: | ---: |
+| 25k / 2.5M | 0.78 s | 1.26 s | 258 MB | 377 MB |
+| 100k / 1M | 0.40 s | 0.77 s | 150 MB | 195 MB |
+| 1M / 10M | 4.05 s | 7.59 s | 1,447 MB | 1,911 MB |
+
+Both release-gated tiers stayed below the time and memory ceilings. The million-node tier packed 32,129,472 bytes in chunks and a 26,562-byte manifest. A second comparison ran the previous rich React renderer and the port against the same candidate binary chunks using SwiftShader at 1280×900. Each case has one six-second overview sample and one eight-second detail sample. Every run reached detail LOD and fetched the same bytes in its pair without page errors.
+
+| Nodes / input edges | Detail p95 previous / port | Used JS heap at detail previous / port |
+| --- | ---: | ---: |
+| 100k / 1M | 277.8 / 270.9 ms | 9.91 / 9.77 MB |
+| 1M / 10M | 319.4 / 326.4 ms | 10.66 / 16.80 MB |
+
 ## Related docs
 
 - [HU09 native file-dialog specification](hu09-native-file-dialogs-onboarding-spec-2026-11-09.md)

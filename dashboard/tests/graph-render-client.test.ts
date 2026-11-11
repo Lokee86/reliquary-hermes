@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { GraphRenderClient } from "../src/graph/render/client";
+import { findFrameLabel } from "../src/graph/render/labels";
 import type { GraphRenderTransport } from "../src/graph/render/transport";
 import type { GraphRenderManifest } from "../src/graph/render/types";
 
@@ -124,12 +125,23 @@ assert.equal(first.nodeChunks[0].positions.buffer, first.nodeChunks[0].raw.buffe
 assert.equal(first.edgeChunks[0].endpoints[5], 6);
 assert.equal(first.edgeChunks[0].endpoints.buffer, first.edgeChunks[0].raw.buffer);
 assert.deepEqual(
-  first.labels.map((label) => [label.renderId, label.label, label.importance, label.position]),
+  first.labels.map(({ renderId, label, importance, position, size, packedColor }) => (
+    [renderId, label, importance, position, size, packedColor]
+  )),
   [
-    [11, "Eleven", 4, [4,5,6]],
-    [10, "Ten", 1, [1,2,3]],
+    [11, "Eleven", 4, [4,5,6], 2.5, 0x445566ff],
+    [10, "Ten", 1, [1,2,3], 1.5, 0x112233ff],
   ],
 );
+const chunkWithoutLabels = { ...first.nodeChunks[0], labelCandidates: [] };
+assert.deepEqual(findFrameLabel([chunkWithoutLabels], 11, "Selected Memory"), {
+  renderId: 11,
+  label: "Selected Memory",
+  position: [4, 5, 6],
+  size: 2.5,
+  packedColor: 0x445566ff,
+});
+assert.equal(findFrameLabel([chunkWithoutLabels], 12, "Nonresident Memory"), null);
 assert.deepEqual(
   client.pickNodeChunkIds([0,0,-100], [0,0,1]),
   [0],

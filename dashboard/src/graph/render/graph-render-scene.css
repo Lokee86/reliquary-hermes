@@ -32,23 +32,36 @@
   background: #242036;
 }
 
-.graph-render-tooltip {
+.graph-render-scene .graph-tooltip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  visibility: hidden;
+  pointer-events: none;
   display: grid;
   gap: 3px;
-  min-width: 150px;
-  max-width: 260px;
-  border: 1px solid rgba(183, 161, 224, 0.42);
-  border-radius: 8px;
+  max-width: 320px;
   padding: 8px 10px;
-  color: #f5f0ff;
-  background: rgba(15, 17, 27, 0.96);
-  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.35);
-  font-size: 0.82rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(18, 16, 27, 0.95);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  color: #e6dfed;
+  white-space: nowrap;
 }
 
-.graph-render-tooltip span {
-  color: #bcb2d2;
+.graph-render-scene .graph-tooltip strong {
+  max-width: 290px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 0.72rem;
+}
+
+.graph-render-scene .graph-tooltip span {
+  color: #756e7e;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.62rem;
 }
 
 .graph-render-relationships {

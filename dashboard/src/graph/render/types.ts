@@ -97,6 +97,8 @@ export interface GraphRenderLabel {
   label: string;
   importance: number;
   position: GraphRenderVec3;
+  size: number;
+  packedColor: number;
 }
 
 export interface GraphRenderFrame {

@@ -1,45 +1,31 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import * as THREE from "three";
+import { EdgeLines } from "./RenderEdgeChunk";
+import { edgeIntensityScale, setPackedColor } from "./renderColors";
 import type { GraphRenderIncidentEdge, GraphRenderNeighborhood } from "./types";
 
 export function RenderSelectionEdges({ neighborhood }: { neighborhood: GraphRenderNeighborhood | null }) {
-  const geometry = useMemo(() => {
+  const buffers = useMemo(() => {
     if (!neighborhood || neighborhood.edges.length === 0) return null;
-    const positions = new Float32Array(neighborhood.edges.length * 6);
-    const colors = new Float32Array(neighborhood.edges.length * 6);
+    const count = neighborhood.edges.length;
+    const endpoints = new Float32Array(count * 6);
+    const packedColors = new Uint32Array(count);
+    const weights = new Float32Array(count);
     neighborhood.edges.forEach((edge, index) => {
-      const offset = index * 6;
-      positions.set(edge.sourcePosition, offset);
-      positions.set(edge.targetPosition, offset + 3);
-      const packed = edge.style.packedColor >>> 0;
-      const strength = Math.min(1, Math.max(0.5, 0.68 + edge.weight * 0.3));
-      colors[offset] = ((packed >>> 24) & 0xff) / 255 * strength;
-      colors[offset + 1] = ((packed >>> 16) & 0xff) / 255 * strength;
-      colors[offset + 2] = ((packed >>> 8) & 0xff) / 255 * strength;
-      colors[offset + 3] = colors[offset];
-      colors[offset + 4] = colors[offset + 1];
-      colors[offset + 5] = colors[offset + 2];
+      endpoints.set(edge.sourcePosition, index * 6);
+      endpoints.set(edge.targetPosition, index * 6 + 3);
+      packedColors[index] = edge.style.packedColor;
+      weights[index] = edge.weight;
     });
-    const value = new THREE.BufferGeometry();
-    value.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    value.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-    return value;
+    return { endpoints, packedColors, weights };
   }, [neighborhood]);
-  useEffect(() => () => geometry?.dispose(), [geometry]);
 
-  if (!geometry) return null;
+  if (!buffers) return null;
+  // As in Warlock, each incident segment has one selected endpoint.
+  const intensity = 0.04 * edgeIntensityScale(buffers.weights.length);
   return (
     <group>
-      <lineSegments geometry={geometry} renderOrder={10}>
-        <lineBasicMaterial
-          vertexColors
-          transparent
-          opacity={0.95}
-          blending={THREE.AdditiveBlending}
-          depthWrite={false}
-          toneMapped={false}
-        />
-      </lineSegments>
+      <EdgeLines {...buffers} intensity={intensity} renderOrder={10} />
       {neighborhood?.edges.filter((edge) => edge.directed).map((edge, index) => (
         <DirectedMarker key={`${edge.sourceRenderId}:${edge.targetRenderId}:${index}`} edge={edge} />
       ))}
@@ -54,13 +40,7 @@ function DirectedMarker({ edge }: { edge: GraphRenderIncidentEdge }) {
   const length = delta.length();
   if (length <= 0) return null;
   const size = Math.min(1.4, Math.max(0.12, length * 0.05));
-  const packed = edge.style.packedColor >>> 0;
-  const color = new THREE.Color().setRGB(
-    ((packed >>> 24) & 0xff) / 255,
-    ((packed >>> 16) & 0xff) / 255,
-    ((packed >>> 8) & 0xff) / 255,
-    THREE.SRGBColorSpace,
-  );
+  const color = setPackedColor(new THREE.Color(), edge.style.packedColor);
   const direction = delta.normalize();
   const position = from.addScaledVector(direction, length * 0.76);
   const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);

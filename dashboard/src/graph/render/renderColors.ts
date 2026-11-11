@@ -1,31 +1,16 @@
-export function nodeRgb(
-  packed: Uint32Array,
-  renderIds: Uint32Array,
-  selectedRenderId: number | null,
-  hoveredRenderId: number | null = null,
-) {
-  const rgb = new Uint8Array(packed.length * 3);
-  for (let index = 0; index < packed.length; index += 1) {
-    const emphasized = (selectedRenderId === null && hoveredRenderId === null)
-      || renderIds[index] === selectedRenderId
-      || renderIds[index] === hoveredRenderId;
-    writeRgb(rgb, index * 3, packed[index], emphasized ? 1 : 0.16);
-  }
-  return rgb;
+import type { Color } from "three";
+
+export function setPackedColor(color: Color, packed: number): Color {
+  return color.setHex(packed >>> 8);
 }
 
-export function edgeRgb(packed: Uint32Array, weights: Float32Array) {
-  const rgb = new Uint8Array(packed.length * 6);
-  for (let index = 0; index < packed.length; index += 1) {
-    const intensity = Math.max(0.08, Math.min(1, weights[index] * 0.7));
-    writeRgb(rgb, index * 6, packed[index], intensity);
-    writeRgb(rgb, index * 6 + 3, packed[index], intensity);
-  }
-  return rgb;
+// Warlock model/visuals.ts at d9e38cb.
+export function nodeGlowBoost(r: number, g: number, b: number): number {
+  const blue = Math.max(0, b - Math.max(r, g));
+  const red = Math.max(0, r - Math.max(g, b));
+  return 1.35 + blue * 2.4 + red * 0.9;
 }
 
-function writeRgb(target: Uint8Array, offset: number, packed: number, intensity: number) {
-  target[offset] = Math.round(((packed >>> 24) & 0xff) * intensity);
-  target[offset + 1] = Math.round(((packed >>> 16) & 0xff) * intensity);
-  target[offset + 2] = Math.round(((packed >>> 8) & 0xff) * intensity);
+export function edgeIntensityScale(count: number): number {
+  return count <= 2500 ? 1 : Math.max(0.05, Math.sqrt(2500 / count));
 }

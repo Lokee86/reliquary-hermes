@@ -7,9 +7,8 @@ import type { GraphRenderNodeChunk } from "./types";
 interface Props {
   client: GraphRenderClient;
   chunks: readonly GraphRenderNodeChunk[];
-  markerScale: number;
   pointsByChunk: Map<number, THREE.Points | THREE.InstancedMesh>;
-  onHover: (renderId: number | null, pointer?: { x: number; y: number }) => void;
+  onHover: (renderId: number | null, size?: number) => void;
   onPick: (renderId: number, position: readonly [number, number, number]) => void;
   selectedRenderId: number | null;
 }
@@ -17,7 +16,6 @@ interface Props {
 export function BoundedPicker({
   client,
   chunks,
-  markerScale,
   pointsByChunk,
   onHover,
   onPick,
@@ -26,9 +24,9 @@ export function BoundedPicker({
   const { camera, gl } = useThree();
   const raycaster = useMemo(() => {
     const value = new THREE.Raycaster();
-    value.params.Points = { threshold: 3 * markerScale };
+    value.params.Points = { threshold: 3 };
     return value;
-  }, [markerScale]);
+  }, []);
   const pointer = useMemo(() => new THREE.Vector2(), []);
   const chunkById = useMemo(
     () => new Map(chunks.map((chunk) => [chunk.chunkId, chunk])),
@@ -78,6 +76,7 @@ export function BoundedPicker({
       const positionOffset = itemIndex * 3;
       return {
         renderId: chunk.renderIds[itemIndex],
+        size: chunk.sizes[itemIndex],
         position: [
           chunk.positions[positionOffset],
           chunk.positions[positionOffset + 1],
@@ -89,12 +88,9 @@ export function BoundedPicker({
     const publishHover = (event: PointerEvent) => {
       const hit = pickAt(event);
       const renderId = hit?.renderId ?? null;
-      if (renderId === hovered.current) {
-        if (renderId !== null) onHover(renderId, { x: event.clientX, y: event.clientY });
-        return;
-      }
+      if (renderId === hovered.current) return;
       hovered.current = renderId;
-      onHover(renderId, renderId === null ? undefined : { x: event.clientX, y: event.clientY });
+      onHover(renderId, hit?.size);
     };
 
     const move = (event: PointerEvent) => {
