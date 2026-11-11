@@ -215,3 +215,38 @@ test("long Unicode profile and owner scopes remain distinct and persist", () => 
   assert.deepEqual(loadStoredGraphView(ownerA)?.position, [0, 0, 10]);
   assert.equal(loadStoredGraphView(ownerB), null);
 });
+
+test("finite extreme camera vectors normalize safely and overflowed bounds are rejected", () => {
+  const hugeUp = parseStoredGraphView({
+    position: [0, 0, 1],
+    target: [0, 0, 0],
+    up: [0, 1.7e308, 1.7e308],
+  });
+  assert.ok(hugeUp);
+  assert.ok(hugeUp.up.every(Number.isFinite));
+  assert.ok(Math.abs(Math.hypot(...hugeUp.up) - 1) < 1e-12);
+
+  const distantView = parseStoredGraphView({
+    position: [-1.7e308, 0, 1],
+    target: [1.7e308, 0, 0],
+    up: [0, 1, 0],
+  });
+  assert.ok(distantView);
+  assert.equal(isStoredGraphViewWithinBounds(distantView, { min: [-1, -1, -1], max: [1, 1, 1] }), false);
+
+  const ordinaryView = parseStoredGraphView({
+    position: [0, 0, 3], target: [0, 0, 0], up: [0, 1, 0],
+  });
+  assert.ok(ordinaryView);
+  assert.equal(isStoredGraphViewWithinBounds(ordinaryView, {
+    min: [-1.7e308, -1, -1], max: [1.7e308, 1, 1],
+  }), false);
+
+  const largeBoundsView = parseStoredGraphView({
+    position: [1.65e308, 0, 3], target: [1.65e308, 0, 0], up: [0, 1, 0],
+  });
+  assert.ok(largeBoundsView);
+  assert.equal(isStoredGraphViewWithinBounds(largeBoundsView, {
+    min: [1.6e308, -1, -1], max: [1.7e308, 1, 1],
+  }), false);
+});
