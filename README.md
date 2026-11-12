@@ -6,6 +6,16 @@ Hermes remains canonical history. HP04 copies the permitted transcript using sta
 
 Use the local service guide to configure existing owners and activate the provider through `hermes memory setup`. HP05 owns recall and model tools. HP06 owns distribution and installation acceptance. [Local service guide](docs/local-service.md)
 
+## Hermes-owned inference
+
+Hosted processing and semantic recall use the active profile's `ctx.llm` for structured completions, decisions, and query/document embeddings. Select the embedding model in Hermes's **Configure auxiliary models → Embedding** picker. Hermes owns provider selection, authentication, credential renewal, and model settings; Reliquary setup only selects REL/PHY owners.
+
+Embedding support requires a compatible Hermes build containing [Hermes PR #154202](https://github.com/NousResearch/hermes-agent/pull/154202), audited at `168a923023a7018be3dbf66530531dd20b1834b9`. Earlier builds report `embedding_unavailable`. The initial API supports compatible API-key embedding routes; chat-only OAuth grants such as Codex cannot generate embeddings. Unknown custom/OpenRouter models need a shared query/document-space declaration in Hermes.
+
+Do not provision a Reliquary model API key, routes JSON, or `reliquary.cfg` for hosted inference. Existing `processing.json` and configuration files remain on disk and are inactive in hosted mode. A Hermes failure reports unavailable; it never falls back to standalone credentials. The random `RELIQUARY_HERMES_TOKEN` still authenticates the local service transport and is provisioned by owner setup.
+
+Standalone Reliquary retains its existing CVCFG and credential behavior. Embedding model, dimensions, input handling, or normalization changes require the existing compatibility/reprocessing workflow; incompatible vector spaces are never mixed.
+
 ## Contract and evidence
 
 - [Documentation index and ownership](docs/INDEX.md): canonical document owners and minimal fixture policy.
@@ -26,7 +36,7 @@ Run from this repository using an existing Python 3.11+ interpreter with pytest 
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 $env:PYTHONDONTWRITEBYTECODE='1'
 $env:HP01_HERMES_CHECKOUT='C:\!bin\workspace\hermes-agent-reliquary-hp01-v023'
-python -B -m pytest -q --basetemp=.pytest_tmp
+python -B -m pytest -q --basetemp=.pytest/_tmp
 ```
 
 The source probes use synthetic history and an isolated Hermes profile. They require no model credentials, network calls or Cargo builds. Without `HP01_HERMES_CHECKOUT`, the pinned-ABC provider tests are explicitly skipped; that reduced run is not equivalent evidence.

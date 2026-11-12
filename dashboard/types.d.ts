@@ -221,7 +221,6 @@ export interface SetupCandidate {
   main_rel: string;
   active_phy: string;
   projects?: Record<string, string>;
-  config_path: string | null;
 }
 
 export interface SetupStatus {
@@ -230,12 +229,10 @@ export interface SetupStatus {
   capture_status?: "unavailable" | "enrolled" | "setup_required";
   desktop_native_mutations: boolean;
   local_dialogs_available: boolean;
-  config_path: string | null;
   defaults: {
     main_rel: string | null;
     active_phy: string | null;
     projects: Record<string, string>;
-    config_path: string | null;
   };
 }
 
@@ -256,7 +253,6 @@ export interface SetupReport {
   main_rel: SetupOwner;
   active_phy: SetupOwner;
   projects: Record<string, SetupOwner>;
-  config: SetupCheck;
   topology_error: string | null;
 }
 
@@ -272,8 +268,8 @@ export interface SetupProjectInventory {
 
 export type SetupCreateKind = "general_rel" | "project_rel" | "phy";
 
-export type SetupDialogMode = "open_rel" | "open_phy" | "open_config" | "save_rel" | "save_phy";
+export type SetupDialogMode = "open_rel" | "open_phy" | "save_rel" | "save_phy";
 export type SetupDialogResult = { status: "selected"; path: string } | { status: "cancelled" } | { status: "unavailable" };
 
-export type SetupPicker = (kind: "REL" | "PHY" | "config", signal?: AbortSignal) =>
+export type SetupPicker = (kind: "REL" | "PHY", signal?: AbortSignal) =>
   Promise<string | null | SetupDialogResult>;

@@ -6,6 +6,14 @@ Record reproducible checks for the standalone provider and dashboard contracts.
 
 ## Overview
 
+### Hosted inference migration gate
+
+The upstream `ctx.llm.embed/aembed` PR is [Hermes #154202](https://github.com/NousResearch/hermes-agent/pull/154202), pinned at `168a923023a7018be3dbf66530531dd20b1834b9`. Its facade/transport tests passed 83 cases, plugin task/picker tests passed 47, and auxiliary-client/credential regression tests passed 229 (359 distinct tests). All 16 Hermes repository checks passed. Tests use synthetic loopback providers and isolated profile credentials; no live provider or Memory corpus was probed.
+
+The Reliquary gate must also run the locked offline Root workspace/CLI/external-consumer suites, the native host suite, all Python contracts with process binaries, dashboard typecheck/tests/build, architecture/documentation checks, and the real profile-bound `ctx.llm` acceptance fixture. Unit results alone do not establish import, processing, vector recall, replay, framing, lifecycle, or model-change acceptance. Final integration evidence belongs here after that gate completes.
+
+For the real inference fixture, set `HP_INFERENCE_HERMES_CHECKOUT` to the exact upstream inference revision. Keep `HP01_HERMES_CHECKOUT` on the independent audited history/ABC baseline. Use a disposable patched Hermes history checkout for `HU08_HERMES_INSTALLED_CHECKOUT`; never use a live profile as test state. Set `HP03_HOST_BINARY` and `HP03_RELIQUARY_CLI` to binaries built against the same isolated Root source. All temporary owner copies, logs, and caches stay in the worktrees; pytest uses `.pytest/_tmp`.
+
 HP01 verifies the pinned Hermes interfaces and the Python provider, owner routing and copied-source fixtures. HP02 verifies the selected-return bridge, copied-source import and dashboard product operations through the public Root API.
 
 ## Standalone checks

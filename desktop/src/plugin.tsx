@@ -13,7 +13,6 @@ const route = "/reliquary";
 const pickers = {
   REL: { title: "Choose a Reliquary REL", filters: [{ name: "Reliquary REL", extensions: ["rel"] }] },
   PHY: { title: "Choose a Reliquary PHY", filters: [{ name: "Reliquary PHY", extensions: ["phy"] }] },
-  config: { title: "Choose a Reliquary configuration", filters: [{ name: "Reliquary configuration", extensions: ["cfg"] }] },
 };
 
 const controls: HostControls = {

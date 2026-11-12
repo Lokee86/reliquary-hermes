@@ -5,6 +5,7 @@ import logging
 
 
 HERMES_REVISION = "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
+HERMES_INFERENCE_REVISION = "168a923023a7018be3dbf66530531dd20b1834b9"
 PROTOCOL_VERSION = 1
 logger = logging.getLogger(__name__)
 

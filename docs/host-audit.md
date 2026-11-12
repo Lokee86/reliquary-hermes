@@ -6,6 +6,12 @@ Record the pinned Hermes lifecycle, source identity, privacy and plugin surfaces
 
 ## Overview
 
+### Authenticated inference extension
+
+The independent embedding API is audited at Hermes `168a923023a7018be3dbf66530531dd20b1834b9`, submitted as [Hermes PR #154202](https://github.com/NousResearch/hermes-agent/pull/154202). `PluginContext.llm` supplies `complete_structured/acomplete_structured` and additive `embed/aembed`. The embedding selection belongs to `auxiliary.embedding`; override trust gates, profile-scoped credentials, pool recovery, and unsupported-grant rejection remain in Hermes. The upstream gate passed 359 distinct tests and all 16 repository checks using deterministic local models and test credentials.
+
+`HERMES_INFERENCE_REVISION` pins that capability audit separately from the existing history/ABC protocol baseline below. It is not a claim that the inference PR changes the history contract. Runtime registration checks the actual facade capability, and older builds report `embedding_unavailable`. The dedicated worker inherits the owning profile and secret context, has its own scope-free runtime lease, and invokes no raw provider API or credential-copy interface. Root receives only signed correlated results and validates schemas and vector shape again. [Inference protocol](protocol.md#hosted-inference)
+
 The 2026-11-08 HP01-R1 audit repins the HP01 contract to stable Hermes v0.23.0. Local source probes exercise persistence, provider egress and committed lifecycle dispatch against synthetic history in isolated profiles.
 
 ## Pin and source authority
