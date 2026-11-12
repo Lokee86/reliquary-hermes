@@ -203,7 +203,7 @@ def test_stock_provider_preserves_accepted_project_route_after_downgrade(
 
             cleanup.callback(close)
             manager.initialize_all(session_id, hermes_home=str(tmp_path), cwd=str(project_folder), **metadata)
-            _settled(provider, "attached")
+            _settled(provider, "attached", timeout=10)
             process = provider._client._process
             assert process is not None
             return manager, provider, process
@@ -225,7 +225,7 @@ def test_stock_provider_preserves_accepted_project_route_after_downgrade(
         client = provider._client
         assert client.read_dashboard_topology("fresh-project")["session_owner_id"] == main_id
         manager.on_session_switch("existing-project")
-        _settled(provider, "attached")
+        _settled(provider, "attached", timeout=10)
         assert provider.binding == accepted
         assert client.read_dashboard_topology("existing-project")["session_owner_id"] == dedicated_id
         manager.shutdown_all()

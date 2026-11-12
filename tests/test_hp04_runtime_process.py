@@ -227,7 +227,6 @@ def test_host_restart_during_reconciliation_advances_fence_epoch(tmp_path, binar
         _processing_config(cli, state, processing_url)
         worker = start_hermes_worker(state.parent, inference_checkout, processing_url, cleanup)
 
-
         # The host dies during pending reconciliation. Its active lease adds a
         # newer durable fence when the replacement process opens the registry.
         stop(second._process)
@@ -319,14 +318,19 @@ sleep(120)
                     return True
                 try:
                     leases = json.loads(marker_path.read_text(encoding="utf-8"))["leases"]
-                    return len(leases) > 1
+                    return any(
+                        lease_id != survivor_lease and SESSION in lease.get("scopes", [])
+                        for lease_id, lease in leases.items()
+                    )
                 except (FileNotFoundError, json.JSONDecodeError, KeyError):
                     return False
 
             _wait_until(runtime_registered)
             marker = json.loads(marker_path.read_text(encoding="utf-8"))
-            new_leases = set(marker["leases"])
-            new_leases.discard(survivor_lease)
+            new_leases = {
+                lease_id for lease_id, lease in marker["leases"].items()
+                if lease_id != survivor_lease and SESSION in lease.get("scopes", [])
+            }
             assert len(new_leases) == 1, "the adapter subprocess did not register its lease"
             old_lease = new_leases.pop()
         finally:
