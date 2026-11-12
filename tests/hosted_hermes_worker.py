@@ -14,6 +14,11 @@ from threading import Thread
 
 
 INFERENCE_REVISION = "168a923023a7018be3dbf66530531dd20b1834b9"
+# HostedInferenceWorker.stop() can spend at most 8s cancelling a broker job
+# (3s connect + 5s response), 2s joining its polling thread, 6s reporting
+# worker-error (3s connect + 3s response), and 4.5s detaching its runtime lease
+# (3s connect + 1.5s response). Leave 3s for local teardown and scheduling.
+_WORKER_STOP_CONTROL_SECONDS = 23.5
 
 
 def decode_hermes_sdk_request(request: dict) -> dict:
@@ -77,14 +82,17 @@ def configure_hermes(home: Path, model_url: str, *, embedding_model: str = "fixt
 
 
 def start_hermes_worker(home: Path, checkout: Path, model_url: str, cleanup, *,
-                        embedding_model: str = "fixture-embedding", dimensions: int = 2) -> subprocess.Popen:
+                        embedding_model: str = "fixture-embedding", dimensions: int = 2,
+                        configure: bool = True) -> subprocess.Popen:
     """Register this plugin in a subprocess; its ctx.llm is Hermes' real PluginLlm facade."""
     home = home.resolve()
     checkout = checkout.resolve()
-    configure_hermes(home, model_url, embedding_model=embedding_model, dimensions=dimensions)
+    if configure:
+        configure_hermes(home, model_url, embedding_model=embedding_model, dimensions=dimensions)
     repo_src = Path(__file__).resolve().parents[1] / "src"
     script = r'''
 import json
+import os
 import sys
 from pathlib import Path
 from hermes_constants import reset_hermes_home_override, set_hermes_home_override
@@ -93,6 +101,14 @@ from hermes_cli.plugins import PluginContext, PluginManager
 from hermes_cli.plugins_manifest import PluginManifest
 
 home = Path(sys.argv[1])
+# Hermes may redirect sys.stdout while running plugin/model calls. Keep a
+# private duplicate of the original control pipe so lifecycle replies remain
+# readable by the parent regardless of that redirection.
+control_output = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding="utf-8", buffering=1)
+control_input = os.fdopen(os.dup(sys.stdin.fileno()), "r", encoding="utf-8")
+def emit(value):
+    print(json.dumps(value), file=control_output, flush=True)
+
 scope = set_hermes_home_override(home)
 secrets = load_env_file(home / ".env")
 secret_scope = set_secret_scope(secrets, profile_home=str(home))
@@ -135,44 +151,47 @@ def install_audit(context):
     llm.aembed = audited_embed
 
 def stop(context):
-    for registration in reversed(context._staged):
-        registration.dispose()
+    # on_unload() registrations are owned by PluginManager's ledger, not
+    # context._staged. Use the real unload path so the worker releases its lease.
+    context._manager.unload(context.manifest)
 
 context = start()
 marker.write_text(json.dumps({"registered": True}), encoding="utf-8")
-print(json.dumps({"event": "started", "registered": True}), flush=True)
+emit({"event": "started", "registered": True})
 try:
-    for line in sys.stdin:
+    for line in control_input:
         try:
             command = json.loads(line)
         except ValueError:
-            print(json.dumps({"event": "error", "code": "invalid_command"}), flush=True)
+            emit({"event": "error", "code": "invalid_command"})
             continue
         operation = command.get("op") if isinstance(command, dict) else None
         if operation == "status":
-            print(json.dumps({"event": "status", "registered": bool(contexts)}), flush=True)
+            emit({"event": "status", "registered": bool(contexts)})
         elif operation == "stop":
             for current in reversed(contexts):
                 stop(current)
             contexts.clear()
             marker.unlink(missing_ok=True)
-            print(json.dumps({"event": "stopped", "registered": False}), flush=True)
+            emit({"event": "stopped", "registered": False})
         elif operation == "start":
             if not contexts:
                 context = start()
                 marker.write_text(json.dumps({"registered": True}), encoding="utf-8")
-            print(json.dumps({"event": "started", "registered": bool(contexts)}), flush=True)
+            emit({"event": "started", "registered": bool(contexts)})
         elif operation == "quit":
-            print(json.dumps({"event": "quitting"}), flush=True)
+            emit({"event": "quitting"})
             break
         else:
-            print(json.dumps({"event": "error", "code": "unknown_operation"}), flush=True)
+            emit({"event": "error", "code": "unknown_operation"})
 finally:
     for current in reversed(contexts):
         stop(current)
     marker.unlink(missing_ok=True)
     reset_secret_scope(secret_scope)
     reset_hermes_home_override(scope)
+    control_input.close()
+    control_output.close()
 '''
     inherited = {key: value for key, value in os.environ.items()
                  if key.upper() in {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR"}}
@@ -219,8 +238,9 @@ def worker_command(process: subprocess.Popen, operation: str) -> dict:
         raise AssertionError("Hermes inference worker process is not running")
     process.stdin.write(json.dumps({"op": operation}) + "\n")
     process.stdin.flush()
+    timeout = _WORKER_STOP_CONTROL_SECONDS if operation == "stop" else 5.0
     try:
-        line = process._hosted_output_queue.get(timeout=5)
+        line = process._hosted_output_queue.get(timeout=timeout)
     except Empty:
         raise AssertionError("Hermes inference worker control response timed out") from None
     if not line:
