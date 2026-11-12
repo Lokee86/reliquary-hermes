@@ -43,11 +43,26 @@ pub(crate) struct RetrievalService {
 }
 
 impl RetrievalService {
-    pub(crate) fn open(state_dir: &Path) -> Result<Self, &'static str> {
+    pub(crate) fn open(_state_dir: &Path) -> Result<Self, &'static str> {
         Ok(Self {
-            runtime: crate::source_ingest::configured_runtime(state_dir)?.map(Arc::new),
+            runtime: None,
             turns: BTreeMap::new(),
         })
+    }
+
+    pub(crate) fn bind_runtime(&mut self, runtime: Arc<ConfiguredRuntime>) {
+        self.runtime = Some(runtime);
+    }
+
+    pub(crate) fn take_for_work(&mut self) -> Self {
+        Self {
+            runtime: self.runtime.clone(),
+            turns: std::mem::take(&mut self.turns),
+        }
+    }
+
+    pub(crate) fn restore_work(&mut self, mut work: Self) {
+        self.turns.append(&mut work.turns);
     }
 
     pub(crate) fn dashboard_recall(&self, session: &str) -> Value {

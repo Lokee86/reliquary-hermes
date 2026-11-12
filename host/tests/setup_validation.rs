@@ -1,6 +1,4 @@
-use reliquary_memory::{
-    CredentialId, Gateway, OwnerScope, Phylactery, Rel, ReliquaryConfig, SecretString,
-};
+use reliquary_memory::{Gateway, OwnerScope, Phylactery, Rel};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -15,7 +13,6 @@ struct Fixture {
     main: PathBuf,
     phy: PathBuf,
     project: PathBuf,
-    config: PathBuf,
 }
 
 impl Fixture {
@@ -27,23 +24,15 @@ impl Fixture {
         let main = scratch.path().join("main.owner");
         let phy = scratch.path().join("person.owner");
         let project = scratch.path().join("project.owner");
-        let config = scratch.path().join("processing.cfg");
         Rel::create(&main, OwnerScope::Organization).unwrap();
         Phylactery::create(&phy).unwrap();
         Rel::create(&project, OwnerScope::Project).unwrap();
-        let mut processing = ReliquaryConfig::new_blank(&config);
-        processing.add_api_key(
-            CredentialId::new("fixture-key").unwrap(),
-            SecretString::new("synthetic-setup-test-key").unwrap(),
-        );
-        processing.save().unwrap();
         Self {
             scratch,
             state,
             main,
             phy,
             project,
-            config,
         }
     }
 
@@ -55,8 +44,7 @@ impl Fixture {
                 "main_rel": self.main,
                 "active_phy": self.phy,
                 "projects": {"demo": self.project}
-            },
-            "config_path": self.config
+            }
         })
     }
 
@@ -102,7 +90,7 @@ impl Fixture {
 }
 
 #[test]
-fn detects_and_opens_real_owners_and_config_without_creating_state_or_leases() {
+fn detects_and_opens_real_owners_without_creating_state_or_leases() {
     let fixture = Fixture::new();
     let files = fixture.files();
     let contents: Vec<_> = files.iter().map(|file| fs::read(file).unwrap()).collect();
@@ -128,7 +116,6 @@ fn detects_and_opens_real_owners_and_config_without_creating_state_or_leases() {
                     "owner_id": project.owner_id(), "error": null
                 }
             },
-            "config": {"accepted": true, "opened": true, "error": null},
             "topology_error": null
         })
     );
@@ -203,26 +190,23 @@ fn project_scoped_existing_rel_is_accepted_as_general_without_mutation() {
 }
 
 #[test]
-fn rejects_unopenable_config_and_keeps_config_optional() {
+fn setup_preflight_is_owners_only_and_ignores_processing_files() {
     let fixture = Fixture::new();
-    let invalid = fixture.scratch.path().join("invalid.cfg");
-    fs::write(&invalid, b"invalid configuration").unwrap();
-    let mut request = fixture.request();
-    request["config_path"] = json!(invalid);
-    let report = fixture.report(&request);
-    assert_eq!(report["valid"], false);
-    assert_eq!(
-        report["config"],
-        json!({"accepted": false, "opened": false, "error": "invalid_processing_config"})
-    );
-
-    request["config_path"] = Value::Null;
+    fs::create_dir_all(&fixture.state).unwrap();
+    fs::write(
+        fixture.state.join("processing.json"),
+        b"invalid obsolete content",
+    )
+    .unwrap();
+    let request = fixture.request();
     let report = fixture.report(&request);
     assert_eq!(report["valid"], true);
-    assert_eq!(
-        report["config"],
-        json!({"accepted": true, "opened": false, "error": null})
-    );
+    assert!(report.get("config").is_none());
+
+    let mut obsolete = request;
+    obsolete["config_path"] = json!(fixture.scratch.path().join("invalid.cfg"));
+    let output = fixture.run(&serde_json::to_vec(&obsolete).unwrap());
+    assert!(!output.status.success());
 }
 
 #[test]
