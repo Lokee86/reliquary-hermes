@@ -6,7 +6,7 @@ import type {
   GraphRenderNodeLocation, GraphRenderNodeResolution,
 } from "./graph/render/types";
 
-export const pluginPrefix = "/api/plugins/reliquary-hermes";
+export const pluginPrefix = "/api/plugins/reliquary";
 
 export interface RequestOptions {
   method?: "GET" | "POST";

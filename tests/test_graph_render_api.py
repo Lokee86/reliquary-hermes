@@ -134,7 +134,7 @@ def render(scoped, operation, parsed):
 
 api.read_render = render
 headers = {web_server._SESSION_HEADER_NAME: web_server._SESSION_TOKEN}
-path = "/api/plugins/reliquary-hermes/graph-render-v1/node-chunk"
+path = "/api/plugins/reliquary/graph-render-v1/node-chunk"
 with TestClient(web_server.app) as client:
     assert client.post(path, json=selector).status_code in (401, 403)
     assert client.post(path, headers=headers, json={**selector, "principal_id": "forged"}).status_code == 400

@@ -253,6 +253,7 @@ def _provider_profile(home, state, rel, phy, binary):
 def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_return(
         tmp_path, binaries, pinned_provider, inference_checkout, pinned_checkout, monkeypatch):
     from agent.memory_manager import MemoryManager
+    from agent.secret_scope import load_env_file, reset_secret_scope, set_secret_scope
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
     binary, cli = binaries
@@ -287,6 +288,8 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
 
         home_scope = set_hermes_home_override(home)
         cleanup.callback(reset_hermes_home_override, home_scope)
+        secret_scope = set_secret_scope(load_env_file(home / ".env"), profile_home=str(home))
+        cleanup.callback(reset_secret_scope, secret_scope)
         def start_provider():
             # Keep the provider's native host ownership deterministic across
             # SDK worker restarts; do not let both processes cold-start it.

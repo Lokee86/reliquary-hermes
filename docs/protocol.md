@@ -2,6 +2,8 @@
 
 ## Purpose
 
+The catalog package retains the signed wire protocol and profile-fenced Hermes secret reads for its local transport token. Model inference uses the registered plugin's `ctx.llm` in a separate context-bound worker. The native process receives no model credentials. The unified root entry registers the worker, provider and `on_session_delete` hook. See [current installation and disclosure](../README.md).
+
 Freeze the bounded HP01 transport, copied-source and server-owned authority DTOs for the standalone integration.
 
 ## Overview

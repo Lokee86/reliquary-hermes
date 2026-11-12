@@ -10,7 +10,8 @@ from .capture_policy import ENROLLMENT_FILE, capture_cutoff, history_supported
 from .client import HostClient, HostUnavailable
 from .projects import active_projects, inventory
 from .settings import (
-    _read_object, _state_dir, ensure_setup_token, profile_home, profile_setup_lock, read_settings, read_token,
+    _read_object, _state_dir, ensure_setup_token, profile_home,
+    profile_setup_lock, read_settings, read_token,
     save_settings,
 )
 from .validation import ContractError, MAX_WIRE_BYTES, canonical, decode, identifier, obj, require, text
@@ -246,9 +247,8 @@ def _activate(home):
     config = _activation(home)
     plugins = config.get("plugins") or {}
     enabled = list(plugins.get("enabled") or ())
-    # The directory package registers its own cold hook. The Python package uses an entry point.
-    directory_package = (home / "plugins/reliquary/host-pin.json").is_file()
-    observer = "reliquary" if directory_package else "reliquary-source-observer"
+    # The catalog directory package owns both the provider and the cold hook.
+    observer = "reliquary"
     if observer not in (plugins.get("disabled") or ()) and observer not in enabled:
         enabled.append(observer)
     save_config({"memory": {"provider": "reliquary"}, "plugins": {"enabled": enabled}}, merge_existing=True)

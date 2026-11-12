@@ -16,6 +16,9 @@ from test_hp03_provider import pinned_provider
 
 @pytest.fixture
 def setup_profile(pinned_provider, monkeypatch, tmp_path):
+    from agent.secret_scope import reset_secret_scope, set_secret_scope
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
     home = tmp_path / "setup-profile"
     host = home / "plugins/reliquary/host/reliquary-hermes-host.exe"
     host.parent.mkdir(parents=True)
@@ -25,6 +28,7 @@ def setup_profile(pinned_provider, monkeypatch, tmp_path):
         path = home / name
         path.touch()
         candidate[field] = str(path)
+    monkeypatch.delenv(TOKEN_VAR, raising=False)
     stale_config = home / "reliquary.cfg"
     stale_config.write_bytes(b"legacy local inference config; must remain untouched\n")
     monkeypatch.setenv("RELIQUARY_CONFIG_PATH", str(stale_config))
@@ -39,10 +43,18 @@ def setup_profile(pinned_provider, monkeypatch, tmp_path):
 
     monkeypatch.setattr(setup, "_preflight", preflight)
     monkeypatch.setattr(setup.HostClient, "connect_dashboard", connect)
-    return home, candidate
+    profile_scope = set_hermes_home_override(home)
+    secret_scope = set_secret_scope({}, profile_home=str(home))
+    try:
+        yield home, candidate
+    finally:
+        reset_secret_scope(secret_scope)
+        reset_hermes_home_override(profile_scope)
 
 
 def test_fresh_setup_derives_private_values_and_preserves_existing_processing(setup_profile):
+    from agent.secret_scope import get_secret
+
     home, candidate = setup_profile
     state = home / "reliquary"
     state.mkdir()
@@ -55,13 +67,13 @@ def test_fresh_setup_derives_private_values_and_preserves_existing_processing(se
     assert not before["configured"] and before["runtime_detected"]
     assert "config_path" not in before and "config_path" not in before["defaults"]
     assert setup.validate(home, candidate)["valid"]
-    assert not (home / ".env").exists()
+    assert get_secret(TOKEN_VAR) is None
 
     assert setup.apply(home, candidate)["configured"]
     assert setup.status(home)["configured"]
     token = read_token(home)
-    assert len(token) == 43 and token in (home / ".env").read_text(encoding="utf-8")
-    for name in ("owners.json", "provider.json"):
+    assert len(token) == 43 and get_secret(TOKEN_VAR) == token
+    for name in ("owners.json", "provider.json", "processing.json"):
         assert token not in (state / name).read_text(encoding="utf-8")
     assert TOKEN_VAR not in (home / "config.yaml").read_text(encoding="utf-8")
 
@@ -138,6 +150,9 @@ def test_destination_allows_validated_paths_and_rejects_profile_or_directory_lin
 
 
 def test_exited_setup_host_releases_unaccepted_topology(pinned_provider, binaries, setup_hosts, tmp_path):
+    from agent.secret_scope import load_env_file, reset_secret_scope, set_secret_scope
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
     binary, cli = binaries
     home = tmp_path / "retry-profile"
     state = home / "reliquary"
@@ -151,11 +166,17 @@ def test_exited_setup_host_releases_unaccepted_topology(pinned_provider, binarie
     runtime_registry.write_bytes(b"corrupt startup state")
     candidate = {"main_rel": str(main), "active_phy": str(phy)}
 
-    with pytest.raises(HostUnavailable):
-        setup.apply(home, candidate)
-    assert setup_hosts[0]._process.poll() is not None
-    assert not setup.status(home)["configured"]
-    assert not (state / "topology-v1.json").exists()
+    home_scope = set_hermes_home_override(home)
+    secret_scope = set_secret_scope(load_env_file(home / ".env"), profile_home=str(home))
+    try:
+        with pytest.raises(HostUnavailable):
+            setup.apply(home, candidate)
+        assert setup_hosts[0]._process.poll() is not None
+        assert not setup.status(home)["configured"]
+        assert not (state / "topology-v1.json").exists()
 
-    runtime_registry.unlink()
-    assert setup.apply(home, {**candidate, "main_rel": str(replacement)})["configured"]
+        runtime_registry.unlink()
+        assert setup.apply(home, {**candidate, "main_rel": str(replacement)})["configured"]
+    finally:
+        reset_secret_scope(secret_scope)
+        reset_hermes_home_override(home_scope)

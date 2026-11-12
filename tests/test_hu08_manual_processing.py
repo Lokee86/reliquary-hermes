@@ -7,7 +7,7 @@ from time import monotonic, sleep
 import pytest
 
 from reliquary_hermes import history, setup
-from reliquary_hermes.settings import read_settings
+from reliquary_hermes.settings import TOKEN_VAR, read_settings
 from test_hosted_desktop_api import _release_host
 from test_hp03_host import binaries, install_setup_host, owner, setup_hosts
 from test_hp03_provider import history_provider
@@ -18,11 +18,15 @@ from hosted_hermes_worker import start_hermes_worker, worker_command
 @pytest.mark.parametrize("live_attached", [False, True], ids=["standalone", "other-session-live"])
 def test_selected_history_reaches_complete(
         tmp_path, binaries, history_provider, inference_checkout, monkeypatch, setup_hosts, live_attached):
+    from agent.secret_scope import load_env_file, reset_secret_scope, set_secret_scope
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     from hermes_state import SessionDB
 
     binary, cli = binaries
     home = tmp_path
+    # Keep a prior setup test's process-level value from becoming this profile's
+    # service credential; setup must create and scope this profile's own token.
+    monkeypatch.delenv(TOKEN_VAR, raising=False)
     rel, phy = home / "general.rel", home / "active.phy"
     rel_id = owner(cli, "rel", rel, "unspecified")
     owner(cli, "phy", phy)
@@ -31,6 +35,7 @@ def test_selected_history_reaches_complete(
     live = "live-synthetic-session"
     originals = {}
     scope = set_hermes_home_override(home)
+    secret_scope = None
     worker_cleanup = ExitStack()
     inference_worker = None
     try:
@@ -51,6 +56,7 @@ def test_selected_history_reaches_complete(
         state.mkdir()
         with _loopback_model() as url:
             _processing_config(cli, state, url)
+            secret_scope = set_secret_scope(load_env_file(home / ".env"), profile_home=str(home))
             assert setup.apply(home, {"main_rel": str(rel), "active_phy": str(phy)})["configured"]
             # _processing_config already wrote the synthetic Hermes route. Do not let
             # worker startup overwrite setup activation or leave an extra setup lease.
@@ -128,4 +134,6 @@ def test_selected_history_reaches_complete(
                 assert observed["content"] == source_row["content"]
     finally:
         worker_cleanup.close()
+        if secret_scope is not None:
+            reset_secret_scope(secret_scope)
         reset_hermes_home_override(scope)

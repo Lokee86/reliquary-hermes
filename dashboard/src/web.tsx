@@ -67,4 +67,4 @@ const host: HostBoundary = {
   },
 };
 
-browser.__HERMES_PLUGINS__.register("reliquary-hermes", () => <ReliquaryApp host={host} />);
+browser.__HERMES_PLUGINS__.register("reliquary", () => <ReliquaryApp host={host} />);

@@ -100,7 +100,7 @@ function ReliquaryPane({ ctx }: { ctx: PluginContext }) {
 }
 
 export default {
-  id: "reliquary-hermes",
+  id: "reliquary",
   name: "Reliquary",
   description: "Browse and manage Reliquary Memories in the active Hermes profile",
   register(ctx: PluginContext) {

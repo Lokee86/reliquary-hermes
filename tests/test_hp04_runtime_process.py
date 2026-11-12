@@ -293,10 +293,15 @@ def test_ungraceful_runtime_exit_fences_scope_and_reconnects(
         # A pinned Hermes process attaches through the real provider and is
         # terminated without provider.shutdown().
         repo_src = Path(__file__).resolve().parents[1] / "src"
-        script = f"""from time import sleep
+        script = f"""from pathlib import Path
+from time import sleep
+from agent.secret_scope import load_env_file, set_secret_scope
 from hermes_constants import set_hermes_home_override
+home = Path({str(state.parent)!r})
+scope = set_hermes_home_override(home)
+secrets = load_env_file(home / '.env')
+secret_scope = set_secret_scope(secrets, profile_home=str(home))
 from reliquary_hermes.provider import ReliquaryMemoryProvider
-scope = set_hermes_home_override({str(state.parent)!r})
 p = ReliquaryMemoryProvider()
 p.initialize({SESSION!r}, hermes_home={str(state.parent)!r})
 deadline = 10
@@ -393,6 +398,7 @@ sleep(120)
             "message_uid": "appended", "role": "user", "timestamp": time.time(),
             "content": TEXT["appended"],
         }]
+        from agent.secret_scope import load_env_file, reset_secret_scope, set_secret_scope
         from hermes_cli.config import load_config
         from hermes_cli.memory_setup import _post_setup_hook
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
@@ -402,6 +408,7 @@ sleep(120)
         prompts = iter(("", "", "", ""))
         monkeypatch.setattr("builtins.input", lambda _: next(prompts))
         scope = set_hermes_home_override(state.parent)
+        secret_scope = set_secret_scope(load_env_file(state.parent / ".env"), profile_home=str(state.parent))
         try:
             assert _post_setup_hook(provider, {})
             settings = read_settings(state.parent)
@@ -422,6 +429,7 @@ sleep(120)
             assert reconnect.deliver_source_job(initial_job) == initial_receipt
         finally:
             provider.shutdown()
+            reset_secret_scope(secret_scope)
             reset_hermes_home_override(scope)
 
         worker_command(host._hosted_inference_worker, "stop")

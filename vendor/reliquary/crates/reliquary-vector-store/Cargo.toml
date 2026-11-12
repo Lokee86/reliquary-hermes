@@ -1,0 +1,13 @@
+[package]
+name = "reliquary-vector-store"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+reliquary-container = { path = "../reliquary-container" }
+lodestone-packed = { path = "../../../lodestone/crates/packed" }
+sha2 = "0.10"

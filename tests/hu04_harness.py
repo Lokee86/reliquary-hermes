@@ -24,7 +24,7 @@ from test_hu03_dashboard import _stage_plugin
 
 
 REPO = Path(__file__).resolve().parents[1]
-ROUTE = "/api/plugins/reliquary-hermes/dashboard-v1"
+ROUTE = "/api/plugins/reliquary/dashboard-v1"
 SERVICE_PRINCIPAL = "principal-a"  # The existing isolated HP03 config fixture.
 
 SERVE = """
@@ -96,7 +96,7 @@ class Profile:
 def start_profile(home, profile_id, binaries, cleanup, *, project=False, seed_main=None, project_snapshot=None):
     binary, cli = binaries
     _stage_plugin(home)
-    copytree(REPO / "dashboard" / "dist", home / "plugins/reliquary-hermes/dashboard/dist")
+    copytree(REPO / "dashboard" / "dist", home / "plugins/reliquary/dashboard/dist")
     main_rel, active_phy = home / "main.rel", home / "active.phy"
     ids = {"main": owner(cli, "rel", main_rel, "unspecified"), "phy": owner(cli, "phy", active_phy)}
     seeded_memory_id = seed_main(cli, main_rel) if seed_main is not None else None

@@ -257,6 +257,7 @@ def test_two_profiles_can_explicitly_select_the_same_read_only_phy(tmp_path, bin
 
 def test_pinned_setup_provider_attaches_and_recovers_real_process(
         tmp_path, binaries, pinned_provider, monkeypatch, setup_hosts):
+    from agent.secret_scope import load_env_file, reset_secret_scope, set_secret_scope
     from hermes_cli.memory_setup import _post_setup_hook
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
@@ -281,6 +282,7 @@ def test_pinned_setup_provider_attaches_and_recovers_real_process(
         assert provider.lifecycle_status == "attached"
 
     scope = set_hermes_home_override(home)
+    secret_scope = set_secret_scope(load_env_file(home / ".env"), profile_home=str(home))
     try:
         assert _post_setup_hook(provider, {})
         [setup_host] = setup_hosts
@@ -306,5 +308,6 @@ def test_pinned_setup_provider_attaches_and_recovers_real_process(
                 stop(provider._client._process)
             provider.shutdown()
     finally:
+        reset_secret_scope(secret_scope)
         reset_hermes_home_override(scope)
     assert main_rel.read_bytes() == initial_rel
