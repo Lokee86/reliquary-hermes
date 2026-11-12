@@ -108,6 +108,13 @@ def test_real_hermes_hosted_inference_processing_recall_identity_and_restart(
         client = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
         cleanup.callback(lambda: stop(client._process) if client._process is not None else None)
         client.attach(SESSION)
+        # Accepted source copying is independent of inference availability. The
+        # worker must resume this import without another chat turn or attach.
+        job = _queue(outbox, ["accepted", "appended", "traveler"])
+        receipt = _when_ready(client, job)
+        assert outbox.acknowledge(job, receipt)
+        pending = client.read_source_status(SESSION)
+        assert pending["state"] == "unavailable" and pending["receipt"] == receipt
         worker = start_hermes_worker(home, inference_checkout, url, cleanup, dimensions=DIMENSIONS)
         log = home / "hosted-worker.log"
         def diagnostic():
@@ -117,9 +124,6 @@ def test_real_hermes_hosted_inference_processing_recall_identity_and_restart(
         assert not (state / "processing.json").exists()
         assert not list(home.rglob("*.cfg"))
 
-        job = _queue(outbox, ["accepted", "appended", "traveler"])
-        receipt = _when_ready(client, job)
-        assert outbox.acknowledge(job, receipt)
         wait_for(lambda: client.read_source_status(SESSION)["state"] == "complete", diagnostic=diagnostic)
         assert client.deliver_source_job(job) == receipt
         topology, binding = _dashboard_binding(client, SESSION)
