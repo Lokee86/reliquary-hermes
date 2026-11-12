@@ -30,7 +30,9 @@ def register(context):
             logger.warning("Reliquary hosted inference unavailable: plugin unload lifecycle is unsupported.")
     from .provider import ReliquaryMemoryProvider
 
-    context.register_memory_provider(ReliquaryMemoryProvider())
+    register_memory_provider = getattr(context, "register_memory_provider", None)
+    if callable(register_memory_provider):
+        register_memory_provider(ReliquaryMemoryProvider())
     if Path(__file__).with_name("host-pin.json").is_file():
         from .source_observer import register as register_observer
 

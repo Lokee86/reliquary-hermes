@@ -145,9 +145,9 @@ class HostClient:
         except ContractError:
             raise HostUnavailable("invalid_inference_response") from None
 
-    def attach_runtime(self, session_id: str) -> tuple[str, dict[str, int]]:
+    def attach_runtime(self, session_id: str | None) -> tuple[str, dict[str, int]]:
         """Register this provider process as a live integration runtime."""
-        session = identifier(session_id)
+        session = None if session_id is None else identifier(session_id)
         result = self._runtime_call("/v1/runtime/attach", {
             "integration_kind": "hermes", "runtime_id": self._runtime_id,
             "principal_id": self._principal_id, "session_id": session,
@@ -158,7 +158,7 @@ class HostClient:
             raise HostUnavailable("invalid_runtime_response") from None
         scopes = self._parse_reconciliation_scopes(result)
         self._runtime_lease = lease
-        self._runtime_scopes = {session}
+        self._runtime_scopes = set() if session is None else {session}
         return lease, scopes
 
     def add_runtime_scope(self, session_id: str) -> tuple[str, dict[str, int]]:

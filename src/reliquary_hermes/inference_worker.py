@@ -10,6 +10,7 @@ import logging
 import math
 import secrets
 from threading import Event
+from threading import current_thread
 import time
 from typing import Any
 
@@ -19,7 +20,7 @@ from .validation import ContractError, canonical, choice, digest, identifier, in
 
 logger = logging.getLogger(__name__)
 _PART_BYTES = 64 * 1024
-_MAX_JOB_BYTES = 2 * 1024 * 1024
+_MAX_JOB_BYTES = 8 * 1024 * 1024
 _MAX_PARTS = (_MAX_JOB_BYTES + _PART_BYTES - 1) // _PART_BYTES
 _PROBE_TEXT = "Synthetic capability probe for Reliquary hosted inference."
 _PROBE_SCHEMA = {
@@ -121,6 +122,25 @@ class HostedInferenceWorker:
                                       "correlation_id": correlation_id, "lease_epoch": epoch})
             except (HostUnavailable, ContractError, OSError):
                 pass
+        thread = self._thread
+        if thread is not None and thread is not current_thread():
+            thread.join(timeout=2.0)
+        client = self._client
+        if client is not None and self._settings is not None:
+            try:
+                discovery = client._read_discovery()
+                if discovery is not None:
+                    client.inference_call("worker-error", {
+                        "worker_id": self._worker_id, "profile_id": self._settings.profile_id,
+                        "instance_id": discovery.instance_id, "service_lease_id": discovery.lease_id,
+                        "error_code": "inference_unavailable",
+                    }, timeout=3.0)
+            except (HostUnavailable, ContractError, OSError):
+                pass
+            try:
+                client.detach_runtime()
+            except (HostUnavailable, ContractError, OSError):
+                pass
 
     def _connect(self) -> None:
         settings = read_settings(self._home)
@@ -128,6 +148,14 @@ class HostedInferenceWorker:
                             read_token(self._home), binary=settings.binary)
         self._settings = settings
         self._client = client
+        client.connect_dashboard(None)
+        require(not self._stop.is_set(), "inference_cancelled")
+        client.attach_runtime(None)
+        if self._stop.is_set():
+            try:
+                client.detach_runtime()
+            finally:
+                raise ContractError("inference_cancelled")
 
     def _call(self, operation: str, body: dict, *, timeout: float = 5.0) -> dict:
         if self._client is None:
@@ -164,16 +192,30 @@ class HostedInferenceWorker:
         return {"general": general, "embedding": embedding}
 
     def _bind_identity(self) -> None:
-        identity = asyncio.run(self._probe())
+        identity = asyncio.run(self._tracked_probe())
         assert self._settings is not None
+        require(not self._stop.is_set(), "inference_cancelled")
         scope = (self._instance_id(), self._service_lease_id())
         bound = self._call("identity", {"instance_id": self._instance_id(),
                                          "service_lease_id": self._service_lease_id(),
                                          **identity})
+        require(not self._stop.is_set(), "inference_cancelled")
         require(bound.get("state") == "bound", "inference_unavailable")
         epoch = integer(bound.get("lease_epoch"), 1, (1 << 63) - 1)
         require(bound.get("identity") == identity, "inference_identity_mismatch")
         self._identity, self._lease_epoch, self._bound_scope = identity, epoch, scope
+
+    async def _tracked_probe(self) -> dict[str, Any]:
+        self._loop = asyncio.get_running_loop()
+        task = asyncio.create_task(self._probe())
+        self._active_task = task
+        try:
+            result = await task
+            require(not self._stop.is_set(), "inference_cancelled")
+            return result
+        finally:
+            self._active_task = None
+            self._loop = None
 
     def _instance_id(self) -> str:
         assert self._client is not None
@@ -196,8 +238,15 @@ class HostedInferenceWorker:
                     self._connect()
                 if not callable(getattr(self._llm, "acomplete_structured", None)) or \
                         not callable(getattr(self._llm, "aembed", None)):
+                    if not self._unavailable_logged:
+                        logger.warning("Reliquary hosted inference unavailable (%s)", "embedding_unavailable")
+                        self._unavailable_logged = True
                     self._report_unavailable("embedding_unavailable")
                     if self._reported_capability_failure:
+                        try:
+                            self._client.detach_runtime()
+                        except (HostUnavailable, ContractError, OSError):
+                            pass
                         return
                     self._stop.wait(2.0)
                     continue
@@ -211,10 +260,24 @@ class HostedInferenceWorker:
                 self._bound_scope = None
                 if not self._unavailable_logged:
                     # The exception text is deliberately excluded: some provider stacks include payloads.
-                    logger.warning("Reliquary hosted inference worker unavailable (%s)",
-                                   getattr(exc, "code", "inference_unavailable"))
+                    logger.warning("Reliquary hosted inference worker unavailable (%s)", _safe_error_code(exc))
                     self._unavailable_logged = True
                 self._stop.wait(2.0)
+                if isinstance(exc, (HostUnavailable, OSError)):
+                    self._reset_connection()
+
+    def _reset_connection(self) -> None:
+        client, self._client = self._client, None
+        self._settings = None
+        self._identity = None
+        self._lease_epoch = None
+        self._bound_scope = None
+        self._last_heartbeat = 0.0
+        if client is not None:
+            try:
+                client.detach_runtime()
+            except (HostUnavailable, ContractError, OSError):
+                pass
 
     def _report_unavailable(self, error_code: str) -> None:
         try:
@@ -238,11 +301,10 @@ class HostedInferenceWorker:
         if discovery is None:
             raise HostUnavailable("host_unavailable")
         if self._bound_scope != (discovery.instance_id, discovery.lease_id):
-            self._identity = None
-            self._lease_epoch = None
-            self._bound_scope = None
+            self._reset_connection()
             return
         if time.monotonic() - self._last_heartbeat >= 10.0:
+            self._client.heartbeat_runtime()
             self._call("heartbeat", {"instance_id": discovery.instance_id,
                 "service_lease_id": discovery.lease_id, "lease_epoch": self._lease_epoch}, timeout=3.0)
             self._last_heartbeat = time.monotonic()
@@ -252,10 +314,13 @@ class HostedInferenceWorker:
         state = choice(claim.get("state"), {"idle", "claimed"})
         if state == "idle":
             return
+        if self._stop.is_set():
+            return
         job = self._validate_claim(claim, discovery.instance_id)
         self._active = (job["job_id"], job["correlation_id"], job["lease_epoch"])
         try:
             raw_request = self._download_request(job)
+            require(not self._stop.is_set(), "inference_cancelled")
             request = _decode_job(raw_request)
             result = asyncio.run(self._execute_with_heartbeat(job, request))
             bound_identity = self._identity["embedding" if job["operation"] == "embed" else "general"]
@@ -272,13 +337,13 @@ class HostedInferenceWorker:
             self._active = None
 
     async def _execute_with_heartbeat(self, job: dict, request: dict) -> dict[str, Any]:
+        require(not self._stop.is_set(), "inference_cancelled")
+
         async def keepalive() -> None:
             while not self._stop.is_set():
-                try:
-                    await asyncio.wait_for(self._stop.wait(), timeout=10.0)
+                await asyncio.sleep(10.0)
+                if self._stop.is_set():
                     return
-                except asyncio.TimeoutError:
-                    pass
                 discovery = self._client._read_discovery()
                 if discovery is None:
                     raise HostUnavailable("host_unavailable")
@@ -287,12 +352,21 @@ class HostedInferenceWorker:
                     "active_job_id": job["job_id"], "lease_epoch": job["lease_epoch"],
                 }, timeout=3.0)
                 self._last_heartbeat = time.monotonic()
+                await asyncio.to_thread(self._client.heartbeat_runtime)
+                await asyncio.to_thread(self._client.heartbeat_runtime)
 
         self._loop = asyncio.get_running_loop()
         call_task = asyncio.create_task(self._execute(job["operation"], request, job["deadline"]))
         self._active_task = call_task
         task = asyncio.create_task(keepalive())
         try:
+            done, _ = await asyncio.wait((call_task, task), return_when=asyncio.FIRST_COMPLETED)
+            if task in done:
+                error = task.exception()
+                call_task.cancel()
+                if error is not None:
+                    raise error
+                raise asyncio.CancelledError
             return await call_task
         finally:
             self._active_task = None
@@ -325,7 +399,7 @@ class HostedInferenceWorker:
         chunks = []
         manifest = job["manifest"]
         for index in range(manifest["part_count"]):
-            part = self._call("request-part", {"job_id": job["job_id"],
+            part = self._call_job(job, "request-part", {"job_id": job["job_id"],
                 "correlation_id": job["correlation_id"], "lease_epoch": job["lease_epoch"],
                 "part_index": index})
             expected_fields = {"job_id", "correlation_id", "lease_epoch", "part_index", "part_count",
@@ -355,21 +429,21 @@ class HostedInferenceWorker:
             required = {"instructions", "input", "json_schema", "schema_name", "purpose"}
             allowed = required | {"system_prompt", "temperature", "max_tokens"}
             require(required <= set(raw) <= allowed, "invalid_inference_request")
-            instructions = text(raw["instructions"], 32768)
+            instructions = text(raw["instructions"], _MAX_JOB_BYTES)
             blocks = raw["input"]
             require(type(blocks) is list and 1 <= len(blocks) <= 128, "invalid_inference_request")
             clean_blocks = []
             for block in blocks:
                 row = obj(block, {"type", "text"})
                 require(row["type"] == "text", "invalid_inference_request")
-                clean_blocks.append({"type": "text", "text": text(row["text"], 32768)})
+                clean_blocks.append({"type": "text", "text": text(row["text"], _MAX_JOB_BYTES)})
             schema = raw["json_schema"]
-            require(type(schema) is dict and len(canonical(schema)) <= 65536, "invalid_inference_request")
+            require(type(schema) is dict and len(canonical(schema)) <= _MAX_JOB_BYTES, "invalid_inference_request")
             call = {"instructions": instructions, "input": clean_blocks, "json_schema": schema,
                     "schema_name": text(raw["schema_name"], 128), "purpose": text(raw["purpose"], 128),
                     "timeout": timeout}
             if "system_prompt" in raw:
-                call["system_prompt"] = text(raw["system_prompt"], 32768)
+                call["system_prompt"] = text(raw["system_prompt"], _MAX_JOB_BYTES)
             if "temperature" in raw:
                 temperature = raw["temperature"]
                 require(type(temperature) in (int, float) and math.isfinite(temperature), "invalid_inference_request")
@@ -386,7 +460,7 @@ class HostedInferenceWorker:
         require(required <= set(raw) <= allowed, "invalid_inference_request")
         inputs = raw["inputs"]
         require(type(inputs) is list and 1 <= len(inputs) <= 128, "invalid_inference_request")
-        inputs = [text(item, 32768) for item in inputs]
+        inputs = [text(item, _MAX_JOB_BYTES) for item in inputs]
         require(sum(len(item.encode("utf-8")) for item in inputs) <= 1024 * 1024,
                 "invalid_inference_request")
         input_type = choice(raw["input_type"], {"query", "document"})
@@ -411,6 +485,7 @@ class HostedInferenceWorker:
                 "usage": _usage(result)}
 
     def _upload_result(self, job: dict, result: dict) -> None:
+        require(not self._stop.is_set(), "inference_cancelled")
         status = result.get("status")
         if status == "ok":
             payload = {key: result[key] for key in ("parsed", "vectors", "provider", "model", "dimensions", "usage")
@@ -425,21 +500,29 @@ class HostedInferenceWorker:
             else:
                 count = (len(raw) + _PART_BYTES - 1) // _PART_BYTES
                 manifest = {"part_count": count, "total_bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
-                start = {"status": "ok", **payload, **manifest}
+                identity = {key: result[key] for key in ("provider", "model", "dimensions", "usage")
+                            if key in result}
+                start = {"status": "ok", **identity, **manifest}
         else:
             raw = b""
             manifest = {"part_count": 0, "total_bytes": 0, "sha256": hashlib.sha256(raw).hexdigest()}
             code = result.get("error_code", "inference_failed")
             start = {"status": "error", "error_code": identifier(code), **manifest}
-        self._call("result-start", {"job_id": job["job_id"], "correlation_id": job["correlation_id"],
+        self._call_job(job, "result-start", {"job_id": job["job_id"], "correlation_id": job["correlation_id"],
             "lease_epoch": job["lease_epoch"], **start})
         if not raw:
             return
         import base64
         for index, offset in enumerate(range(0, len(raw), _PART_BYTES)):
             chunk = raw[offset:offset + _PART_BYTES]
-            reply = self._call("result-part", {"job_id": job["job_id"],
+            reply = self._call_job(job, "result-part", {"job_id": job["job_id"],
                 "correlation_id": job["correlation_id"], "lease_epoch": job["lease_epoch"],
                 "part_index": index, **manifest, "data_b64": base64.b64encode(chunk).decode("ascii")})
             require(reply.get("state") == "accepted", "inference_result_rejected")
+
+    def _call_job(self, job: dict, operation: str, body: dict) -> dict:
+        require(not self._stop.is_set(), "inference_cancelled")
+        remaining = job["deadline"] - time.monotonic()
+        require(math.isfinite(remaining) and remaining > 0, "inference_deadline")
+        return self._call(operation, body, timeout=min(5.0, remaining))
 

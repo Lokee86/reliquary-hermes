@@ -3,15 +3,19 @@
 import asyncio
 import base64
 from hashlib import sha256
+import sys
 from types import SimpleNamespace
 import time
+import types
 
 import pytest
 
 from reliquary_hermes.inference_worker import HostedInferenceWorker, _decode_job
 from reliquary_hermes import setup
+from reliquary_hermes import register as register_plugin
 from reliquary_hermes.validation import canonical
 from reliquary_hermes.validation import ContractError
+from reliquary_hermes import inference_worker as worker_module
 
 
 class FakeClient:
@@ -19,7 +23,7 @@ class FakeClient:
         self.raw = raw
 
     def inference_call(self, operation, body, *, timeout):
-        assert operation == "request-part" and timeout == 5.0
+        assert operation == "request-part" and 0 < timeout <= 5.0
         offset = body["part_index"] * (64 * 1024)
         chunk = self.raw[offset:offset + 64 * 1024]
         return {"job_id": body["job_id"], "correlation_id": body["correlation_id"],
@@ -45,6 +49,39 @@ def test_worker_executes_embedding_with_query_document_identity_and_no_overrides
     assert result["status"] == "ok"
     assert result["dimensions"] == 2 and result["provider"] == "openai-api"
     assert result["vectors"] == [[0.1, 0.2], [0.3, 0.4]]
+
+
+def test_worker_heartbeat_wait_does_not_block_model_completion(tmp_path):
+    class Llm:
+        async def aembed(self, inputs, **kwargs):
+            await asyncio.sleep(0)
+            return SimpleNamespace(vectors=[[0.1]], dimensions=1, provider="openai-api", model="embed-v1",
+                audit={"input_type_handling": "shared", "normalization": "none"})
+
+    worker = HostedInferenceWorker(Llm(), str(tmp_path))
+    worker._client = SimpleNamespace()
+    job = {"operation": "embed", "deadline": time.monotonic() + 5}
+    started = time.monotonic()
+    result = asyncio.run(worker._execute_with_heartbeat(job, {
+        "inputs": ["query"], "input_type": "query", "purpose": "test",
+    }))
+    assert result["status"] == "ok" and time.monotonic() - started < 1.0
+
+
+def test_stop_cancels_readiness_probe(tmp_path):
+    class Llm:
+        async def acomplete_structured(self, **kwargs):
+            await asyncio.Future()
+
+    async def run():
+        worker = HostedInferenceWorker(Llm(), str(tmp_path))
+        task = asyncio.create_task(worker._tracked_probe())
+        await asyncio.sleep(0)
+        worker.stop()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
 
 
 def test_worker_rejects_malformed_embedding_result_and_provider_semantics(tmp_path):
@@ -87,6 +124,7 @@ def test_job_manifest_download_checks_part_identity_and_exact_digest(tmp_path):
     worker._client = FakeClient(raw)
     worker._settings = SimpleNamespace(profile_id="profile-a")
     job = {"job_id": "job-1", "correlation_id": "corr-1", "lease_epoch": 2,
+           "deadline": time.monotonic() + 30,
            "manifest": {"part_count": (len(raw) + 64 * 1024 - 1) // (64 * 1024),
                         "total_bytes": len(raw), "sha256": sha256(raw).hexdigest()}}
     assert worker._download_request(job) == raw
@@ -104,18 +142,21 @@ def test_result_upload_splits_exact_bytes_and_reuses_manifest(tmp_path):
             self.calls = []
 
         def inference_call(self, operation, body, *, timeout):
+            assert len(canonical(body)) <= 262144
             self.calls.append((operation, body))
             return {"state": "accepted"}
 
     worker = HostedInferenceWorker(object(), str(tmp_path))
     worker._client = UploadClient()
     worker._settings = SimpleNamespace(profile_id="profile-a")
-    payload = {"status": "ok", "vectors": [[0.5] * 40000], "provider": "openai-api",
-               "model": "text-embedding-3-small", "dimensions": 40000, "usage": {}}
-    job = {"job_id": "job-1", "correlation_id": "corr-1", "lease_epoch": 2}
+    payload = {"status": "ok", "parsed": {"facts": "a" * 500000}, "provider": "openai-api",
+               "model": "gpt-test", "usage": {}}
+    job = {"job_id": "job-1", "correlation_id": "corr-1", "lease_epoch": 2,
+           "deadline": time.monotonic() + 30}
     worker._upload_result(job, payload)
     calls = worker._client.calls
     assert calls[0][0] == "result-start" and all(call[0] == "result-part" for call in calls[1:])
+    assert "parsed" not in calls[0][1] and "vectors" not in calls[0][1]
     manifest = {key: calls[0][1][key] for key in ("part_count", "total_bytes", "sha256")}
     assert manifest["part_count"] >= 2 and len(calls) == manifest["part_count"] + 1
     chunks = []
@@ -124,7 +165,7 @@ def test_result_upload_splits_exact_bytes_and_reuses_manifest(tmp_path):
         chunks.append(base64.b64decode(part["data_b64"], validate=True))
     raw = b"".join(chunks)
     assert len(raw) == manifest["total_bytes"] and sha256(raw).hexdigest() == manifest["sha256"]
-    assert _decode_job(raw)["dimensions"] == 40000
+    assert _decode_job(raw)["parsed"]["facts"] == "a" * 500000
 
 
 def test_claim_is_bound_to_registered_profile_and_lease(tmp_path):
@@ -160,3 +201,52 @@ def test_setup_defaults_ignore_legacy_processing_and_environment_config(tmp_path
     with pytest.raises(ContractError, match="invalid_fields"):
         setup._candidate(tmp_path, {"main_rel": str(tmp_path / "main.rel"),
             "active_phy": str(tmp_path / "active.phy"), "config_path": str(cfg)}, owners, defaults)
+
+
+def test_worker_connect_starts_service_and_attaches_sessionless_runtime(tmp_path, monkeypatch):
+    settings = SimpleNamespace(state_dir=tmp_path, profile_id="profile-a", principal_id="operator-a",
+                               binary=tmp_path / "host.exe")
+    calls = []
+
+    class FakeHostClient:
+        def __init__(self, *args, **kwargs):
+            calls.append(("construct", args))
+
+        def connect_dashboard(self, session_id):
+            calls.append(("start", session_id))
+
+        def attach_runtime(self, session_id):
+            calls.append(("attach", session_id))
+
+    monkeypatch.setattr(worker_module, "read_settings", lambda _home: settings)
+    monkeypatch.setattr(worker_module, "read_token", lambda _home: "synthetic-service-token")
+    monkeypatch.setattr(worker_module, "HostClient", FakeHostClient)
+    worker = HostedInferenceWorker(object(), str(tmp_path))
+    worker._connect()
+    assert calls[-2:] == [("start", None), ("attach", None)]
+
+
+def test_generic_plugin_context_starts_worker_without_memory_provider_slot(tmp_path, monkeypatch):
+    started = []
+    callbacks = []
+
+    class FakeWorker:
+        def __init__(self, llm, home):
+            assert llm is not None and home == str(tmp_path)
+
+        def start(self):
+            started.append(True)
+
+        def stop(self):
+            started.append(False)
+
+    provider = types.ModuleType("reliquary_hermes.provider")
+    provider._availability_home = lambda: tmp_path
+    provider.ReliquaryMemoryProvider = lambda: object()
+    monkeypatch.setitem(sys.modules, "reliquary_hermes.provider", provider)
+    monkeypatch.setattr(worker_module, "HostedInferenceWorker", FakeWorker)
+    context = SimpleNamespace(llm=object(), on_unload=callbacks.append)
+    register_plugin(context)
+    assert started == [True] and len(callbacks) == 1
+    callbacks[0]()
+    assert started == [True, False]
