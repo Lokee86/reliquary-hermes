@@ -3,8 +3,11 @@
 from contextlib import ExitStack, contextmanager
 from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import importlib
 import json
 import subprocess
+from pathlib import Path
+import sys
 from threading import Event, Lock, Thread
 from time import monotonic, sleep
 from types import SimpleNamespace
@@ -22,6 +25,27 @@ from test_hp04_host import (
 )
 from hosted_hermes_worker import configure_hermes, start_hermes_worker, worker_command
 from hosted_hermes_worker import decode_hermes_sdk_request
+
+
+@contextmanager
+def _pinned_turn_context(checkout):
+    """Load the HP01 turn hook even if another fixture cached HU08's module."""
+    previous = {name: module for name, module in sys.modules.items()
+                if name == "agent" or name.startswith("agent.")}
+    for name in previous:
+        sys.modules.pop(name, None)
+    checkout_text = str(checkout)
+    sys.path.insert(0, checkout_text)
+    try:
+        module = importlib.import_module("agent.turn_context")
+        assert Path(module.__file__).resolve() == (checkout / "agent" / "turn_context.py").resolve()
+        yield module._memory_turn_start_and_prefetch
+    finally:
+        for name in tuple(sys.modules):
+            if name == "agent" or name.startswith("agent."):
+                sys.modules.pop(name, None)
+        sys.modules.update(previous)
+        sys.path.remove(checkout_text)
 
 
 def _wait(predicate, *, seconds=15):
@@ -227,9 +251,8 @@ def _provider_profile(home, state, rel, phy, binary):
 
 
 def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_return(
-        tmp_path, binaries, pinned_provider, inference_checkout, monkeypatch):
+        tmp_path, binaries, pinned_provider, inference_checkout, pinned_checkout, monkeypatch):
     from agent.memory_manager import MemoryManager
-    from agent.turn_context import _memory_turn_start_and_prefetch
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
     binary, cli = binaries
@@ -407,7 +430,8 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
         status_events = []
         agent = SimpleNamespace(_memory_manager=manager, _user_turn_count=1,
                                 session_id=SESSION, _emit_status=status_events.append)
-        context = _memory_turn_start_and_prefetch(agent, "amber checklist")
+        with _pinned_turn_context(pinned_checkout) as memory_turn_start:
+            context = memory_turn_start(agent, "amber checklist")
         assert context and "amber checklist" in context.lower()
         assert status_events and "recalled" in status_events[-1].lower()
         recall = provider.recall_status()
