@@ -65,7 +65,7 @@ def _retrieval_fixture_model(*, slow_query=None):
                         result = {"version": 1, "query": state["current_query"]}
                     else:
                         candidates = state.get("candidates", [])
-                        approved = candidates[:1] if operation == "memory_query" else candidates
+                        approved = candidates[:1] if operation in {"memory_query", "refine_query"} else candidates
                         result = {"version": 1, "approved": [item["memory"] for item in approved]}
                     body_value = ({"model": normalized.get("model", "fixture-chat"),
                                    "choices": [{"message": {"content": json.dumps(result)}}]}
@@ -75,7 +75,7 @@ def _retrieval_fixture_model(*, slow_query=None):
                     vectors = []
                     for index, _text in enumerate(request["input"]):
                         vector = [0.0] * dimensions
-                        vector[index % dimensions] = 1.0
+                        vector[1 if "binder" in _text.lower() else 0] = 1.0
                         vectors.append({"index": index, "embedding": vector})
                     body_value = {"model": request.get("model", "fixture-embedding"), "data": vectors,
                                   "usage": {"prompt_tokens": len(vectors), "total_tokens": len(vectors)}}
