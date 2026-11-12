@@ -148,11 +148,16 @@ def test_real_hermes_hosted_inference_processing_recall_identity_and_restart(
         identity = json.loads(original_marker)
         assert identity["dimensions"] == DIMENSIONS and identity["model"] == "fixture-embedding"
         assert identity["input_type_handling"] == "shared" and identity["normalization"] == "none"
+        # Keep the service alive independently while deliberately unloading its
+        # inference worker. Processing above ran with only the worker's lease.
+        client.attach_runtime(None)
 
         # The new selection deliberately emits identical vectors. Provenance, rather
         # than numeric probe equality, must prevent reuse, including after restart.
         configure_hermes(home, url, embedding_model="fixture-embedding-b", dimensions=DIMENSIONS)
         wait_for(lambda: any(row.get("model") == "fixture-embedding-b" for row in audit(home)), diagnostic=diagnostic)
+        wait_for(lambda: client.read_source_status(SESSION).get("embedding_error") == "embedding_identity_stale",
+                 diagnostic=diagnostic)
         assert query(client, "changed") == "embedding_identity_stale"
         assert marker.read_bytes() == original_marker
         assert client.deliver_source_job(job) == receipt
@@ -161,6 +166,7 @@ def test_real_hermes_hosted_inference_processing_recall_identity_and_restart(
         restarted = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
         cleanup.callback(lambda: stop(restarted._process) if restarted._process is not None else None)
         restarted.attach(SESSION)
+        restarted.attach_runtime(None)
         assert worker_command(worker, "start")["registered"] is True
         wait_for(lambda: query(restarted, "restart-stale") == "embedding_identity_stale", diagnostic=diagnostic)
         assert restarted.deliver_source_job(job) == receipt

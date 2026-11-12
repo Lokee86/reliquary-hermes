@@ -92,7 +92,9 @@ def reply(request):
             return {"version": 1, "query": state["current_query"]}
         return {"version": 1, "approved": [item["memory"] for item in state.get("candidates", [])]}
     if name == "dream_pair_classification":
-        return {"relation": "topical", "direction": "undirected",
+        # Default Root policy verifies duplicate proposals, so this fixture
+        # exercises both Dream consumers through their normal workflow.
+        return {"relation": "duplicate_of", "direction": "undirected",
                 "evidence": [{"side": "a", "quote": "Lantern"}, {"side": "b", "quote": "Lantern"}]}
     if name == "dream_pair_verification":
         return {"relation_supported": "yes", "direction_supported": "yes", "evidence_supported": "yes"}
