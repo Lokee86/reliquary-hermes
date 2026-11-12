@@ -34,6 +34,8 @@ def _field(value: Any, key: str, default: Any = None) -> Any:
 
 
 def _safe_error_code(error: BaseException) -> str:
+    if isinstance(error, TimeoutError):
+        return "inference_deadline"
     code = getattr(error, "code", None)
     known = {"embedding_unconfigured", "embedding_unsupported", "embedding_failed", "embedding_timeout",
              "embedding_invalid_response", "inference_deadline", "inference_invalid_response",
@@ -102,6 +104,7 @@ class HostedInferenceWorker:
         self._last_heartbeat = 0.0
         self._reported_capability_failure = False
         self._unavailable_logged = False
+        self._configuration_revision: tuple[int, int, int] | None = None
 
     def start(self) -> None:
         if self._thread is None:
@@ -112,8 +115,13 @@ class HostedInferenceWorker:
 
     def stop(self) -> None:
         self._stop.set()
-        if self._loop is not None and self._active_task is not None:
-            self._loop.call_soon_threadsafe(self._active_task.cancel)
+        loop, task = self._loop, self._active_task
+        if loop is not None and task is not None:
+            try:
+                loop.call_soon_threadsafe(task.cancel)
+            except RuntimeError:
+                # The task's runner can close between the snapshot and cancellation.
+                pass
         active = self._active
         if active is not None and self._client is not None:
             job_id, correlation_id, epoch = active
@@ -143,6 +151,7 @@ class HostedInferenceWorker:
                 pass
 
     def _connect(self) -> None:
+        require(not self._stop.is_set(), "inference_cancelled")
         settings = read_settings(self._home)
         client = HostClient(settings.state_dir, settings.profile_id, settings.principal_id,
                             read_token(self._home), binary=settings.binary)
@@ -192,9 +201,11 @@ class HostedInferenceWorker:
         return {"general": general, "embedding": embedding}
 
     def _bind_identity(self) -> None:
+        revision = self._configuration_stamp()
         identity = asyncio.run(self._tracked_probe())
         assert self._settings is not None
         require(not self._stop.is_set(), "inference_cancelled")
+        require(revision == self._configuration_stamp(), "inference_configuration_changed")
         scope = (self._instance_id(), self._service_lease_id())
         bound = self._call("identity", {"instance_id": self._instance_id(),
                                          "service_lease_id": self._service_lease_id(),
@@ -204,18 +215,49 @@ class HostedInferenceWorker:
         epoch = integer(bound.get("lease_epoch"), 1, (1 << 63) - 1)
         require(bound.get("identity") == identity, "inference_identity_mismatch")
         self._identity, self._lease_epoch, self._bound_scope = identity, epoch, scope
+        self._configuration_revision = revision
+
+    def _configuration_stamp(self) -> tuple[int, int, int] | None:
+        # Notice a Hermes configuration revision without reading or selecting its models.
+        try:
+            stamp = (self._home / "config.yaml").stat()
+        except FileNotFoundError:
+            return None
+        return stamp.st_mtime_ns, stamp.st_size, stamp.st_ino
 
     async def _tracked_probe(self) -> dict[str, Any]:
         self._loop = asyncio.get_running_loop()
         task = asyncio.create_task(self._probe())
+        keepalive = asyncio.create_task(self._probe_keepalive())
         self._active_task = task
         try:
+            done, _ = await asyncio.wait((task, keepalive), return_when=asyncio.FIRST_COMPLETED)
+            if keepalive in done:
+                error = keepalive.exception()
+                task.cancel()
+                if error is not None:
+                    raise error
+                raise asyncio.CancelledError
             result = await task
             require(not self._stop.is_set(), "inference_cancelled")
             return result
         finally:
             self._active_task = None
             self._loop = None
+            for pending in (task, keepalive):
+                if not pending.done():
+                    pending.cancel()
+            await asyncio.gather(task, keepalive, return_exceptions=True)
+
+    async def _probe_keepalive(self) -> None:
+        while not self._stop.is_set():
+            await asyncio.sleep(10.0)
+            if self._stop.is_set():
+                return
+            client = self._client
+            if client is None:
+                raise HostUnavailable("host_unavailable")
+            await asyncio.to_thread(client.heartbeat_runtime)
 
     def _instance_id(self) -> str:
         assert self._client is not None
@@ -254,6 +296,10 @@ class HostedInferenceWorker:
                     self._bind_identity()
                 self._poll_once()
                 self._unavailable_logged = False
+            except asyncio.CancelledError:
+                if self._stop.is_set():
+                    return
+                self._reset_connection()
             except (HostUnavailable, ContractError, OSError, RuntimeError, ValueError, AttributeError) as exc:
                 self._identity = None
                 self._lease_epoch = None
@@ -297,6 +343,11 @@ class HostedInferenceWorker:
 
     def _poll_once(self) -> None:
         assert self._settings is not None and self._identity is not None and self._lease_epoch is not None
+        if self._configuration_revision != self._configuration_stamp():
+            self._identity = None
+            self._lease_epoch = None
+            self._bound_scope = None
+            return
         discovery = self._client._read_discovery()
         if discovery is None:
             raise HostUnavailable("host_unavailable")
@@ -352,7 +403,6 @@ class HostedInferenceWorker:
                     "active_job_id": job["job_id"], "lease_epoch": job["lease_epoch"],
                 }, timeout=3.0)
                 self._last_heartbeat = time.monotonic()
-                await asyncio.to_thread(self._client.heartbeat_runtime)
                 await asyncio.to_thread(self._client.heartbeat_runtime)
 
         self._loop = asyncio.get_running_loop()

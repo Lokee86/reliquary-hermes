@@ -84,6 +84,57 @@ def test_stop_cancels_readiness_probe(tmp_path):
     asyncio.run(run())
 
 
+def test_stop_tolerates_a_concurrently_closed_async_runner(tmp_path):
+    class ClosedLoop:
+        def call_soon_threadsafe(self, _callback):
+            raise RuntimeError("Event loop is closed")
+
+    worker = HostedInferenceWorker(object(), str(tmp_path))
+    worker._loop = ClosedLoop()
+    worker._active_task = SimpleNamespace(cancel=lambda: None)
+    worker.stop()
+    assert worker._stop.is_set()
+
+
+def test_idle_configuration_change_reprobes_before_claiming_old_identity(tmp_path):
+    worker = HostedInferenceWorker(object(), str(tmp_path))
+    worker._settings = SimpleNamespace(profile_id="profile-a")
+    worker._identity = {"general": {}, "embedding": {}}
+    worker._lease_epoch = 2
+    worker._configuration_revision = worker._configuration_stamp()
+    (tmp_path / "config.yaml").write_text("model: changed\n", encoding="utf-8")
+    worker._poll_once()
+    assert worker._identity is None and worker._lease_epoch is None
+
+
+def test_readiness_probe_cancels_if_its_runtime_lease_is_lost(tmp_path):
+    from reliquary_hermes.client import HostUnavailable
+
+    async def run():
+        worker = HostedInferenceWorker(object(), str(tmp_path))
+        entered = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def probe():
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        async def lose_lease():
+            await entered.wait()
+            raise HostUnavailable("runtime_lease_stale")
+
+        worker._probe = probe
+        worker._probe_keepalive = lose_lease
+        with pytest.raises(HostUnavailable, match="runtime_lease_stale"):
+            await asyncio.wait_for(worker._tracked_probe(), timeout=2)
+        assert cancelled.is_set()
+
+    asyncio.run(run())
+
+
 def test_worker_rejects_malformed_embedding_result_and_provider_semantics(tmp_path):
     class Llm:
         async def aembed(self, inputs, **kwargs):
