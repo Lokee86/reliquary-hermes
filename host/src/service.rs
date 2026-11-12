@@ -2,7 +2,7 @@
 use crate::{
     embedding_binding::EmbeddingBindingStore,
     graph_render_host::GraphRenderHost,
-    hosted_inference::{Broker, IDENTITY},
+    hosted_inference::{Broker, IDENTITY, WORKER_ERROR},
     registry::{OwnerConfig, Registry, RegistryError},
     retrieval::RetrievalService,
     runtime::{HEARTBEAT_SECONDS, ReconciliationScope, RuntimeRegistry},
@@ -71,6 +71,7 @@ struct Service {
     retrieval_busy: AtomicBool,
     deferred_invalidations: Mutex<BTreeSet<String>>,
     inference: Broker,
+    runtime_binding: Mutex<()>,
     embedding_bindings: EmbeddingBindingStore,
     blocking_workers: AtomicUsize,
     runtimes: Mutex<RuntimeRegistry>,
@@ -161,6 +162,39 @@ impl Service {
             return Err(UNAVAILABLE);
         }
         if request.path.starts_with("/v1/inference/") {
+            if request.path == IDENTITY {
+                let (response, ()) = bind_identity_runtime(
+                    &self.runtime_binding,
+                    &self.inference,
+                    &request.body,
+                    &self.discovery.profile_id,
+                    &self.discovery.instance_id,
+                    &self.discovery.lease_id,
+                    |runtime, _epoch| {
+                        self.sources
+                            .lock()
+                            .map_err(|_| UNAVAILABLE)?
+                            .bind_runtime(Arc::clone(&runtime));
+                        self.retrieval
+                            .lock()
+                            .map_err(|_| UNAVAILABLE)?
+                            .bind_runtime(runtime);
+                        self.sources
+                            .lock()
+                            .map_err(|_| UNAVAILABLE)?
+                            .resume_all(&self.instance, |owner| {
+                                self.ensure_embedding_owner(owner).is_ok()
+                            })?;
+                        Ok(())
+                    },
+                )?;
+                return Ok(response);
+            }
+            let _runtime_binding = if request.path == WORKER_ERROR {
+                Some(self.runtime_binding.lock().map_err(|_| UNAVAILABLE)?)
+            } else {
+                None
+            };
             let response = self.inference.handle(
                 &request.path,
                 &request.body,
@@ -168,23 +202,6 @@ impl Service {
                 &self.discovery.instance_id,
                 &self.discovery.lease_id,
             )?;
-            if request.path == IDENTITY {
-                let runtime = self.inference.bind_runtime().map_err(|_| UNAVAILABLE)?;
-                self.sources
-                    .lock()
-                    .map_err(|_| UNAVAILABLE)?
-                    .bind_runtime(Arc::clone(&runtime));
-                self.retrieval
-                    .lock()
-                    .map_err(|_| UNAVAILABLE)?
-                    .bind_runtime(runtime);
-                self.sources
-                    .lock()
-                    .map_err(|_| UNAVAILABLE)?
-                    .resume_all(&self.instance, |owner| {
-                        self.ensure_embedding_owner(owner).is_ok()
-                    })?;
-            }
             return Ok(response);
         }
         match request.path {
@@ -736,6 +753,28 @@ impl Service {
     }
 }
 
+fn bind_identity_runtime<T>(
+    gate: &Mutex<()>,
+    broker: &Broker,
+    body: &[u8],
+    profile: &str,
+    instance: &str,
+    lease: &str,
+    install: impl FnOnce(Arc<reliquary_memory::ConfiguredRuntime>, u64) -> Result<T, HttpError>,
+) -> Result<(HttpResponse, T), HttpError> {
+    let _gate = gate.lock().map_err(|_| UNAVAILABLE)?;
+    let response = broker.handle(IDENTITY, body, profile, instance, lease)?;
+    let runtime = broker.bind_runtime().map_err(|_| UNAVAILABLE)?;
+    let epoch = match &response.body {
+        crate::service_http::ResponseBody::Json { value, .. } => {
+            value["lease_epoch"].as_u64().ok_or(UNAVAILABLE)?
+        }
+        crate::service_http::ResponseBody::Binary(_) => return Err(UNAVAILABLE),
+    };
+    let installed = install(runtime, epoch)?;
+    Ok((response, installed))
+}
+
 fn reserved_worker_path(path: &str) -> bool {
     path.starts_with("/v1/inference/")
         || matches!(
@@ -770,6 +809,7 @@ fn admit_worker_request(path: &str, blocking_workers: &AtomicUsize) -> bool {
 #[cfg(test)]
 mod admission_tests {
     use super::*;
+    use std::sync::atomic::AtomicU64;
 
     #[test]
     fn two_model_waiters_leave_worker_and_runtime_control_paths_available() {
@@ -801,6 +841,88 @@ mod admission_tests {
         assert_eq!(status["state"], "unavailable");
         assert_eq!(status["embedding_error"], "embedding_identity_stale");
         assert_eq!(status["receipt"], "accepted");
+    }
+
+    #[test]
+    fn concurrent_identity_applies_install_the_current_runtime_epoch() {
+        let gate = Arc::new(Mutex::new(()));
+        let broker = Arc::new(Broker::new());
+        let installed_epoch = Arc::new(AtomicU64::new(0));
+        let first_started = Arc::new(AtomicBool::new(false));
+        let first_gate = Arc::clone(&gate);
+        let first_broker = Arc::clone(&broker);
+        let first_installed = Arc::clone(&installed_epoch);
+        let started = Arc::clone(&first_started);
+        let first = thread::spawn(move || {
+            let body = identity_body("0000000000000000000000000000000a", "generation-a");
+            bind_identity_runtime(
+                &first_gate,
+                &first_broker,
+                &serde_json::to_vec(&body).unwrap(),
+                "profile-one",
+                "instance-one",
+                "lease-one",
+                |runtime, epoch| {
+                    let _runtime = runtime;
+                    started.store(true, Ordering::Release);
+                    thread::sleep(Duration::from_millis(40));
+                    first_installed.store(epoch, Ordering::Release);
+                    Ok(())
+                },
+            )
+            .unwrap()
+            .0
+        });
+        let second_gate = Arc::clone(&gate);
+        let second_broker = Arc::clone(&broker);
+        let second_installed = Arc::clone(&installed_epoch);
+        let second = thread::spawn(move || {
+            while !first_started.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(1));
+            }
+            let body = identity_body("0000000000000000000000000000000b", "generation-b");
+            bind_identity_runtime(
+                &second_gate,
+                &second_broker,
+                &serde_json::to_vec(&body).unwrap(),
+                "profile-one",
+                "instance-one",
+                "lease-one",
+                |runtime, epoch| {
+                    let _runtime = runtime;
+                    second_installed.store(epoch, Ordering::Release);
+                    Ok(())
+                },
+            )
+            .unwrap()
+            .0
+        });
+        let _first_response = first.join().unwrap();
+        let second_response = second.join().unwrap();
+        let current_epoch = match second_response.body {
+            crate::service_http::ResponseBody::Json { value, .. } => {
+                value["lease_epoch"].as_u64().unwrap()
+            }
+            crate::service_http::ResponseBody::Binary(_) => panic!("identity is JSON"),
+        };
+        assert_eq!(installed_epoch.load(Ordering::Acquire), current_epoch);
+    }
+
+    fn identity_body(worker_id: &str, generation_model: &str) -> serde_json::Value {
+        json!({
+            "worker_id": worker_id,
+            "profile_id": "profile-one",
+            "instance_id": "instance-one",
+            "service_lease_id": "lease-one",
+            "general": {"provider": "openai-api", "model": generation_model},
+            "embedding": {
+                "provider": "openai-api",
+                "model": "text-embedding-3-small",
+                "dimensions": 3,
+                "input_type_handling": "shared",
+                "normalization": "none"
+            }
+        })
     }
 }
 
@@ -955,6 +1077,7 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
         retrieval_busy: AtomicBool::new(false),
         deferred_invalidations: Mutex::new(BTreeSet::new()),
         inference: Broker::new(),
+        runtime_binding: Mutex::new(()),
         embedding_bindings: EmbeddingBindingStore::open(state_dir)?,
         blocking_workers: AtomicUsize::new(0),
         runtimes: Mutex::new(runtimes),
