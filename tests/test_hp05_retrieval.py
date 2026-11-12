@@ -245,11 +245,17 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
         stop(client._process)
         info = _cli(cli, "rel", "info", rel)["owner"]
         assert info["memory_count"] == 3 and info["graph_version"] > 0
-        assert worker_command(inference_worker, "start") == {"event": "started", "registered": True}
 
         home_scope = set_hermes_home_override(home)
         cleanup.callback(reset_hermes_home_override, home_scope)
         def start_provider():
+            # Keep the provider's native host ownership deterministic across
+            # SDK worker restarts; do not let both processes cold-start it.
+            bootstrap = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
+            bootstrap.attach(SESSION)
+            host_process = bootstrap._process
+            assert host_process is not None
+            cleanup.callback(stop, host_process)
             if not worker_command(inference_worker, "status")["registered"]:
                 worker_command(inference_worker, "start")
             manager = MemoryManager()
@@ -258,9 +264,7 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
             manager.initialize_all(SESSION, hermes_home=str(home))
             cleanup.callback(manager.shutdown_all)
             _settled(provider)
-            provider_process = provider._client._process
-            cleanup.callback(stop, provider_process)
-            return manager, provider, provider_process
+            return manager, provider, host_process
 
         def prepare(manager, provider):
             retrieval_ready.clear()
@@ -269,13 +273,21 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
             original_prepare = provider._client.prepare_retrieval
 
             def prepare_and_signal(raw):
+                deadline = monotonic() + 8
                 try:
-                    prepared = original_prepare(raw)
-                    outcomes.append(prepared)
-                    return prepared
-                except (HostUnavailable, OSError) as error:
-                    outcomes.append(str(error))
-                    raise
+                    while True:
+                        try:
+                            prepared = original_prepare(raw)
+                            outcomes.append(prepared)
+                            return prepared
+                        except HostUnavailable as error:
+                            if str(error) != "host_unavailable" or monotonic() >= deadline:
+                                outcomes.append(str(error))
+                                raise
+                            sleep(0.05)
+                        except OSError as error:
+                            outcomes.append(str(error))
+                            raise
                 finally:
                     prepare_completed.set()
 

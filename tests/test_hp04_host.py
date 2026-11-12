@@ -46,7 +46,7 @@ def _host(binary, state, cleanup):
 
 
 def _owners(cli, root, binary):
-    rel, phy, state = root / "main.rel", root / "active.phy", root / "profile"
+    rel, phy, state = root / "main.rel", root / "active.phy", root / "reliquary"
     owner(cli, "rel", rel, "unspecified")
     owner(cli, "phy", phy)
     config(state, rel, phy, profile=PROFILE)
@@ -74,6 +74,16 @@ def _when_ready(client, job):
             if str(error) != "source_import_pending" or monotonic() >= deadline:
                 raise
             sleep(0.05)
+
+
+def _when_source_complete(client, session_id, timeout=30):
+    deadline = monotonic() + timeout
+    status = client.read_source_status(session_id)
+    while status["state"] != "complete" and monotonic() < deadline:
+        sleep(0.05)
+        status = client.read_source_status(session_id)
+    assert status["state"] == "complete", status
+    return status
 
 
 def _turn(cli, rel, conversation, uid):
@@ -256,6 +266,7 @@ def test_hp04_processed_append_tombstones_both_exact_source_turns(tmp_path, bina
         assert client.deliver_source_job(extension) == extension_receipt
         assert outbox.acknowledge(extension, extension_receipt)
         assert client.deliver_source_job(initial) == initial_receipt
+        _when_source_complete(client, SESSION)
 
         # HU04 regression: imported Memory history and Hermes provenance must
         # remain inspectable even though the extraction quote byte span was not
