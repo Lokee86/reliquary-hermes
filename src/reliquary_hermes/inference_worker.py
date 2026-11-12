@@ -583,4 +583,3 @@ class HostedInferenceWorker:
         remaining = job["deadline"] - time.monotonic()
         require(math.isfinite(remaining) and remaining > 0, "inference_deadline")
         return self._call(operation, body, timeout=min(5.0, remaining))
-

@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-11
 
-**Status:** implementation target; not implemented or verified
+**Status:** implemented in isolated feature branches; validation results and limitations are recorded in [verification](verification.md).
 
 **Deliverables:** one independent upstream Hermes `ctx.llm` embeddings PR, followed by the Reliquary Hermes inference integration.
 
@@ -208,4 +208,4 @@ No transient second model-adapter registry, key copier, provider-auth bridge, hi
 
 ## Notes
 
-This specification changes only the proposed architecture. No implementation, provider configuration, credential store, installed host, live REL/PHY, or upstream PR was changed by writing it. The independent upstream patch must be based on an appropriate current Hermes main revision; the inspected local Hermes checkout was on an unrelated feature branch. The main Reliquary checkout was already dirty, so it must not be used as a scratch workspace for this work.
+The source-baseline findings above describe the preimplementation inspection. The independent upstream change is [Hermes #154202](https://github.com/NousResearch/hermes-agent/pull/154202), based on upstream main and submitted before integration. The hosted implementation and public source package are isolated from the original repositories. The original dirty Reliquary checkout, installed profiles, credential stores, installed host and live REL/PHY were preserved. See [verification](verification.md) for executed gates and the remaining environment limitation.
