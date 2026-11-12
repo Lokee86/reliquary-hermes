@@ -24,6 +24,7 @@ from test_hp03_host import binaries, install_setup_host, owner, stop
 from test_hp03_provider import history_provider
 from test_hp04_host import TEXT, _cli
 from test_hp05_retrieval import _configure, _retrieval_fixture_model, _wait
+from hosted_hermes_worker import start_hermes_worker, worker_command
 from test_hu03_dashboard import _stage_plugin
 
 SOURCE = "hu04-native-source"
@@ -200,7 +201,7 @@ def _dashboard_phase(primary, foreign, checkout, scratch, memory, result, *, arc
 
 @pytest.mark.skipif(os.environ.get("HU04_LIVE_ACCEPTANCE") != "1", reason="Enable installed HU04 acceptance")
 def test_hu04_installed_hermes_browser_recall_restart_and_archive(
-    tmp_path, history_checkout, history_provider, binaries, monkeypatch,
+    tmp_path, history_checkout, history_provider, binaries, inference_checkout, monkeypatch,
 ):
     from hermes_cli.plugins import _reset_plugin_managers_for_tests, get_plugin_manager
     from hermes_constants import profile_name_for_home, reset_hermes_home_override, set_hermes_home_override
@@ -232,10 +233,12 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
         for row in rows:
             if row["role"] == "user":
                 monkeypatch.setitem(TEXT, row["message_uid"], row["content"])
-        runtime = _configure(cli, state, url)
+        _configure(cli, state, url)
+        inference_worker = start_hermes_worker(home, inference_checkout, url, cleanup)
         outbox = SourceOutbox(state, settings.profile_id, settings.principal_id)
         delivered = []
         with _runtime(home, installed, SOURCE, ids) as (manager, provider):
+            source_client = provider._client
             send = provider._client.deliver_source_job
 
             def remember_snapshot(job):
@@ -252,9 +255,10 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
             assert accepted_snapshot.last_message_uid == rows[-1]["message_uid"]
             [original_job] = delivered
             assert original_job.snapshot.snapshot_digest == accepted_snapshot.snapshot_digest
-        _settle(cli, rel, state, SOURCE, runtime)
-        _cli(cli, "--config", runtime, "config", "model", "clear-embedding")
-        (state / "processing.json").write_bytes(canonical({"config_path": str(runtime)}))
+            _settle(source_client, SOURCE, 2)
+            worker_command(inference_worker, "stop")
+        discovery = state / "discovery.json"
+        _wait(lambda: not discovery.exists(), seconds=15)
 
         memories = {}
         for row in _cli(cli, "rel", "memory", "list", rel)["page"]["items"]:
@@ -267,6 +271,7 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
             memories[memory["id"]] = {**memory, "message_uid": imported["message_id"],
                                      "source_digest": bytes(imported["source_digest"]).hex()}
         assert len(memories) == 2
+        worker_command(inference_worker, "start")
         with _runtime(home, installed, RECALL, ids) as (manager, _):
             first = _query(manager)
             assert first["status"] == "ok", first
@@ -278,6 +283,9 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
             }]
             original_instance = decode((state / "discovery.json").read_bytes())["instance_id"]
             _dashboard_phase(primary, foreign, history_checkout, tmp_path / "before", memories[memory_id], first)
+            worker_command(inference_worker, "stop")
+        _wait(lambda: not discovery.exists(), seconds=15)
+        worker_command(inference_worker, "start")
         with _runtime(home, installed, RECALL, ids) as (manager, _):
             assert decode((state / "discovery.json").read_bytes())["instance_id"] != original_instance
             later = _query(manager)
@@ -286,6 +294,7 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
             for key in ("memory_ids", "provenance", "context"):
                 assert later[key] == first[key]
             _dashboard_phase(primary, foreign, history_checkout, tmp_path / "after", memories[memory_id], later)
+            worker_command(inference_worker, "stop")
         assert calls.count("memory_query") == 2
 
         _reset_plugin_managers_for_tests()
@@ -296,6 +305,7 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
             assert [row["message_uid"] for row in db.get_messages(SOURCE)] == [row["message_uid"] for row in rows]
         queued = outbox.next_job(SOURCE, terminal_only=True)
         assert queued is not None and queued.reason == "archive"
+        worker_command(inference_worker, "start")
         with _runtime(home, installed, RECALL, ids) as (manager, _):
             def terminal_acknowledged():
                 cursor = outbox.cursor(SOURCE)
@@ -309,3 +319,4 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
             assert denied["status"] in {"conflict", "unavailable"}, denied
             _dashboard_phase(primary, foreign, history_checkout, tmp_path / "archived",
                              memories[memory_id], later, archived=True)
+            worker_command(inference_worker, "stop")

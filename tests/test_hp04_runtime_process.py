@@ -24,6 +24,7 @@ from test_host_client import TOKEN
 from test_hp03_host import binaries, config, install_setup_host, owner, stop
 from test_hp03_provider import history_provider
 from test_hp04_host import TEXT, _cli, _loopback_model, _processing_config, _turn, _when_ready
+from hosted_hermes_worker import start_hermes_worker, worker_command
 
 
 PROFILE = "profile-a"
@@ -31,7 +32,7 @@ PRINCIPAL = "principal-a"
 SESSION = "session-a"
 
 
-def _host(binary, cli, root, cleanup, *, processing_url=None):
+def _host(binary, cli, root, cleanup, *, processing_url=None, inference_checkout=None):
     rel, phy, state = root / "main.rel", root / "active.phy", root / "reliquary"
     owner(cli, "rel", rel, "unspecified")
     owner(cli, "phy", phy)
@@ -44,6 +45,10 @@ def _host(binary, cli, root, cleanup, *, processing_url=None):
     client.attach(SESSION)
     assert client._process is not None
     cleanup.callback(stop, client._process)
+    if processing_url is not None:
+        assert inference_checkout is not None
+        client._hosted_inference_worker = start_hermes_worker(
+            root, inference_checkout, processing_url, cleanup)
     return client, state
 
 
@@ -165,7 +170,7 @@ def test_history_provider_clean_drain_exits_and_restart_preserves_route(
         _wait_until(lambda: second_process.poll() is not None)
 
 
-def test_host_restart_during_reconciliation_advances_fence_epoch(tmp_path, binaries):
+def test_host_restart_during_reconciliation_advances_fence_epoch(tmp_path, binaries, inference_checkout):
     binary, cli = binaries
     with ExitStack() as cleanup:
         first, state = _host(binary, cli, tmp_path, cleanup)
@@ -220,6 +225,7 @@ def test_host_restart_during_reconciliation_advances_fence_epoch(tmp_path, binar
 
         processing_url = cleanup.enter_context(_loopback_model())
         _processing_config(cli, state, processing_url)
+        worker = start_hermes_worker(state.parent, inference_checkout, processing_url, cleanup)
 
 
         # The host dies during pending reconciliation. Its active lease adds a
@@ -251,6 +257,7 @@ def test_host_restart_during_reconciliation_advances_fence_epoch(tmp_path, binar
         assert outbox.next_job(SESSION) is None
 
         third.detach_runtime()
+        assert worker_command(worker, "stop") == {"event": "stopped", "registered": False}
         assert third._process.wait(timeout=10) == 0
 
         conversation = "hermes-copy:" + sha256(
@@ -263,11 +270,12 @@ def test_host_restart_during_reconciliation_advances_fence_epoch(tmp_path, binar
 
 
 def test_ungraceful_runtime_exit_fences_scope_and_reconnects(
-        tmp_path, binaries, history_provider, history_checkout, monkeypatch):
+        tmp_path, binaries, history_provider, history_checkout, inference_checkout, monkeypatch):
     binary, cli = binaries
     with ExitStack() as cleanup:
         processing_url = cleanup.enter_context(_loopback_model())
-        host, state = _host(binary, cli, tmp_path, cleanup, processing_url=processing_url)
+        host, state = _host(binary, cli, tmp_path, cleanup, processing_url=processing_url,
+                            inference_checkout=inference_checkout)
         _enroll_and_create_session(tmp_path)
         original_binding = host.attach(SESSION)
         survivor_lease, initial_scopes = host.attach_runtime(SESSION)
@@ -412,6 +420,7 @@ sleep(120)
             provider.shutdown()
             reset_hermes_home_override(scope)
 
+        worker_command(host._hosted_inference_worker, "stop")
         assert host._process.wait(timeout=10) == 0
 
         conversation = "hermes-copy:" + sha256(

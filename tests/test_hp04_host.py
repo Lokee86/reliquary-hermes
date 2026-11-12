@@ -5,7 +5,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from hashlib import sha256
 import json
 from pathlib import Path
-from shutil import copyfile
 import subprocess
 from threading import Thread
 from time import monotonic, sleep
@@ -20,6 +19,7 @@ from reliquary_hermes.validation import canonical, decode
 from test_host_client import TOKEN
 from test_hp03_host import binaries, config, install_setup_host, owner, setup_hosts, stop
 from test_hp03_provider import history_provider
+from hosted_hermes_worker import configure_hermes, decode_hermes_sdk_request, start_hermes_worker
 
 
 SESSION = "session-a"
@@ -45,11 +45,13 @@ def _host(binary, state, cleanup):
     return client
 
 
-def _owners(cli, root):
+def _owners(cli, root, binary):
     rel, phy, state = root / "main.rel", root / "active.phy", root / "profile"
     owner(cli, "rel", rel, "unspecified")
     owner(cli, "phy", phy)
     config(state, rel, phy, profile=PROFILE)
+    (state / "provider.json").write_bytes(canonical({"binary": str(binary)}))
+    (root / ".env").write_text(f"RELIQUARY_HERMES_TOKEN={TOKEN}\n", encoding="utf-8")
     return rel, state
 
 
@@ -83,7 +85,7 @@ def _turn(cli, rel, conversation, uid):
 
 def test_hp04_crash_before_ack_replays_exact_receipt_and_terminal_fence(tmp_path, binaries):
     binary, cli = binaries
-    rel, state = _owners(cli, tmp_path)
+    rel, state = _owners(cli, tmp_path, binary)
     outbox = SourceOutbox(state, PROFILE, PRINCIPAL)
     initial = _queue(outbox, ["accepted"])
     with ExitStack() as cleanup:
@@ -131,12 +133,20 @@ def test_hp04_crash_before_ack_replays_exact_receipt_and_terminal_fence(tmp_path
 
 def _fixture_reply(request):
     if "input" in request:
-        return {"data": [{"index": index, "embedding": [1.0, 0.0]}
-                         for index in range(len(request["input"]))]}
-    schema = request["response_format"]["json_schema"]
-    name, shape = schema["name"], schema["schema"]["properties"]
+        dimensions = request.get("dimensions", 2)
+        vectors = []
+        for index, _text in enumerate(request["input"]):
+            vector = [0.0] * dimensions
+            vector[index % dimensions] = 1.0
+            vectors.append({"index": index, "embedding": vector})
+        return {"model": request.get("model", "fixture-embedding"), "data": vectors,
+                "usage": {"prompt_tokens": len(vectors), "total_tokens": len(vectors)}}
+    schema, name, shape = _sdk_schema(request)
+    shape = schema["schema"]["properties"]
     if name == "readiness_probe":
         result = {"ok": True}
+    elif name == "reliquary_readiness":
+        result = {"ready": True}
     elif name == "insomnia_authority_disposition_ledger":
         result = {"turns": {uid: [{"disposition": "retain", "authority_kind": "direct", "category": "fact",
                    "type": "project", "lifecycle": "current", "proposition": TEXT[uid],
@@ -154,8 +164,39 @@ def _fixture_reply(request):
     elif name == "dream_pair_classification":
         result = {"relation": "none", "direction": "none", "evidence": []}
     else:
-        raise ValueError(f"unexpected synthetic processing schema: {name}")
-    return {"choices": [{"message": {"content": json.dumps(result)}}]}
+        result = _schema_example(schema["schema"])
+    return {"model": request.get("model", "fixture-chat"),
+            "choices": [{"message": {"content": json.dumps(result)}}]}
+
+
+def _sdk_schema(request):
+    schema = request["response_format"]["json_schema"]
+    normalized = decode_hermes_sdk_request(request)
+    name = normalized["schema_name"]
+    return schema, name, schema["schema"].get("properties", {})
+
+
+def _sdk_input_payload(request):
+    """Extract the unchanged broker DTO from Hermes' SDK input block."""
+    return decode_hermes_sdk_request(request).get("payload")
+
+
+def _schema_example(schema):
+    kind = schema.get("type")
+    if kind == "object":
+        properties = schema.get("properties", {})
+        required = schema.get("required", list(properties))
+        return {key: _schema_example(properties[key]) for key in required if key in properties}
+    if kind == "array":
+        return []
+    if kind == "string":
+        enum = schema.get("enum", [])
+        return enum[0] if enum else ""
+    if kind in {"integer", "number"}:
+        return 0
+    if kind == "boolean":
+        return True
+    return None
 
 
 @contextmanager
@@ -165,6 +206,8 @@ def _loopback_model():
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             try:
+                if self.headers.get("Authorization") != "Bearer synthetic-hosted-inference-key":
+                    raise ValueError("synthetic provider credential was not scoped to Hermes")
                 request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 body = canonical(_fixture_reply(request))
             except (KeyError, TypeError, ValueError) as error:
@@ -191,31 +234,19 @@ def _loopback_model():
     assert not errors, errors
 
 
-def _seed_blank_processing_config(path):
-    # Generated with Root's public ReliquaryConfig::new_blank(path).save().
-    # Seed before the CLI adds a key so no standard routes need real credentials.
-    copyfile(Path(__file__).with_name("fixtures") / "blank-processing.cfg", path)
-
-
 def _processing_config(cli, state, url):
-    runtime = state / "synthetic.cfg"
-    _seed_blank_processing_config(runtime)
-    flags = ["--config", runtime, "config"]
-    _cli(cli, *flags, "credential", "add-api-key", "HP04_FIXTURE", "--stdin", stdin=b"synthetic-hp04-fixture\n")
-    for route in ("general", "entity-resolution", "embedding"):
-        extra = ["--dimensions", "2"] if route == "embedding" else []
-        _cli(cli, *flags, "model", f"set-{route}", "--model", "fixture", "--url", url,
-             "--credential", "HP04_FIXTURE", "--provider", "openai-ready", *extra)
-    (state / "processing.json").write_bytes(canonical({"config_path": str(runtime)}))
+    """Configure Hermes' synthetic provider without a native processing.json override."""
+    configure_hermes(state.parent, url)
 
 
-def test_hp04_processed_append_tombstones_both_exact_source_turns(tmp_path, binaries):
+def test_hp04_processed_append_tombstones_both_exact_source_turns(tmp_path, binaries, inference_checkout):
     binary, cli = binaries
-    rel, state = _owners(cli, tmp_path)
+    rel, state = _owners(cli, tmp_path, binary)
     outbox = SourceOutbox(state, PROFILE, PRINCIPAL)
     with _loopback_model() as url, ExitStack() as cleanup:
         _processing_config(cli, state, url)
         client = _host(binary, state, cleanup)
+        start_hermes_worker(state.parent, inference_checkout, url, cleanup)
         initial = _queue(outbox, ["accepted"])
         initial_receipt = client.deliver_source_job(initial)
         assert outbox.acknowledge(initial, initial_receipt)

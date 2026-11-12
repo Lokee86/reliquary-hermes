@@ -1,6 +1,7 @@
 """Trusted manual import through the real outbox, signed host and Root processing."""
 
 from hashlib import sha256
+from contextlib import ExitStack
 from time import monotonic, sleep
 
 import pytest
@@ -11,11 +12,12 @@ from test_hosted_desktop_api import _release_host
 from test_hp03_host import binaries, install_setup_host, owner, setup_hosts
 from test_hp03_provider import history_provider
 from test_hp04_host import TEXT, _loopback_model, _processing_config, _turn
+from hosted_hermes_worker import start_hermes_worker
 
 
 @pytest.mark.parametrize("live_attached", [False, True], ids=["standalone", "other-session-live"])
 def test_selected_history_reaches_complete(
-        tmp_path, binaries, history_provider, monkeypatch, setup_hosts, live_attached):
+        tmp_path, binaries, history_provider, inference_checkout, monkeypatch, setup_hosts, live_attached):
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     from hermes_state import SessionDB
 
@@ -29,6 +31,8 @@ def test_selected_history_reaches_complete(
     live = "live-synthetic-session"
     originals = {}
     scope = set_hermes_home_override(home)
+    worker_cleanup = ExitStack()
+    inference_worker = None
     try:
         with SessionDB(home / "state.db") as db:
             for session_id in old_ids:
@@ -48,6 +52,7 @@ def test_selected_history_reaches_complete(
         with _loopback_model() as url:
             _processing_config(cli, state, url)
             assert setup.apply(home, {"main_rel": str(rel), "active_phy": str(phy)})["configured"]
+            inference_worker = start_hermes_worker(home, inference_checkout, url, worker_cleanup)
             with SessionDB(home / "state.db") as db:
                 db.create_session(live, source="cli", profile_name="default")
             provider = history_provider.ReliquaryMemoryProvider()
@@ -88,6 +93,8 @@ def test_selected_history_reaches_complete(
                 assert changed["sessions"][0]["status"] == "unavailable", changed
             finally:
                 provider.shutdown()
+                if inference_worker is not None:
+                    worker_cleanup.close()
                 # A manual-only runtime may cleanly detach and stop the host
                 # between the last status receipt and this cleanup check.
                 discovery = state / "discovery.json"
@@ -113,4 +120,5 @@ def test_selected_history_reaches_complete(
                 assert observed["imported"]["message_id"] == source_row["message_uid"]
                 assert observed["content"] == source_row["content"]
     finally:
+        worker_cleanup.close()
         reset_hermes_home_override(scope)

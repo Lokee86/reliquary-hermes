@@ -18,8 +18,10 @@ from test_host_client import TOKEN
 from test_hp03_host import binaries, config, owner, stop
 from test_hp03_provider import pinned_provider
 from test_hp04_host import (
-    PRINCIPAL, PROFILE, SESSION, TEXT, _cli, _fixture_reply, _queue, _seed_blank_processing_config, _when_ready,
+    PRINCIPAL, PROFILE, SESSION, TEXT, _cli, _fixture_reply, _queue, _when_ready,
 )
+from hosted_hermes_worker import configure_hermes, start_hermes_worker, worker_command
+from hosted_hermes_worker import decode_hermes_sdk_request
 
 
 def _wait(predicate, *, seconds=15):
@@ -43,9 +45,14 @@ def _retrieval_fixture_model(*, slow_query=None):
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             try:
+                if self.headers.get("Authorization") != "Bearer synthetic-hosted-inference-key":
+                    raise ValueError("synthetic provider credential was not scoped to Hermes")
                 request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                if "state" in request:
-                    state = request["state"]
+                normalized = decode_hermes_sdk_request(request)
+                broker_payload = normalized.get("payload")
+                state = broker_payload.get("state") if isinstance(broker_payload, dict) else request.get("state")
+                sdk_request = normalized["operation"] == "complete_structured"
+                if isinstance(state, dict):
                     if state.get("operation") in {"memory_query", "refine_query", "traverse_graph"}:
                         with lock:
                             retrieval_calls.append(state["operation"])
@@ -55,21 +62,26 @@ def _retrieval_fixture_model(*, slow_query=None):
                         sleep(8)
                     operation = state.get("operation")
                     if operation == "refine_query_rewrite":
-                        body_value = {"version": 1, "query": state["current_query"]}
+                        result = {"version": 1, "query": state["current_query"]}
                     else:
                         candidates = state.get("candidates", [])
                         approved = candidates[:1] if operation == "memory_query" else candidates
-                        body_value = {"version": 1,
-                                      "approved": [item["memory"] for item in approved]}
+                        result = {"version": 1, "approved": [item["memory"] for item in approved]}
+                    body_value = ({"model": normalized.get("model", "fixture-chat"),
+                                   "choices": [{"message": {"content": json.dumps(result)}}]}
+                                  if sdk_request else result)
                 elif "input" in request:
-                    body_value = {"data": [
-                        {"index": index, "embedding": [1.0, 0.0]}
-                        for index, _text in enumerate(request["input"])
-                    ]}
+                    dimensions = request.get("dimensions", 2)
+                    vectors = []
+                    for index, _text in enumerate(request["input"]):
+                        vector = [0.0] * dimensions
+                        vector[index % dimensions] = 1.0
+                        vectors.append({"index": index, "embedding": vector})
+                    body_value = {"model": request.get("model", "fixture-embedding"), "data": vectors,
+                                  "usage": {"prompt_tokens": len(vectors), "total_tokens": len(vectors)}}
                 else:
-                    schema = request["response_format"]["json_schema"]
-                    schema_name = schema["name"]
-                    shape = schema["schema"]["properties"]
+                    schema_name = normalized["schema_name"]
+                    shape = normalized["schema"]["properties"]
                     if schema_name == "insomnia_authority_disposition_ledger":
                         turns = {
                             uid: [{"disposition": "retain", "authority_kind": "direct", "category": "fact",
@@ -79,7 +91,7 @@ def _retrieval_fixture_model(*, slow_query=None):
                             for uid in shape["turns"]["required"]
                         }
                         response = {"turns": turns, "evidence_requests": []}
-                        body_value = {"choices": [{"message": {"content": json.dumps(response)}}]}
+                        result = response
                     elif schema_name == "insomnia_memory_wording":
                         node_ids = shape["candidates"]["items"]["properties"]["source_node_id"]["enum"]
                         response = {"candidates": [
@@ -89,18 +101,23 @@ def _retrieval_fixture_model(*, slow_query=None):
                              "authority_source": None, "grounding_source": None, "routing_mentions": []}
                             for uid in node_ids
                         ]}
-                        body_value = {"choices": [{"message": {"content": json.dumps(response)}}]}
+                        result = response
                     elif schema_name == "dream_pair_classification":
                         response = {"relation": "topical", "direction": "undirected",
                                     "evidence": [{"side": "a", "quote": "Lantern"},
                                                  {"side": "b", "quote": "Lantern"}]}
-                        body_value = {"choices": [{"message": {"content": json.dumps(response)}}]}
+                        result = response
                     elif schema_name == "dream_pair_verification":
                         response = {"relation_supported": "yes", "direction_supported": "yes",
                                     "evidence_supported": "yes"}
-                        body_value = {"choices": [{"message": {"content": json.dumps(response)}}]}
+                        result = response
                     else:
                         body_value = _fixture_reply(request)
+                        result = None
+                    if result is not None:
+                        body_value = ({"model": normalized.get("model", "fixture-chat"),
+                                       "choices": [{"message": {"content": json.dumps(result)}}]}
+                                      if sdk_request else {"choices": [{"message": {"content": json.dumps(result)}}]})
                 body = canonical(body_value)
             except (KeyError, TypeError, ValueError) as error:
                 errors.append(str(error))
@@ -127,18 +144,8 @@ def _retrieval_fixture_model(*, slow_query=None):
 
 
 def _configure(cli, state, url):
-    runtime = state / "synthetic.cfg"
-    _seed_blank_processing_config(runtime)
-    flags = ["--config", runtime, "config"]
-    _cli(cli, *flags, "credential", "add-api-key", "HP05_FIXTURE", "--stdin",
-         stdin=b"synthetic-hp05-fixture\n")
-    for route in ("general", "entity-resolution", "dream", "embedding"):
-        extra = ["--dimensions", "2"] if route == "embedding" else []
-        _cli(cli, *flags, "model", f"set-{route}", "--model", "fixture", "--url", url,
-             "--credential", "HP05_FIXTURE", "--provider", "openai-ready", *extra)
-    _cli(cli, *flags, "model", "set-memory-retrieval-decision", "--model", "fixture",
-         "--url", url, "--credential", "HP05_FIXTURE")
-    return runtime
+    configure_hermes(state.parent, url)
+    return state.parent
 
 
 def _settled(provider, status="attached"):
@@ -204,7 +211,7 @@ def _provider_profile(home, state, rel, phy, binary):
 
 
 def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_return(
-        tmp_path, binaries, pinned_provider, monkeypatch):
+        tmp_path, binaries, pinned_provider, inference_checkout, monkeypatch):
     from agent.memory_manager import MemoryManager
     from agent.turn_context import _memory_turn_start_and_prefetch
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
@@ -224,35 +231,27 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
 
     slow_query = Event()
     with _retrieval_fixture_model(slow_query=slow_query) as (url, retrieval_calls, retrieval_ready), ExitStack() as cleanup:
-        runtime = _configure(cli, state, url)
+        _configure(cli, state, url)
         client = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
         client.attach(SESSION)
         cleanup.callback(stop, client._process)
+        inference_worker = start_hermes_worker(home, inference_checkout, url, cleanup)
         job = _queue(outbox, ["accepted", "appended", "traveler"])
         receipt = _when_ready(client, job)
         assert outbox.acknowledge(job, receipt)
+        _wait(lambda: client.read_source_status(SESSION)["state"] == "complete")
+        # Release the inference worker before reopening the REL with the public CLI.
+        assert worker_command(inference_worker, "stop") == {"event": "stopped", "registered": False}
         stop(client._process)
-
-        # Finish the exact staged import through public Root with the writer
-        # lease released. The query then uses lexical retrieval against the
-        # graph built during processing, leaving one neighbor unseen.
-        state_key = sha256(SESSION.encode()).hexdigest()
-        source_state = decode((state / "sources-v1" / f"{state_key}.json").read_bytes())
-        import_id = source_state["accepted"]["import_id"]
-        process = subprocess.run(
-            [str(cli), "rel", "process", str(rel), "--config", str(runtime),
-             "--until", "ready", "--import", import_id],
-            capture_output=True, timeout=15,
-        )
-        assert process.returncode == 0, (process.stdout, process.stderr)
         info = _cli(cli, "rel", "info", rel)["owner"]
         assert info["memory_count"] == 3 and info["graph_version"] > 0
-        _cli(cli, "--config", runtime, "config", "model", "clear-embedding")
-        (state / "processing.json").write_bytes(canonical({"config_path": str(runtime)}))
+        assert worker_command(inference_worker, "start") == {"event": "started", "registered": True}
 
         home_scope = set_hermes_home_override(home)
         cleanup.callback(reset_hermes_home_override, home_scope)
         def start_provider():
+            if not worker_command(inference_worker, "status")["registered"]:
+                worker_command(inference_worker, "start")
             manager = MemoryManager()
             provider = pinned_provider.ReliquaryMemoryProvider()
             manager.add_provider(provider)
@@ -367,6 +366,7 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
         assert staged_status["source_state"] == "active"
         assert staged_status["latest_recall"]["state"] == "none"
         assert staged_status["latest_recall"]["candidate_ids"] == []
+        worker_command(inference_worker, "stop")
         manager.shutdown_all()
         assert provider_process.wait(timeout=10) == 0
         assert rel.read_bytes() == before_candidate
@@ -393,6 +393,7 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
             assert str(error) == "host_conflict"
         else:
             assert replay.status == "conflict"
+        worker_command(inference_worker, "stop")
         manager.shutdown_all()
         assert provider_process.wait(timeout=10) == 0
         assert rel.read_bytes() != before_candidate
@@ -480,6 +481,7 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
 
         # The public Root inspection path is read-only. Inspect after releasing
         # the host lease, then prove it did not append another Freshness receipt.
+        worker_command(inference_worker, "stop")
         manager.shutdown_all()
         assert provider_process.wait(timeout=10) == 0
         before_inspection = rel.read_bytes()
