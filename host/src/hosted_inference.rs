@@ -30,6 +30,8 @@ pub(crate) const WORKER_ERROR: &str = crate::service_http::INFERENCE_WORKER_ERRO
 const MAX_PENDING: usize = 4;
 const MAX_JOB_BYTES: usize = 8 * 1024 * 1024;
 const PART_BYTES: usize = 64 * 1024;
+const MAX_EMBED_INPUTS: usize = 128;
+const MAX_EMBED_INPUT_BYTES: usize = 1024 * 1024;
 const JOB_TIMEOUT: Duration = Duration::from_secs(60);
 const WORKER_TTL: Duration = Duration::from_secs(30);
 const STALE: HttpError = HttpError::new(409, "inference_stale", false);
@@ -864,15 +866,24 @@ impl EmbeddingAdapter {
         };
         let mut rows = Vec::new();
         let mut batch: Vec<&str> = Vec::new();
+        let mut batch_input_bytes = 0usize;
         let deadline = Instant::now() + JOB_TIMEOUT;
         for input in inputs {
+            if input.len() > MAX_EMBED_INPUT_BYTES {
+                return Err(EmbeddingEndpointError::Failure(
+                    "embedding_input_too_large".into(),
+                ));
+            }
             let mut candidate = batch.clone();
             candidate.push(input);
+            let candidate_input_bytes = batch_input_bytes.saturating_add(input.len());
             let payload = embedding_payload(&candidate, input_type, self.dimensions);
             let request_bytes = serde_json::to_vec(&payload)
                 .map_err(|_| EmbeddingEndpointError::InvalidResponse("hosted_embedding_request"))?;
             if !batch.is_empty()
-                && (request_bytes.len() > MAX_JOB_BYTES
+                && (candidate.len() > MAX_EMBED_INPUTS
+                    || candidate_input_bytes > MAX_EMBED_INPUT_BYTES
+                    || request_bytes.len() > MAX_JOB_BYTES
                     || response_estimate(candidate.len(), self.dimensions) > max_response_bytes)
             {
                 append_embedding_batch(
@@ -887,8 +898,11 @@ impl EmbeddingAdapter {
                 )?;
                 batch.clear();
                 batch.push(input);
+                batch_input_bytes = input.len();
                 let single = embedding_payload(&batch, input_type, self.dimensions);
-                if serde_json::to_vec(&single).map_or(true, |bytes| bytes.len() > MAX_JOB_BYTES)
+                if batch.len() > MAX_EMBED_INPUTS
+                    || batch_input_bytes > MAX_EMBED_INPUT_BYTES
+                    || serde_json::to_vec(&single).map_or(true, |bytes| bytes.len() > MAX_JOB_BYTES)
                     || response_estimate(1, self.dimensions) > max_response_bytes
                 {
                     return Err(EmbeddingEndpointError::InvalidResponse(
@@ -897,7 +911,10 @@ impl EmbeddingAdapter {
                 }
             } else {
                 batch.push(input);
-                if request_bytes.len() > MAX_JOB_BYTES
+                batch_input_bytes = candidate_input_bytes;
+                if batch.len() > MAX_EMBED_INPUTS
+                    || batch_input_bytes > MAX_EMBED_INPUT_BYTES
+                    || request_bytes.len() > MAX_JOB_BYTES
                     || response_estimate(batch.len(), self.dimensions) > max_response_bytes
                 {
                     return Err(EmbeddingEndpointError::InvalidResponse(
@@ -1404,6 +1421,90 @@ mod tests {
         let vectors = embed.join().unwrap().unwrap();
         assert_eq!(vectors.len(), 30);
         assert!(vectors.iter().all(|row| row.len() == 512));
+    }
+
+    fn roundtrip_embedding_batches(
+        inputs: Vec<String>,
+        dimensions: u32,
+        expected_counts: &[usize],
+    ) {
+        let broker = Broker::new();
+        let epoch = bind_with_dimensions(&broker, "worker-one", "gpt-test", dimensions);
+        let endpoint = EmbeddingAdapter {
+            broker: broker.clone(),
+            model: "text-embedding-3-small".into(),
+            dimensions,
+            normalization: EmbeddingNormalization::None,
+            epoch,
+        };
+        let call = thread::spawn(move || endpoint.embed(SwitchboardEmbeddingMode::Query, &inputs));
+        for expected_count in expected_counts {
+            let claimed = claim(&broker);
+            assert_eq!(claimed["operation"], "embed");
+            let bytes = read_request_bytes(&broker, &claimed);
+            let request: Value = serde_json::from_slice(&bytes).unwrap();
+            let batch = request["inputs"].as_array().unwrap();
+            assert_eq!(batch.len(), *expected_count);
+            assert!(batch.len() <= MAX_EMBED_INPUTS);
+            assert!(
+                batch
+                    .iter()
+                    .map(|value| value.as_str().unwrap().len())
+                    .sum::<usize>()
+                    <= MAX_EMBED_INPUT_BYTES
+            );
+            let actual = json!({
+                "vectors": vec![vec![0.25_f32; dimensions as usize]; batch.len()],
+                "provider":"openai-api",
+                "model":"text-embedding-3-small",
+                "dimensions":dimensions,
+                "usage":null
+            });
+            finish(&broker, &claimed, actual, false);
+        }
+        assert_eq!(
+            call.join().unwrap().unwrap().len(),
+            expected_counts.iter().sum::<usize>()
+        );
+    }
+
+    #[test]
+    fn embedding_batches_split_at_the_worker_input_count_limit() {
+        roundtrip_embedding_batches(
+            (0..129)
+                .map(|index| format!("small input {index}"))
+                .collect(),
+            3,
+            &[128, 1],
+        );
+    }
+
+    #[test]
+    fn embedding_batches_split_at_the_worker_utf8_byte_limit() {
+        let multibyte = "é".repeat(280_000);
+        assert!(multibyte.len() < MAX_EMBED_INPUT_BYTES);
+        roundtrip_embedding_batches(vec![multibyte.clone(), multibyte], 3, &[1, 1]);
+    }
+
+    #[test]
+    fn a_single_embedding_input_over_the_worker_byte_limit_returns_a_typed_error() {
+        let broker = Broker::new();
+        let epoch = bind_with_dimensions(&broker, "worker-one", "gpt-test", 3);
+        let endpoint = EmbeddingAdapter {
+            broker,
+            model: "text-embedding-3-small".into(),
+            dimensions: 3,
+            normalization: EmbeddingNormalization::None,
+            epoch,
+        };
+        let oversized = "x".repeat(MAX_EMBED_INPUT_BYTES + 1);
+        let error = endpoint
+            .embed(SwitchboardEmbeddingMode::Query, &[oversized])
+            .unwrap_err();
+        assert_eq!(
+            error,
+            EmbeddingEndpointError::Failure("embedding_input_too_large".into())
+        );
     }
 
     #[test]
