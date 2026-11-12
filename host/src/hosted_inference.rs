@@ -366,6 +366,9 @@ impl Broker {
             &request.correlation_id,
             request.lease_epoch,
         )?;
+        if request.part_index >= part_count(job.request.len()) {
+            return Err(crate::service_http::INVALID);
+        }
         let start = request
             .part_index
             .checked_mul(PART_BYTES)
@@ -1365,6 +1368,13 @@ mod tests {
         });
         let claimed = claim(&broker);
         assert_eq!(claimed["request"]["part_count"], 2);
+        let huge_index = usize::MAX / PART_BYTES;
+        assert!(post(
+            &broker,
+            REQUEST_PART,
+            json!({"worker_id":"worker-one", "job_id":claimed["job_id"], "correlation_id":claimed["correlation_id"], "lease_epoch":claimed["lease_epoch"], "part_index":huge_index}),
+        )
+        .is_err());
         let reassembled = read_request_bytes(&broker, &claimed);
         let request: Value = serde_json::from_slice(&reassembled).unwrap();
         assert_eq!(request["input"].as_str().unwrap().len(), PART_BYTES + 17);
