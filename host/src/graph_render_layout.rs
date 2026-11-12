@@ -706,7 +706,13 @@ fn layout_local_members(
         }
         recenter(&mut positions);
     }
-    settle_node_collisions(&mut positions, radii, 1.1, exact_pair_forces, total_node_count);
+    settle_node_collisions(
+        &mut positions,
+        radii,
+        1.1,
+        exact_pair_forces,
+        total_node_count,
+    );
     positions
 }
 

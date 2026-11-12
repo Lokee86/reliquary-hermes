@@ -1,6 +1,6 @@
 //! Standalone HP03 loopback service. Standard input carries the startup secret.
 mod dashboard;
-mod catalog_processing;
+mod embedding_binding;
 mod graph_render;
 mod graph_render_binary;
 #[cfg(test)]
@@ -55,6 +55,7 @@ mod graph_render_style;
 mod graph_render_style_tests;
 #[cfg(test)]
 mod graph_render_tests;
+mod hosted_inference;
 mod registry;
 mod retrieval;
 mod runtime;

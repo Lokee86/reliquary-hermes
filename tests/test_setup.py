@@ -24,11 +24,14 @@ def setup_profile(pinned_provider, monkeypatch, tmp_path):
     host.parent.mkdir(parents=True)
     host.touch()
     candidate = {}
-    for field, name in (("main_rel", "main.rel"), ("active_phy", "active.phy"), ("config_path", "reliquary.cfg")):
+    for field, name in (("main_rel", "main.rel"), ("active_phy", "active.phy")):
         path = home / name
         path.touch()
         candidate[field] = str(path)
     monkeypatch.delenv(TOKEN_VAR, raising=False)
+    stale_config = home / "reliquary.cfg"
+    stale_config.write_bytes(b"legacy local inference config; must remain untouched\n")
+    monkeypatch.setenv("RELIQUARY_CONFIG_PATH", str(stale_config))
     def preflight(home, binary, request):
         return {"valid": True, "main_rel": {"owner_id": "general"}, "active_phy": {"owner_id": "identity"},
                 "projects": {key: {"owner_id": key} for key in request["owners"]["projects"]}}
@@ -54,11 +57,17 @@ def test_fresh_setup_derives_private_values_and_preserves_existing_processing(se
 
     home, candidate = setup_profile
     state = home / "reliquary"
+    state.mkdir()
+    processing = state / "processing.json"
+    prior = b'{"config_path":"C:/legacy/reliquary.cfg"}\n'
+    processing.write_bytes(prior)
+    stale_config = home / "reliquary.cfg"
+    stale_config_before = stale_config.read_bytes()
     before = setup.status(home)
     assert not before["configured"] and before["runtime_detected"]
-    assert before["config_path"] is None
+    assert "config_path" not in before and "config_path" not in before["defaults"]
     assert setup.validate(home, candidate)["valid"]
-    assert not state.exists() and get_secret(TOKEN_VAR) is None
+    assert get_secret(TOKEN_VAR) is None
 
     assert setup.apply(home, candidate)["configured"]
     assert setup.status(home)["configured"]
@@ -70,12 +79,9 @@ def test_fresh_setup_derives_private_values_and_preserves_existing_processing(se
 
     enrollment = state / "capture-enrollment-v1.json"
     cutoff = enrollment.read_bytes()
-    processing = state / "processing.json"
-    prior = processing.read_bytes() + b"\n"
-    processing.write_bytes(prior)
-    candidate.pop("config_path")
     assert setup.apply(home, candidate)["configured"]
     assert processing.read_bytes() == prior
+    assert stale_config.read_bytes() == stale_config_before
     assert enrollment.read_bytes() == cutoff
     assert read_token(home) == token
 
@@ -144,6 +150,9 @@ def test_destination_allows_validated_paths_and_rejects_profile_or_directory_lin
 
 
 def test_exited_setup_host_releases_unaccepted_topology(pinned_provider, binaries, setup_hosts, tmp_path):
+    from agent.secret_scope import load_env_file, reset_secret_scope, set_secret_scope
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
     binary, cli = binaries
     home = tmp_path / "retry-profile"
     state = home / "reliquary"
@@ -157,11 +166,17 @@ def test_exited_setup_host_releases_unaccepted_topology(pinned_provider, binarie
     runtime_registry.write_bytes(b"corrupt startup state")
     candidate = {"main_rel": str(main), "active_phy": str(phy)}
 
-    with pytest.raises(HostUnavailable):
-        setup.apply(home, candidate)
-    assert setup_hosts[0]._process.poll() is not None
-    assert not setup.status(home)["configured"]
-    assert not (state / "topology-v1.json").exists()
+    home_scope = set_hermes_home_override(home)
+    secret_scope = set_secret_scope(load_env_file(home / ".env"), profile_home=str(home))
+    try:
+        with pytest.raises(HostUnavailable):
+            setup.apply(home, candidate)
+        assert setup_hosts[0]._process.poll() is not None
+        assert not setup.status(home)["configured"]
+        assert not (state / "topology-v1.json").exists()
 
-    runtime_registry.unlink()
-    assert setup.apply(home, {**candidate, "main_rel": str(replacement)})["configured"]
+        runtime_registry.unlink()
+        assert setup.apply(home, {**candidate, "main_rel": str(replacement)})["configured"]
+    finally:
+        reset_secret_scope(secret_scope)
+        reset_hermes_home_override(home_scope)

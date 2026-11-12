@@ -1,6 +1,9 @@
 __pycache__/
 .pytest_cache/
 .pytest_tmp/
+.pytest/
+.test-temp/
+.npm-cache/
 *.pyc
 host/target/
 host/.test-tmp/

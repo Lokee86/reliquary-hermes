@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Catalog packaging is owned by the integration maintainers: root `plugin.yaml`, `__init__.py`, and `dashboard_api.py` unify provider and UI discovery; `host/src/catalog_processing.rs` owns nonsecret JSON routes and in-memory credential binding; native source provenance and the public build workflow own reproducibility. Current installation and risk disclosures live in [README](../README.md).
+Catalog packaging is owned by the integration maintainers: root `plugin.yaml`, `__init__.py`, and `dashboard_api.py` unify provider and UI discovery; `inference_worker.py` and `host/src/hosted_inference.rs` own Hermes-backed inference; native source provenance and the public build workflow own reproducibility. Current installation and risk disclosures live in [README](../README.md).
 
 Route integration changes to the owning contract, implementation boundary and verification suite.
 
@@ -12,6 +12,7 @@ Route integration changes to the owning contract, implementation boundary and ve
 | --- | --- | --- |
 | Hermes setup, pinned hooks and profile isolation | [Host audit](host-audit.md) and [local service](local-service.md) | `setup.py`, `projects.py`, `setup_paths.py`, `setup_dialog.py`, `setup_dialog_locality.py`, `provider.py`, `settings.py`, `capture_policy.py`, standalone registration and pinned provider tests |
 | Authenticated transport and response correlation | [Protocol](protocol.md) | `client.py`, Rust service protocol and HTTP modules, local transport and process tests |
+| Hermes-owned inference, identity and worker lifecycle | [Protocol](protocol.md) and [local service](local-service.md) | `inference_worker.py`, native inference broker, hosted Root construction, worker and isolated model/process tests |
 | Owner grants, leases and durable routing | [Local service](local-service.md) | Rust registry and registry storage, Root-backed process and registry tests |
 | Manual Hermes history and selected source delivery | [Host audit](host-audit.md) and [protocol](protocol.md) | `history.py`, `manual_delivery.py`, `outbox.py`, shared Sources UI and installed HU08 proof |
 | Copied source and retrieval return | [Protocol](protocol.md) | Source and authority DTOs, `retrieval.rs`, `retrieval_hack.rs`, provider recall and copied-source and selected-return proofs |

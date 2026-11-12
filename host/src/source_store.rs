@@ -9,9 +9,11 @@ use std::{
     fs::{self, File},
     io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 const MAX_STATE_BYTES: usize = 96 * 1024;
+const MAX_RESUME_SCAN_ENTRIES: usize = 4096;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -43,7 +45,10 @@ pub(crate) struct SourceState {
 }
 
 #[derive(Clone)]
-pub(crate) struct SourceStore(PathBuf);
+pub(crate) struct SourceStore {
+    directory: PathBuf,
+    resume_entries: Arc<Mutex<Option<fs::ReadDir>>>,
+}
 
 impl SourceStore {
     pub(crate) fn open(state_dir: &Path) -> Result<Self, &'static str> {
@@ -58,19 +63,36 @@ impl SourceStore {
         // tempfile passes the paths directly to MoveFileExW. Use the canonical
         // extended path so the atomic receipt rename also works past MAX_PATH.
         let directory = fs::canonicalize(directory).map_err(|_| "source_state_unavailable")?;
-        Ok(Self(directory))
+        Ok(Self {
+            directory,
+            resume_entries: Arc::new(Mutex::new(None)),
+        })
     }
 
     pub(crate) fn path(&self, session: &str) -> PathBuf {
-        self.0
+        self.directory
             .join(format!("{}.json", hex(&Sha256::digest(session.as_bytes()))))
     }
 
-    pub(crate) fn visit_manual_imports(&self, mut visit: impl FnMut(String, String) -> bool) {
-        let Ok(entries) = fs::read_dir(&self.0) else {
+    pub(crate) fn visit_resumable_imports(
+        &self,
+        mut visit: impl FnMut(String, String, String, bool) -> bool,
+    ) {
+        let Ok(mut entries) = self.resume_entries.lock() else {
             return;
         };
-        for entry in entries.flatten() {
+        if entries.is_none() {
+            *entries = fs::read_dir(&self.directory).ok();
+        }
+        let mut scanned = 0;
+        while scanned < MAX_RESUME_SCAN_ENTRIES {
+            let next = entries.as_mut().and_then(Iterator::next);
+            let Some(entry) = next else {
+                *entries = fs::read_dir(&self.directory).ok();
+                break;
+            };
+            scanned += 1;
+            let Ok(entry) = entry else { continue };
             let path = entry.path();
             if !path
                 .extension()
@@ -81,7 +103,7 @@ impl SourceStore {
             let Ok(state) = self.read(&path) else {
                 continue;
             };
-            if !state.manual || state.terminal {
+            if state.terminal || state.stale || (!state.available && state.pending.is_none()) {
                 continue;
             }
             let (Some(session), Some(head), Some(owner)) = (
@@ -94,7 +116,12 @@ impl SourceStore {
             if self.path(session) != path {
                 continue;
             }
-            if !visit(owner.to_owned(), head.import_id.clone()) {
+            if !visit(
+                session.to_owned(),
+                owner.to_owned(),
+                head.import_id.clone(),
+                state.manual,
+            ) {
                 return;
             }
         }
@@ -179,7 +206,7 @@ impl SourceStore {
     }
 
     fn save(&self, path: &Path, raw: &[u8], replace: bool) -> Result<(), HttpError> {
-        let mut file = tempfile::NamedTempFile::new_in(&self.0).map_err(|_| UNAVAILABLE)?;
+        let mut file = tempfile::NamedTempFile::new_in(&self.directory).map_err(|_| UNAVAILABLE)?;
         file.write_all(raw).map_err(|_| UNAVAILABLE)?;
         file.as_file().sync_all().map_err(|_| UNAVAILABLE)?;
         if replace {
@@ -188,7 +215,7 @@ impl SourceStore {
             file.persist_noclobber(path).map_err(|_| UNAVAILABLE)?;
         }
         #[cfg(unix)]
-        File::open(&self.0)
+        File::open(&self.directory)
             .and_then(|directory| directory.sync_all())
             .map_err(|_| UNAVAILABLE)?;
         Ok(())
@@ -196,16 +223,16 @@ impl SourceStore {
 }
 
 #[cfg(test)]
-mod manual_resume_tests {
+mod resumable_import_tests {
     use super::*;
 
     #[test]
-    fn restart_scan_returns_only_explicit_manual_import_heads() {
+    fn restart_scan_returns_pending_and_accepted_heads_for_manual_and_normal_sources() {
         let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join(".test-tmp");
         fs::create_dir_all(&scratch).unwrap();
         let directory = tempfile::tempdir_in(&scratch).unwrap();
         let store = SourceStore::open(directory.path()).unwrap();
-        for (session, manual) in [("old-auto", false), ("selected-manual", true)] {
+        for (session, manual) in [("normal", false), ("selected-manual", true)] {
             let path = store.path(session);
             let mut state = SourceState::default();
             state.session_id = Some(session.to_owned());
@@ -224,17 +251,73 @@ mod manual_resume_tests {
             store.write(&path, &state).unwrap();
         }
         let mut seen = Vec::new();
-        store.visit_manual_imports(|owner, import_id| {
-            seen.push((owner, import_id));
+        store.visit_resumable_imports(|session, owner, import_id, manual| {
+            seen.push((session, owner, import_id, manual));
             seen.len() < 130
         });
+        seen.sort();
         assert_eq!(
             seen,
-            vec![(
-                "configured-rel".to_owned(),
-                "import-selected-manual".to_owned()
-            )]
+            vec![
+                (
+                    "normal".to_owned(),
+                    "configured-rel".to_owned(),
+                    "import-normal".to_owned(),
+                    false,
+                ),
+                (
+                    "selected-manual".to_owned(),
+                    "configured-rel".to_owned(),
+                    "import-selected-manual".to_owned(),
+                    true,
+                ),
+            ]
         );
+    }
+
+    #[test]
+    fn bounded_resume_scan_rotates_until_entries_after_the_first_window_are_seen() {
+        let scratch = Path::new(env!("CARGO_MANIFEST_DIR")).join(".test-tmp");
+        fs::create_dir_all(&scratch).unwrap();
+        let directory = tempfile::tempdir_in(&scratch).unwrap();
+        let store = SourceStore::open(directory.path()).unwrap();
+        for index in 0..=MAX_RESUME_SCAN_ENTRIES {
+            let session = format!("source-{index:04}");
+            let path = store.path(&session);
+            let mut state = SourceState::default();
+            state.session_id = Some(session);
+            state.owner_id = Some("configured-rel".to_owned());
+            state.available = true;
+            state.accepted = Some(SourceHead {
+                wire_digest: "a".repeat(64),
+                request_key: "b".repeat(64),
+                native_digest: [1; 32],
+                import_id: format!("import-{index}"),
+                branch: None,
+                evidence: Vec::new(),
+                receipt: Some([2; 32]),
+            });
+            store.write(&path, &state).unwrap();
+        }
+
+        let mut first = Vec::new();
+        store.visit_resumable_imports(|session, _, _, _| {
+            first.push(session);
+            true
+        });
+        assert_eq!(first.len(), MAX_RESUME_SCAN_ENTRIES);
+
+        let mut second = Vec::new();
+        store.visit_resumable_imports(|session, _, _, _| {
+            second.push(session);
+            true
+        });
+        assert_eq!(second.len(), 1);
+        let mut all = first;
+        all.extend(second);
+        all.sort();
+        all.dedup();
+        assert_eq!(all.len(), MAX_RESUME_SCAN_ENTRIES + 1);
     }
 }
 

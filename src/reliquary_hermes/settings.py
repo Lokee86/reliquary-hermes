@@ -8,7 +8,6 @@ from threading import local
 from .validation import MAX_WIRE_BYTES, canonical, decode, identifier, obj, require, text
 
 TOKEN_VAR = "RELIQUARY_HERMES_TOKEN"
-PROVIDER_API_KEY_VAR = "RELIQUARY_PROVIDER_API_KEY"
 _SETUP_LOCK_HOLDER = local()
 OWNER_FIELDS = {"profile_id", "principal_id", "main_rel", "projects", "active_phy"}
 
@@ -83,19 +82,12 @@ def read_settings(home: Path) -> Settings:
     return Settings(state, owners["profile_id"], owners["principal_id"], _existing_file(provider["binary"]))
 
 
-def _profile_secret(home: Path, name: str = TOKEN_VAR, *, optional: bool = False):
+def _profile_secret(home: Path):
     """Read one secret through Hermes after fencing it to the requested profile."""
-    try:
-        from agent.secret_scope import current_secret_scope_home, get_secret
-        from hermes_constants import get_hermes_home, get_routing_process_hermes_home
-    except ModuleNotFoundError:
-        if optional:
-            return None
-        raise
+    from agent.secret_scope import current_secret_scope_home, get_secret
+    from hermes_constants import get_hermes_home, get_routing_process_hermes_home
 
-    secret = get_secret(name)
-    if optional and secret is None:
-        return None
+    secret = get_secret(TOKEN_VAR)
     scoped_home = current_secret_scope_home()
     if scoped_home is None:
         require(profile_home(get_routing_process_hermes_home()) == home, "profile_scope_mismatch")

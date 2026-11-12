@@ -6,7 +6,7 @@ import sys
 import pytest
 
 from reliquary_hermes.client import HostClient
-from reliquary_hermes.settings import PROVIDER_API_KEY_VAR, TOKEN_VAR, _profile_secret, read_token
+from reliquary_hermes.settings import TOKEN_VAR, read_token
 from reliquary_hermes import setup
 from reliquary_hermes.validation import ContractError
 
@@ -16,8 +16,9 @@ def scoped_provider_key(monkeypatch, tmp_path):
     home = tmp_path / "routed-profile"
     home.mkdir()
     key = "synthetic-profile-provider-api-key"
-    values = {PROVIDER_API_KEY_VAR: key, TOKEN_VAR: "synthetic-profile-scoped-local-host-token"}
-    monkeypatch.setenv(PROVIDER_API_KEY_VAR, "synthetic-foreign-process-api-key")
+    values = {TOKEN_VAR: "synthetic-profile-scoped-local-host-token"}
+    monkeypatch.setenv("RELIQUARY_PROVIDER_API_KEY", key)
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-foreign-process-api-key")
     agent = ModuleType("agent")
     agent.__path__ = []
     secret_scope = ModuleType("agent.secret_scope")
@@ -38,13 +39,12 @@ def test_profile_secret_uses_scoped_get_secret_and_rejects_foreign_home(scoped_p
     other_home.mkdir()
 
     assert read_token(home) == values[TOKEN_VAR]
-    assert _profile_secret(home, PROVIDER_API_KEY_VAR) == values[PROVIDER_API_KEY_VAR]
     with pytest.raises(ContractError, match="profile_scope_mismatch"):
-        _profile_secret(other_home, PROVIDER_API_KEY_VAR)
+        read_token(other_home)
 
 
-def test_host_launch_passes_only_the_scoped_provider_key(scoped_provider_key, monkeypatch):
-    home, key, _ = scoped_provider_key
+def test_host_launch_never_exports_provider_credentials(scoped_provider_key, monkeypatch):
+    home, _, _ = scoped_provider_key
     state = home / "reliquary"
     state.mkdir()
     binary = home / "host"
@@ -67,12 +67,11 @@ def test_host_launch_passes_only_the_scoped_provider_key(scoped_provider_key, mo
                         binary=binary)
     client._launch()
 
-    assert captured["env"][PROVIDER_API_KEY_VAR] == key
-    assert "PATH" not in captured["env"]
+    assert set(captured["env"]) <= {"SystemRoot", "WINDIR", "TEMP", "TMP", "TMPDIR"}
 
 
-def test_setup_host_passes_only_the_scoped_provider_key(scoped_provider_key, monkeypatch):
-    home, key, _ = scoped_provider_key
+def test_setup_host_never_exports_provider_credentials(scoped_provider_key, monkeypatch):
+    home, _, _ = scoped_provider_key
     binary = home / "host"
     binary.touch()
     captured = {}
@@ -84,13 +83,12 @@ def test_setup_host_passes_only_the_scoped_provider_key(scoped_provider_key, mon
     monkeypatch.setattr(setup.subprocess, "run", run)
     setup._host_setup(home, binary, "setup-validate", {})
 
-    assert captured["env"][PROVIDER_API_KEY_VAR] == key
-    assert "PATH" not in captured["env"]
+    assert set(captured["env"]) <= {"SystemRoot", "WINDIR", "TEMP", "TMP", "TMPDIR"}
 
 
 def test_setup_host_omits_an_unconfigured_provider_key(scoped_provider_key, monkeypatch):
     home, _, values = scoped_provider_key
-    values.pop(PROVIDER_API_KEY_VAR)
+    values.clear()
     binary = home / "host"
     binary.touch()
     captured = {}
@@ -102,4 +100,4 @@ def test_setup_host_omits_an_unconfigured_provider_key(scoped_provider_key, monk
     monkeypatch.setattr(setup.subprocess, "run", run)
     setup._host_setup(home, binary, "setup-validate", {})
 
-    assert PROVIDER_API_KEY_VAR not in captured["env"]
+    assert "RELIQUARY_PROVIDER_API_KEY" not in captured["env"]

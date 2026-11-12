@@ -1,6 +1,8 @@
 //! One profile-scoped local service and its owner registry.
 use crate::{
+    embedding_binding::EmbeddingBindingStore,
     graph_render_host::GraphRenderHost,
+    hosted_inference::{Broker, IDENTITY, WORKER_ERROR},
     registry::{OwnerConfig, Registry, RegistryError},
     retrieval::RetrievalService,
     runtime::{HEARTBEAT_SECONDS, ReconciliationScope, RuntimeRegistry},
@@ -26,6 +28,7 @@ use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeSet,
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
     net::{Ipv4Addr, TcpListener, TcpStream},
@@ -47,6 +50,7 @@ const BOOTSTRAP_LIMIT: usize = 4096;
 const PREFETCH_BUDGET: Duration = Duration::from_millis(6500);
 const RETRIEVAL_TOOL_BUDGET: Duration = Duration::from_secs(65);
 const RETRIEVAL_BUSY: HttpError = HttpError::new(503, "retrieval_busy", true);
+const INFERENCE_BUSY: HttpError = HttpError::new(503, "inference_backpressure", true);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -64,6 +68,12 @@ struct Service {
     retrieval: Mutex<RetrievalService>,
     graph_render: Mutex<GraphRenderHost>,
     retrieval_waiter: Mutex<()>,
+    retrieval_busy: AtomicBool,
+    deferred_invalidations: Mutex<BTreeSet<String>>,
+    inference: Broker,
+    runtime_binding: Mutex<()>,
+    embedding_bindings: EmbeddingBindingStore,
+    blocking_workers: AtomicUsize,
     runtimes: Mutex<RuntimeRegistry>,
     closing: AtomicBool,
     inflight: AtomicUsize,
@@ -73,12 +83,68 @@ struct Service {
 }
 
 impl Service {
+    fn ensure_embedding_owner(&self, owner: reliquary_memory::OwnerId) -> Result<(), HttpError> {
+        let identity = self
+            .inference
+            .embedding_binding()
+            .map_err(|code| HttpError::new(503, code, true))?;
+        self.embedding_bindings
+            .ensure_owner(owner, &identity, || {
+                self.instance.has_active_vectors(owner).map_err(|_| ())
+            })
+            .map_err(|code| HttpError::new(503, code, true))
+    }
+
+    fn restore_retrieval(&self, work: RetrievalService) -> Result<(), HttpError> {
+        let mut retrieval = self.retrieval.lock().map_err(|_| UNAVAILABLE)?;
+        retrieval.restore_work(work);
+        let invalidations = {
+            let mut pending = self
+                .deferred_invalidations
+                .lock()
+                .map_err(|_| UNAVAILABLE)?;
+            std::mem::take(&mut *pending)
+        };
+        for session in invalidations {
+            retrieval.invalidate_session(&session, &self.instance);
+        }
+        Ok(())
+    }
+
+    fn invalidate_retrieval(&self, session: &str) {
+        if self.retrieval_busy.load(Ordering::Acquire) {
+            if let Ok(mut pending) = self.deferred_invalidations.lock() {
+                pending.insert(session.to_owned());
+            }
+            return;
+        }
+        if let Ok(mut retrieval) = self.retrieval.try_lock() {
+            if self.retrieval_busy.load(Ordering::Acquire) {
+                if let Ok(mut pending) = self.deferred_invalidations.lock() {
+                    pending.insert(session.to_owned());
+                }
+            } else {
+                retrieval.invalidate_session(session, &self.instance);
+            }
+        }
+    }
+
     fn connection(&self, mut socket: TcpStream, accepted_at: Instant) {
         match read_request(&mut socket, accepted_at, &self.expected_host, &self.key) {
             Ok(request) => {
-                let response = self
-                    .dispatch(&request, accepted_at)
-                    .unwrap_or_else(HttpError::into_response);
+                let control = reserved_worker_path(request.path);
+                let admitted = admit_worker_request(request.path, &self.blocking_workers);
+                let response = if !admitted {
+                    INFERENCE_BUSY.into_response()
+                } else {
+                    let response = self
+                        .dispatch(&request, accepted_at)
+                        .unwrap_or_else(HttpError::into_response);
+                    if !control {
+                        self.blocking_workers.fetch_sub(1, Ordering::AcqRel);
+                    }
+                    response
+                };
                 let _ = write_response(&mut socket, response, Some((&self.key, &request.nonce)));
             }
             Err(error) => {
@@ -94,6 +160,49 @@ impl Service {
     ) -> Result<HttpResponse, HttpError> {
         if self.closing.load(Ordering::Acquire) {
             return Err(UNAVAILABLE);
+        }
+        if request.path.starts_with("/v1/inference/") {
+            if request.path == IDENTITY {
+                let (response, ()) = bind_identity_runtime(
+                    &self.runtime_binding,
+                    &self.inference,
+                    &request.body,
+                    &self.discovery.profile_id,
+                    &self.discovery.instance_id,
+                    &self.discovery.lease_id,
+                    |runtime, _epoch| {
+                        self.sources
+                            .lock()
+                            .map_err(|_| UNAVAILABLE)?
+                            .bind_runtime(Arc::clone(&runtime));
+                        self.retrieval
+                            .lock()
+                            .map_err(|_| UNAVAILABLE)?
+                            .bind_runtime(runtime);
+                        let registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
+                        let mut sources = self.sources.lock().map_err(|_| UNAVAILABLE)?;
+                        let mut runtimes = self.runtimes.lock().map_err(|_| UNAVAILABLE)?;
+                        sources.resume_all(&self.instance, &registry, &mut runtimes, |owner| {
+                            self.ensure_embedding_owner(owner).is_ok()
+                        })?;
+                        Ok(())
+                    },
+                )?;
+                return Ok(response);
+            }
+            let _runtime_binding = if request.path == WORKER_ERROR {
+                Some(self.runtime_binding.lock().map_err(|_| UNAVAILABLE)?)
+            } else {
+                None
+            };
+            let response = self.inference.handle(
+                &request.path,
+                &request.body,
+                &self.discovery.profile_id,
+                &self.discovery.instance_id,
+                &self.discovery.lease_id,
+            )?;
+            return Ok(response);
         }
         match request.path {
             ATTACH => self.attach(&request.body),
@@ -313,8 +422,10 @@ impl Service {
                 .map_err(attach_error)?;
             (binding, owner)
         };
-        if let Ok(mut sources) = self.sources.try_lock() {
-            sources.resume(&self.instance, owner, &request.session_id);
+        if self.ensure_embedding_owner(owner).is_ok() {
+            if let Ok(mut sources) = self.sources.try_lock() {
+                sources.resume(&self.instance, owner, &request.session_id, true);
+            }
         }
         Ok(HttpResponse::ok(json!({
             "discovery": self.discovery,
@@ -344,12 +455,31 @@ impl Service {
         let registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
         let sources = self.sources.lock().map_err(|_| UNAVAILABLE)?;
         let mut runtimes = self.runtimes.lock().map_err(|_| UNAVAILABLE)?;
-        Ok(HttpResponse::ok(sources.import_status(
+        let mut status = sources.import_status(
             &request.session_id,
             &self.instance,
             &registry,
             &mut runtimes,
-        )?))
+        )?;
+        let owner = status["owner_id"]
+            .as_str()
+            .and_then(|value| value.parse::<reliquary_memory::OwnerId>().ok());
+        let embedding_error = match owner {
+            Some(owner) if status["state"] != "tombstoned" && status["state"] != "none" => {
+                match self.inference.embedding_binding() {
+                    Err(code) => Some(code),
+                    Ok(identity) => self
+                        .embedding_bindings
+                        .status_owner(owner, &identity, || {
+                            self.instance.has_active_vectors(owner).map_err(|_| ())
+                        })
+                        .unwrap_or(Some("embedding_identity_unavailable")),
+                }
+            }
+            _ => None,
+        };
+        apply_embedding_status(&mut status, embedding_error);
+        Ok(HttpResponse::ok(status))
     }
 
     fn source(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
@@ -424,7 +554,9 @@ impl Service {
         let invalidate_retrieval = !request.operation.is_snapshot();
         let reconcile = request.fence_epoch.is_some();
         let session_id = request.session_id.clone();
-        let response = sources.handle(&self.instance, owner, request, fenced);
+        let response = sources.handle(&self.instance, owner, request, fenced, || {
+            self.ensure_embedding_owner(owner)
+        });
         if reconcile && response.is_ok() && eligible_epoch.is_some() {
             runtimes
                 .clear_fence("hermes", &session_id, eligible_epoch)
@@ -443,9 +575,7 @@ impl Service {
         drop(runtimes);
         drop(sources);
         if response.is_ok() && invalidate_retrieval {
-            if let Ok(mut retrieval) = self.retrieval.try_lock() {
-                retrieval.invalidate_session(&session_id, &self.instance);
-            }
+            self.invalidate_retrieval(&session_id);
         }
         response
     }
@@ -460,23 +590,29 @@ impl Service {
         {
             return Err(FORBIDDEN);
         }
+        if let Some(code) = self.inference.unavailable_code() {
+            return Err(HttpError::new(503, code, true));
+        }
         let registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
         let owner = registry
             .source_owner(&request.session_id, true)
             .map_err(attach_error)?;
         drop(registry);
-        self.retrieval.try_lock().map_err(|_| UNAVAILABLE)?.prepare(
-            &request,
-            bytes,
-            &self.instance,
-            owner,
-        )
+        self.ensure_embedding_owner(owner)?;
+        let permit = RetrievalPermit::acquire(&self.retrieval_busy).ok_or(RETRIEVAL_BUSY)?;
+        let mut slot = self.retrieval.try_lock().map_err(|_| UNAVAILABLE)?;
+        let mut work = slot.take_for_work();
+        drop(slot);
+        let response = work.prepare(&request, bytes, &self.instance, owner);
+        self.restore_retrieval(work)?;
+        drop(permit);
+        response
     }
 
     fn wait_for_retrieval(
         &self,
         deadline: Instant,
-    ) -> Result<MutexGuard<'_, RetrievalService>, HttpError> {
+    ) -> Result<(MutexGuard<'_, RetrievalService>, RetrievalPermit<'_>), HttpError> {
         // Let one explicit recall wait behind a slow prefetch. Other workers
         // remain available for lease heartbeats and unrelated service requests.
         let _waiter = self
@@ -484,9 +620,19 @@ impl Service {
             .try_lock()
             .map_err(|_| RETRIEVAL_BUSY)?;
         while Instant::now() < deadline {
+            if self.retrieval_busy.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(25));
+                continue;
+            }
+            let Some(permit) = RetrievalPermit::acquire(&self.retrieval_busy) else {
+                continue;
+            };
             match self.retrieval.try_lock() {
-                Ok(retrieval) => return Ok(retrieval),
-                Err(TryLockError::WouldBlock) => thread::sleep(Duration::from_millis(25)),
+                Ok(retrieval) => return Ok((retrieval, permit)),
+                Err(TryLockError::WouldBlock) => {
+                    drop(permit);
+                    thread::sleep(Duration::from_millis(25));
+                }
                 Err(TryLockError::Poisoned(_)) => return Err(UNAVAILABLE),
             }
         }
@@ -522,6 +668,9 @@ impl Service {
                     request.error("unavailable", "source_ingest_unavailable", false)
                 }
                 Operation::MemoryQuery | Operation::RefineQuery | Operation::TraverseGraph => {
+                    if let Some(code) = self.inference.unavailable_code() {
+                        return Ok(HttpResponse::ok(request.error("unavailable", code, true)));
+                    }
                     let owner = match registry.source_owner(&request.session_id, true) {
                         Ok(owner) => owner,
                         Err(error) => {
@@ -533,16 +682,28 @@ impl Service {
                         }
                     };
                     drop(registry);
+                    if let Err(error) = self.ensure_embedding_owner(owner) {
+                        return Ok(HttpResponse::ok(request.error(
+                            "unavailable",
+                            error.code(),
+                            error.retryable(),
+                        )));
+                    }
                     let (retrieval_deadline, retrieval) = if explicit_recall {
                         let deadline = accepted_at + RETRIEVAL_TOOL_BUDGET;
                         (deadline, self.wait_for_retrieval(deadline))
                     } else {
-                        (
-                            accepted_at + PREFETCH_BUDGET,
-                            self.retrieval.try_lock().map_err(|_| RETRIEVAL_BUSY),
-                        )
+                        let permit =
+                            RetrievalPermit::acquire(&self.retrieval_busy).ok_or(RETRIEVAL_BUSY);
+                        let guard = permit.and_then(|permit| {
+                            self.retrieval
+                                .try_lock()
+                                .map(|guard| (guard, permit))
+                                .map_err(|_| RETRIEVAL_BUSY)
+                        });
+                        (accepted_at + PREFETCH_BUDGET, guard)
                     };
-                    let mut retrieval = match retrieval {
+                    let (mut retrieval, permit) = match retrieval {
                         Ok(retrieval) => retrieval,
                         Err(error) => {
                             return Ok(HttpResponse::ok(request.error(
@@ -552,7 +713,9 @@ impl Service {
                             )));
                         }
                     };
-                    return match retrieval.request(
+                    let mut work = retrieval.take_for_work();
+                    drop(retrieval);
+                    let result = work.request(
                         &request,
                         bytes,
                         &self.instance,
@@ -561,7 +724,10 @@ impl Service {
                         &self.sources,
                         &self.runtimes,
                         retrieval_deadline,
-                    ) {
+                    );
+                    self.restore_retrieval(work)?;
+                    drop(permit);
+                    return match result {
                         Ok(body) => Ok(HttpResponse::ok(body)),
                         Err(error) => Ok(HttpResponse::ok(request.error(
                             match error.status_code() {
@@ -584,6 +750,195 @@ impl Service {
             Err(error) => request.error(error.status(), error.code(), error.retryable()),
         };
         Ok(HttpResponse::ok(response))
+    }
+}
+
+fn bind_identity_runtime<T>(
+    gate: &Mutex<()>,
+    broker: &Broker,
+    body: &[u8],
+    profile: &str,
+    instance: &str,
+    lease: &str,
+    install: impl FnOnce(Arc<reliquary_memory::ConfiguredRuntime>, u64) -> Result<T, HttpError>,
+) -> Result<(HttpResponse, T), HttpError> {
+    let _gate = gate.lock().map_err(|_| UNAVAILABLE)?;
+    let response = broker.handle(IDENTITY, body, profile, instance, lease)?;
+    let runtime = broker.bind_runtime().map_err(|_| UNAVAILABLE)?;
+    let epoch = match &response.body {
+        crate::service_http::ResponseBody::Json { value, .. } => {
+            value["lease_epoch"].as_u64().ok_or(UNAVAILABLE)?
+        }
+        crate::service_http::ResponseBody::Binary(_) => return Err(UNAVAILABLE),
+    };
+    let installed = install(runtime, epoch)?;
+    Ok((response, installed))
+}
+
+fn reserved_worker_path(path: &str) -> bool {
+    path.starts_with("/v1/inference/")
+        || matches!(
+            path,
+            ATTACH
+                | DASHBOARD_TOPOLOGY
+                | RUNTIME_ATTACH
+                | RUNTIME_HEARTBEAT
+                | RUNTIME_DETACH
+                | RUNTIME_SCOPE
+        )
+}
+
+fn apply_embedding_status(status: &mut serde_json::Value, error: Option<&'static str>) {
+    if let Some(code) = error {
+        status["state"] = json!("unavailable");
+        status["embedding_error"] = json!(code);
+    } else {
+        status["embedding_error"] = serde_json::Value::Null;
+    }
+}
+
+fn admit_worker_request(path: &str, blocking_workers: &AtomicUsize) -> bool {
+    reserved_worker_path(path)
+        || blocking_workers
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                (active < 2).then_some(active + 1)
+            })
+            .is_ok()
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    use std::sync::atomic::AtomicU64;
+
+    #[test]
+    fn two_model_waiters_leave_worker_and_runtime_control_paths_available() {
+        let active = AtomicUsize::new(0);
+        assert!(admit_worker_request("/v1/request", &active));
+        assert!(admit_worker_request(RETRIEVAL_PREPARE, &active));
+        assert!(!admit_worker_request("/v1/request", &active));
+        assert_eq!(active.load(Ordering::Acquire), 2);
+
+        for path in [
+            "/v1/inference/claim",
+            "/v1/inference/result-part",
+            RUNTIME_ATTACH,
+            RUNTIME_HEARTBEAT,
+            RUNTIME_DETACH,
+            RUNTIME_SCOPE,
+            ATTACH,
+            DASHBOARD_TOPOLOGY,
+        ] {
+            assert!(admit_worker_request(path, &active), "{path}");
+        }
+        assert_eq!(active.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn embedding_identity_errors_are_visible_without_hiding_accepted_receipts() {
+        let mut status = json!({"state":"complete","receipt":"accepted"});
+        apply_embedding_status(&mut status, Some("embedding_identity_stale"));
+        assert_eq!(status["state"], "unavailable");
+        assert_eq!(status["embedding_error"], "embedding_identity_stale");
+        assert_eq!(status["receipt"], "accepted");
+    }
+
+    #[test]
+    fn concurrent_identity_applies_install_the_current_runtime_epoch() {
+        let gate = Arc::new(Mutex::new(()));
+        let broker = Arc::new(Broker::new());
+        let installed_epoch = Arc::new(AtomicU64::new(0));
+        let first_started = Arc::new(AtomicBool::new(false));
+        let first_gate = Arc::clone(&gate);
+        let first_broker = Arc::clone(&broker);
+        let first_installed = Arc::clone(&installed_epoch);
+        let started = Arc::clone(&first_started);
+        let first = thread::spawn(move || {
+            let body = identity_body("0000000000000000000000000000000a", "generation-a");
+            bind_identity_runtime(
+                &first_gate,
+                &first_broker,
+                &serde_json::to_vec(&body).unwrap(),
+                "profile-one",
+                "instance-one",
+                "lease-one",
+                |runtime, epoch| {
+                    let _runtime = runtime;
+                    started.store(true, Ordering::Release);
+                    thread::sleep(Duration::from_millis(40));
+                    first_installed.store(epoch, Ordering::Release);
+                    Ok(())
+                },
+            )
+            .unwrap()
+            .0
+        });
+        let second_gate = Arc::clone(&gate);
+        let second_broker = Arc::clone(&broker);
+        let second_installed = Arc::clone(&installed_epoch);
+        let second = thread::spawn(move || {
+            while !first_started.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(1));
+            }
+            let body = identity_body("0000000000000000000000000000000b", "generation-b");
+            bind_identity_runtime(
+                &second_gate,
+                &second_broker,
+                &serde_json::to_vec(&body).unwrap(),
+                "profile-one",
+                "instance-one",
+                "lease-one",
+                |runtime, epoch| {
+                    let _runtime = runtime;
+                    second_installed.store(epoch, Ordering::Release);
+                    Ok(())
+                },
+            )
+            .unwrap()
+            .0
+        });
+        let _first_response = first.join().unwrap();
+        let second_response = second.join().unwrap();
+        let current_epoch = match second_response.body {
+            crate::service_http::ResponseBody::Json { value, .. } => {
+                value["lease_epoch"].as_u64().unwrap()
+            }
+            crate::service_http::ResponseBody::Binary(_) => panic!("identity is JSON"),
+        };
+        assert_eq!(installed_epoch.load(Ordering::Acquire), current_epoch);
+    }
+
+    fn identity_body(worker_id: &str, generation_model: &str) -> serde_json::Value {
+        json!({
+            "worker_id": worker_id,
+            "profile_id": "profile-one",
+            "instance_id": "instance-one",
+            "service_lease_id": "lease-one",
+            "general": {"provider": "openai-api", "model": generation_model},
+            "embedding": {
+                "provider": "openai-api",
+                "model": "text-embedding-3-small",
+                "dimensions": 3,
+                "input_type_handling": "shared",
+                "normalization": "none"
+            }
+        })
+    }
+}
+
+struct RetrievalPermit<'a>(&'a AtomicBool);
+
+impl<'a> RetrievalPermit<'a> {
+    fn acquire(flag: &'a AtomicBool) -> Option<Self> {
+        flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self(flag))
+    }
+}
+
+impl Drop for RetrievalPermit<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
     }
 }
 
@@ -707,10 +1062,7 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
         &discovery.lease_id,
     );
     let runtimes = RuntimeRegistry::open(state_dir)?;
-    let mut sources = SourceService::open(state_dir)?;
-    sources
-        .resume_all(&instance)
-        .map_err(|_| "source_state_unavailable")?;
+    let sources = SourceService::open(state_dir)?;
     let service = Arc::new(Service {
         expected_host,
         discovery,
@@ -722,6 +1074,12 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
         retrieval: Mutex::new(RetrievalService::open(state_dir)?),
         graph_render: Mutex::new(GraphRenderHost::default()),
         retrieval_waiter: Mutex::new(()),
+        retrieval_busy: AtomicBool::new(false),
+        deferred_invalidations: Mutex::new(BTreeSet::new()),
+        inference: Broker::new(),
+        runtime_binding: Mutex::new(()),
+        embedding_bindings: EmbeddingBindingStore::open(state_dir)?,
+        blocking_workers: AtomicUsize::new(0),
         runtimes: Mutex::new(runtimes),
         closing: AtomicBool::new(false),
         inflight: AtomicUsize::new(0),
@@ -757,6 +1115,7 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
     listener
         .set_nonblocking(true)
         .map_err(|_| "loopback_unavailable")?;
+    let mut next_source_resume = Instant::now() + Duration::from_secs(5);
     loop {
         // Expiry is a liveness event, not an idle-time event. Persist fences
         // even while no client is currently talking to the host.
@@ -765,6 +1124,21 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
         }
         if let Ok(mut graph_render) = service.graph_render.try_lock() {
             graph_render.expire();
+        }
+        if Instant::now() >= next_source_resume {
+            if let Ok(registry) = service.registry.try_lock() {
+                if let Ok(mut sources) = service.sources.try_lock() {
+                    if let Ok(mut runtimes) = service.runtimes.try_lock() {
+                        let _ = sources.resume_all(
+                            &service.instance,
+                            &registry,
+                            &mut runtimes,
+                            |owner| service.ensure_embedding_owner(owner).is_ok(),
+                        );
+                    }
+                }
+            }
+            next_source_resume = Instant::now() + Duration::from_secs(5);
         }
         if service.closing.load(Ordering::Acquire) {
             if service.inflight.load(Ordering::Acquire) == 0

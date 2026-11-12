@@ -18,6 +18,22 @@ Record reproducible checks for the standalone provider and dashboard contracts.
 
 ## Overview
 
+### Hosted inference migration gate
+
+The upstream `ctx.llm.embed/aembed` PR is [Hermes #154202](https://github.com/NousResearch/hermes-agent/pull/154202), pinned at `168a923023a7018be3dbf66530531dd20b1834b9`. Its facade/transport tests passed 83 cases, plugin task/picker tests passed 47, and auxiliary-client/credential regression tests passed 229 (359 distinct tests). All 16 Hermes repository checks passed. Tests use synthetic loopback providers and isolated profile credentials; no live provider or Memory corpus was probed.
+
+The isolated Root workspace passed 680 tests, the CLI passed 18, and the external consumer passed 18 with one explicitly ignored process test exercised separately by the fresh-process G4 gate. Workspace check, formatting, architecture (23 packages / 76 production edges), documentation, entrypoint and gate-control checks passed. Standalone Switchboard passed 37 tests, including protected configuration, encryption, key migration and configured inference. The native plugin host passed 124 tests with one existing scale characterization ignored. Dashboard typecheck, all 26 Node tests and the shared Web/Desktop build passed.
+
+The real process acceptance and SDK credential-renewal fixtures passed both tests against the exact Hermes revision above. The synthetic provider resolved `custom:fixture` with `fixture-chat` (then `fixture-chat-v2`) and `fixture-embedding`, 20,000 dimensions, shared query/document space and no normalization. Large vectors crossed the 256-KiB wire boundary through bounded multipart transport. A copied disposable REL/PHY exercised staged import before worker registration, Insomnia, Dream classification and verification, Entity resolution, decisions, document/query vectors, provenance, semantic recall and receipt replay. Same-vector model changes were refused across native restarts; changing only the chat model preserved compatible recall. Worker unload/reconnect, revocation without fallback, and real Hermes credential-pool rotation/renewal were verified without real provider credentials or corpus content.
+
+The final complete public-package Python run finished with **425 passed, 5 skipped and 1 failed** in 332.31 seconds. The sole failure was `tests/test_hu08_capture.py::test_hu08_installed_automatic_capture_is_new_root_only`: it asserted that `agent.memory_manager` came from the HU08 history checkout, but an earlier test had cached the HP01 module. The failure occurs at the fixture source-path assertion before automatic-capture behavior. Per the final scope instruction, no unrelated fixture change or rerun was added. The focused process cases passed 8/8. This final Python run used the shared reference host binary; the packaged native host was tested separately. Its log is `.test-temp/final-public-python.log`. The core integration separately passed 422 tests with 5 skipped. The five skipped gates require separately enabled installed/live/Desktop fixtures. No installed profile, host or live REL/PHY was changed.
+
+One repository-tool gate remains unavailable in the environment: installed Pitlord 0.1.2 rejects an unchanged baseline policy directive. Cached Pitlord 0.1.3 validates all 24 areas and 13 rules, but the full policy-tools command also requires an unavailable Lexicon executable. This limitation is separate from the passing product, architecture and documentation suites; it is not reported as a successful full policy-tools run.
+
+The public package's approved vendored Root baseline passed all 36 Switchboard tests with locked offline dependencies. Its two development-only Lodestone references now use the already approved local source subset; no additional dependency source or lockfile changes were needed. The packaged native host separately passed the same 124 tests with one existing scale characterization ignored.
+
+For the real inference fixture, set `HP_INFERENCE_HERMES_CHECKOUT` to the exact upstream inference revision. Keep `HP01_HERMES_CHECKOUT` on the independent audited history/ABC baseline. Use a disposable patched Hermes history checkout for `HU08_HERMES_INSTALLED_CHECKOUT`; never use a live profile as test state. Set `HP03_HOST_BINARY` and `HP03_RELIQUARY_CLI` to binaries built against the same isolated Root source. All temporary owner copies, logs, and caches stay in the worktrees; pytest uses `.pytest/_tmp`.
+
 HP01 verifies the pinned Hermes interfaces and the Python provider, owner routing and copied-source fixtures. HP02 verifies the selected-return bridge, copied-source import and dashboard product operations through the public Root API.
 
 ## Standalone checks
@@ -28,7 +44,7 @@ From the plugin repository with Python 3.11+, pytest 9.1.x, jsonschema 4.x, the 
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 $env:PYTHONDONTWRITEBYTECODE='1'
 $env:HP01_HERMES_CHECKOUT='C:\!bin\workspace\hermes-agent-reliquary-hp01-v023'
-python -B -m pytest -q --basetemp .pytest_tmp
+python -B -m pytest -q --basetemp .pytest/_tmp
 git diff --check
 ```
 
@@ -109,7 +125,7 @@ $env:HP03_RELIQUARY_CLI = (Resolve-Path host/target/debug/reliquary.exe).Path
 $env:HP01_HERMES_CHECKOUT = 'C:\!bin\workspace\hermes-agent-reliquary-hp01-v023'
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
 $env:PYTHONDONTWRITEBYTECODE = '1'
-python -B -m pytest -q --basetemp .pytest_tmp
+python -B -m pytest -q --basetemp .pytest/_tmp
 python -B ../Reliquary/scripts/check_architecture.py
 ```
 
@@ -140,15 +156,15 @@ $env:XDG_CACHE_HOME = $scratch
 $env:HERMES_HOME = Join-Path $scratch 'hermes-home'
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
 $env:PYTHONDONTWRITEBYTECODE = '1'
-python -B -m pytest -q -rs -p no:cacheprovider -c "$hermes/pyproject.toml" --basetemp .pytest_tmp `
+python -B -m pytest -q -rs -p no:cacheprovider -c "$hermes/pyproject.toml" --basetemp .pytest/_tmp `
   "$hermes/tests/hermes_cli/test_web_server.py::TestPluginAPIAuth" `
   "$hermes/tests/hermes_cli/test_web_server.py::TestDashboardPluginManifestExtensions" `
   "$hermes/tests/hermes_cli/test_web_server_plugin_secret_scope.py" `
   "$hermes/tests/hermes_cli/test_plugin_secondary_profile_host.py::test_browser_assets_follow_the_selected_profile"
-python -B -m pytest -q -rs -p no:cacheprovider -c "$hermes/pyproject.toml" --basetemp .pytest_tmp `
+python -B -m pytest -q -rs -p no:cacheprovider -c "$hermes/pyproject.toml" --basetemp .pytest/_tmp `
   "$hermes/tests/hermes_cli/test_web_server_host_header.py::test_plugin_websockets_run_the_core_host_origin_gate" `
   "$hermes/tests/hermes_cli/test_web_server_host_header.py::test_token_page_and_route_map_are_not_cors_readable_from_another_local_port"
-python -B -m pytest -q -rs -p no:cacheprovider -c "$hermes/pyproject.toml" --basetemp .pytest_tmp `
+python -B -m pytest -q -rs -p no:cacheprovider -c "$hermes/pyproject.toml" --basetemp .pytest/_tmp `
   "$hermes/tests/hermes_state/test_session_delete_hook.py::test_every_delete_and_archive_path_fires_once_after_commit"
 ```
 
@@ -193,7 +209,7 @@ Chrome on Hermes v0.23.0 verified owner and session switching, read-only PHY con
 To repeat the focused service proofs, use the environment from [HP03 local process verification](#hp03-local-process-verification) with the rebuilt dashboard host.
 
 ```powershell
-python -B -m pytest -q --basetemp .pytest_tmp tests/test_hu03_dashboard.py tests/test_dashboard_api.py tests/test_hp04_host.py tests/test_hp05_retrieval.py
+python -B -m pytest -q --basetemp .pytest/_tmp tests/test_hu03_dashboard.py tests/test_dashboard_api.py tests/test_hp04_host.py tests/test_hp05_retrieval.py
 npm.cmd --prefix dashboard run check
 ```
 
@@ -237,7 +253,7 @@ Use the HP03 process environment with a rebuilt HU04 host, the exact Root CLI an
 
 ```powershell
 $env:HU04_LIVE_ACCEPTANCE = '1'
-python -B -m pytest -q --basetemp .pytest_tmp tests/test_hu04_installed.py tests/test_hu04_acceptance.py tests/test_hp05_retrieval.py
+python -B -m pytest -q --basetemp .pytest/_tmp tests/test_hu04_installed.py tests/test_hu04_acceptance.py tests/test_hp05_retrieval.py
 ```
 
 The processing and retrieval routes use deterministic loopback model decisions. The proof uses the installed provider, signed Rust host, native REL and PHY owners, and pinned Hermes web dashboard.
@@ -296,7 +312,7 @@ Set `HU05_HERMES_HOSTED_CHECKOUT` to the Hermes installation under test. Use the
 
 ```powershell
 $env:HU05_HERMES_HOSTED_CHECKOUT = 'C:\path\to\installed\hermes-agent'
-python -B -m pytest -q --basetemp .pytest_tmp tests/test_hosted_desktop_api.py
+python -B -m pytest -q --basetemp .pytest/_tmp tests/test_hosted_desktop_api.py
 ```
 
 The installed Windows gateway passed this probe at `104a7c4158e98719750e32347cd4101a7b35bc8d` in both profile workers. The Hermes regression `tests/hermes_cli/test_plugin_host_route_auth.py` passed all five tests on the fix. Its launch and secondary native-admission cases reproduced the lost admission on the stock parent.
@@ -309,7 +325,7 @@ The Windows live run used the installed Desktop build from `b766b76988449e15e391
 
 Use the same Reliquary directory package with isolated profiles on stock Hermes `b766b76988449e15e3914037d3e03fb96af72774` and fixed Hermes `104a7c4158e98719750e32347cd4101a7b35bc8d`. The fixed revision is a positive test host. The public plugin supports setup and writes through the web dashboard on stock Hermes, alongside Desktop setup status and reads. Desktop enables its setup and write controls automatically when the authenticated status request has verified native admission.
 
-Build and stage the unified directory package once using the [local service guide](local-service.md). Set `HU06_PLUGIN_DIR` to that package, `HU06_HERMES_STOCK_CHECKOUT` and `HU05_HERMES_HOSTED_CHECKOUT` to the two Hermes checkouts, and `HU06_COMMUNITY_REL` to a synthetic main REL with a current accepted community partition. Use the HP03 process-test binary environment and run `python -B -m pytest -q --basetemp=.pytest_tmp tests/test_hosted_desktop_api.py`. The probe installs the same directory into both test profiles on each host and checks the isolated worker routes, native capability, web fallback, and existing authorization denials.
+Build and stage the unified directory package once using the [local service guide](local-service.md). Set `HU06_PLUGIN_DIR` to that package, `HU06_HERMES_STOCK_CHECKOUT` and `HU05_HERMES_HOSTED_CHECKOUT` to the two Hermes checkouts, and `HU06_COMMUNITY_REL` to a synthetic main REL with a current accepted community partition. Use the HP03 process-test binary environment and run `python -B -m pytest -q --basetemp=.pytest/_tmp tests/test_hosted_desktop_api.py`. The probe installs the same directory into both test profiles on each host and checks the isolated worker routes, native capability, web fallback, and existing authorization denials.
 
 The Windows hosted matrix passed both cases with a single package whose `host-pin.json` SHA-256 was `21351cbbb255f53401df8ad385cc1060db0af1c9562950488c5c905f23044391`. On stock Hermes, native status reported `false` and native reads succeeded. Same-origin web setup, Memory create/edit/retire, association link/unlink, and community rename succeeded. On fixed Hermes, native status reported `true` and the same operations succeeded with native admission. Same-origin web writes also passed on the fixed host. Both cases confirmed distinct launch and secondary workers, and denial of foreign profiles, replayed tickets, Origin-bearing tickets, and forged admission fields.
 
@@ -348,7 +364,7 @@ Run the pinned stock suite with the HP03 process binaries. Stock retains recall 
 Set `HU08_HERMES_INSTALLED_CHECKOUT` to that checkout and `HU05_HERMES_HOSTED_CHECKOUT` to the same path for the installed gateway probe. In a fresh Python process with the same binaries, run:
 
 ```powershell
-python -B -m pytest -q --basetemp .pytest_tmp tests/test_capture_policy.py tests/test_hu08_capture.py tests/test_hu08_manual_processing.py tests/test_hp04_host.py tests/test_hp04_runtime_process.py tests/test_hosted_desktop_api.py
+python -B -m pytest -q --basetemp .pytest/_tmp tests/test_capture_policy.py tests/test_hu08_capture.py tests/test_hu08_manual_processing.py tests/test_hp04_host.py tests/test_hp04_runtime_process.py tests/test_hosted_desktop_api.py
 ```
 
 The probes use synthetic profiles and deterministic local processing. They cover native creation evidence, portable restore with synthesized creation time, old resumes, trusted message identity, privacy scrubbing, authorized General and dedicated RELs, Web and Desktop-native confirmation, duplicate import, and processing while an unrelated Hermes session is active. Run the dashboard build, shared Web and Desktop tests, TypeScript check and locked offline Rust host suite as above.

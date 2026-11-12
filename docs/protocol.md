@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The 0.1.0 catalog package retains the wire protocol and uses profile-fenced Hermes secret reads. Its model routes are nonsecret JSON; `RELIQUARY_PROVIDER_API_KEY` is injected into the isolated child environment and Root binds an in-memory configuration. Opening CVCFG/OS-backed credentials is excluded from the catalog runtime. The unified package's root entry registers the provider and `on_session_delete` hook. See [current installation and disclosure](../README.md).
+The catalog package retains the signed wire protocol and profile-fenced Hermes secret reads for its local transport token. Model inference uses the registered plugin's `ctx.llm` in a separate context-bound worker. The native process receives no model credentials. The unified root entry registers the worker, provider and `on_session_delete` hook. See [current installation and disclosure](../README.md).
 
 Freeze the bounded HP01 transport, copied-source and server-owned authority DTOs for the standalone integration.
 
@@ -11,6 +11,16 @@ Freeze the bounded HP01 transport, copied-source and server-owned authority DTOs
 The Python DTOs define the provider boundary. The HP03 Rust host authenticates attach and serves owner status through Root. HP02 exposes initial copied snapshots and the selected-return workflow through Root. HP04 and HP05 wire those workflows into Hermes lifecycle and recall.
 
 ## Transport and authentication
+
+The signed source-status response includes nullable `embedding_error` metadata.
+An unavailable or incompatible embedding identity is reported without removing
+the accepted import receipt. The worker logs the actual bound general and
+embedding provider/model, dimensions, input semantics and normalization at INFO
+level; it does not log prompts, source content or authentication material.
+
+Embedding batches also respect Hermes's facade limits of 128 inputs and one MiB
+of UTF-8 input per call. The adapter splits larger batches and restores their
+original order; a single oversized input is rejected without truncation.
 
 The Rust service listens on `127.0.0.1` and publishes a literal loopback HTTP endpoint. Discovery pins `endpoint`, `instance_id`, `profile_id`, `protocol_version`, `hermes_revision` and `lease_id`. The client rejects other profiles or versions, non-loopback addresses, DNS hostnames, userinfo, route paths, query parameters and fragments.
 
@@ -26,13 +36,23 @@ The provider channel denies user edits. Dashboard edits require a separately aut
 
 An ambiguous discovery probe reports unavailable. A missing discovery file or literal connection refusal can start a candidate. The candidate must acquire the service lease before opening any writable Root owner. The host uses existing Root writer conflicts across separate service profiles.
 
+## Hosted inference
+
+The private `/v1/inference/*` control operations extend the same signed loopback service. They use its existing profile, principal, instance, service lease, nonce, Host/Origin checks, and response proof. They are not browser APIs or model endpoints. No provider credential crosses this protocol.
+
+A dedicated profile-bound worker holds the registered plugin's `ctx.llm`. It registers a synthetic-probe identity containing the actually resolved general provider/model and embedding provider/model/dimensions/input handling/normalization. Root's hosted constructor binds that identity to the existing General, Decision, and Embedding contracts; the existing general-to-decision adapter retains decision-schema validation. Worker and host reject results from a different identity or epoch before publication. Credential refresh does not itself change the identity. A changed embedding space uses the existing compatibility/reprocessing path.
+
+The broker supports identity, heartbeat, claim, request-part, result-start, result-part, cancel, and worker-error operations. Jobs carry bounded deadlines and correlation IDs. Requests and results use 64-KiB raw parts with an exact part count, byte count, ordering, and SHA-256 digest; base64 parts remain below the existing 256-KiB JSON wire limit. Large embedding batches are segmented and reassembled in order. The broker bounds total job bytes and pending jobs and returns typed backpressure instead of truncating results. It retains no durable plaintext prompt cache.
+
+Admission reserves capacity among the four HTTP workers for claim/result control requests. Model work runs without holding the SourceService, Registry, or Retrieval service locks. A worker exit, expired deadline, profile/instance/lease change, host restart, or changed model identity invalidates pending work and rejects late responses. An absent embedding API reports `embedding_unavailable`; there is no standalone-credential fallback. The worker owns a scope-free integration runtime lease and can process work without an active chat turn.
+
 ## Profile setup
 
-The profile-scoped setup API is under the Reliquary dashboard plugin namespace. It provides `GET /setup-v1/status`, `GET /setup-v1/projects`, `POST /setup-v1/dialog`, `POST /setup-v1/create`, `POST /setup-v1/validate`, and `POST /setup-v1/apply`. The Hermes request scope selects the profile, including when the profile has no `owners.json`. Status reports `configured`, `runtime_detected`, `local_dialogs_available`, the selected `config_path` and current candidate defaults. The validate and apply body contains `main_rel`, `active_phy`, optional `projects` keyed by project ID, and optional `config_path`. Mutations require same-origin browser admission or the Hermes-verified local Desktop grant. The JSON body limit is 64 KiB.
+The profile-scoped setup API is under the Reliquary dashboard plugin namespace. It provides `GET /setup-v1/status`, `GET /setup-v1/projects`, `POST /setup-v1/dialog`, `POST /setup-v1/create`, `POST /setup-v1/validate`, and `POST /setup-v1/apply`. The Hermes request scope selects the profile, including when the profile has no `owners.json`. Status reports `configured`, `runtime_detected`, `local_dialogs_available`, and current owner defaults. The validate and apply body contains `main_rel`, `active_phy`, and optional `projects` keyed by project ID. Mutations require same-origin browser admission or the Hermes-verified local Desktop grant. The JSON body limit is 64 KiB. Inference selection belongs to Hermes, so setup contains no model configuration path or provider secret.
 
-Project inventory comes from the profile’s Hermes registry. The response includes stable IDs, display names and the host routing capability. Validation checks changed assignments against active projects. The local dialog accepts a JSON object with only `mode` (`open_rel`, `open_phy`, `open_config`, `save_rel`, or `save_phy`). An authenticated same-origin request must also pass the Windows local-interactive check. The reply contains `status` (`selected`, `cancelled`, or `unavailable`) and an absolute `path` only when selected. It is a candidate for the normal setup operation. Create accepts an owner kind and new path, and a verified active project ID for a dedicated REL. The setup service locks the profile while the Rust host creates the owner through public Root and verifies the resulting file. It returns the selected path and owner metadata.
+Project inventory comes from the profile’s Hermes registry. The response includes stable IDs, display names and the host routing capability. Validation checks changed assignments against active projects. The local dialog accepts a JSON object with only `mode` (`open_rel`, `open_phy`, `save_rel`, or `save_phy`). An authenticated same-origin request must also pass the Windows local-interactive check. The reply contains `status` (`selected`, `cancelled`, or `unavailable`) and an absolute `path` only when selected. It is a candidate for the normal setup operation. Create accepts an owner kind and new path, and a verified active project ID for a dedicated REL. The setup service locks the profile while the Rust host creates the owner through public Root and verifies the resulting file. It returns the selected path and owner metadata.
 
-The setup service calls `reliquary-hermes-host setup-validate --state-dir <profile-state>` with bounded JSON over stdin. The request carries the resolved owner configuration and an optional config path. The report exposes owner kind, stable ID, REL scope, open result, config open result and fixed validation codes. The host preflight uses public Root read-only verification and leaves no service lease. Apply revalidates, saves through the canonical settings and secret writers, and checks signed host topology before provider activation. For a running host, setup adds an owner-configuration fingerprint to its private signed topology request. The host checks the fingerprint against the configuration it loaded at startup. Setup can verify an unchanged candidate against those mounted owners. A changed or mismatched candidate requires a service restart. A successful apply returns `valid` and `configured` set to true. A failed preflight returns the validation report with `configured` set to false. The service token remains private.
+The setup service calls `reliquary-hermes-host setup-validate --state-dir <profile-state>` with bounded JSON over stdin. The request carries the resolved owner configuration. The report exposes owner kind, stable ID, REL scope, open result, and fixed validation codes. The host preflight uses public Root read-only verification and leaves no service lease. Apply revalidates, saves through the canonical settings and secret writers, and checks signed host topology before provider activation. For a running host, setup adds an owner-configuration fingerprint to its private signed topology request. The host checks the fingerprint against the configuration it loaded at startup. Setup can verify an unchanged candidate against those mounted owners. A changed or mismatched candidate requires a service restart. A successful apply returns `valid` and `configured` set to true. A failed preflight returns the validation report with `configured` set to false. The service token remains private.
 
 ## Dashboard owner discovery
 

@@ -13,7 +13,7 @@ const errorMessages: Record<string, string> = {
   owner_already_exists: "A file already exists at this path. Select it or choose another destination.",
   owner_created_unverified: "Reliquary created the file but could not verify it. Use Select to check it.",
   unknown_hermes_project: "Refresh the Hermes projects list and try again.",
-  invalid_path: "Enter an absolute local path for each selected owner and configuration.",
+  invalid_path: "Enter an absolute local path for each selected owner.",
 };
 
 export function setupError(error: unknown): string {
@@ -50,7 +50,6 @@ export function Setup({ host, status, readOnly, onConnected }: {
   const { Button, Input } = host.controls;
   const [main, setMain] = useState(status.defaults.main_rel ?? "");
   const [phy, setPhy] = useState(status.defaults.active_phy ?? "");
-  const [config, setConfig] = useState(status.defaults.config_path ?? "");
   const [projects, setProjects] = useState(status.defaults.projects);
   const [inventory, setInventory] = useState<SetupProjectInventory | null>(null);
   const [inventoryError, setInventoryError] = useState(false);
@@ -130,15 +129,14 @@ export function Setup({ host, status, readOnly, onConnected }: {
 
   function validate(review: boolean) {
     return run(async signal => {
-      const candidate: SetupCandidate = { main_rel: main.trim(), active_phy: phy.trim(), config_path: config.trim() || null };
+      const candidate: SetupCandidate = { main_rel: main.trim(), active_phy: phy.trim() };
       if (inventory?.routing_available) candidate.projects = Object.fromEntries(
         Object.entries(projects).filter(([, path]) => path.trim()).map(([id, path]) => [id, path.trim()]));
-      const paths = [candidate.main_rel, candidate.active_phy,
-        ...(candidate.config_path ? [candidate.config_path] : []), ...Object.values(candidate.projects ?? {})];
+      const paths = [candidate.main_rel, candidate.active_phy, ...Object.values(candidate.projects ?? {})];
       if (paths.some(path => !validLocalPath(path))) throw new Error("invalid_path");
       const result = await post("validate", candidate, signal) as SetupReport;
       signal.throwIfAborted();
-      if (typeof result?.valid !== "boolean" || !result.main_rel || !result.active_phy || !result.projects || !result.config) {
+      if (typeof result?.valid !== "boolean" || !result.main_rel || !result.active_phy || !result.projects) {
         throw new Error("invalid_setup_response");
       }
       setReport(result);
@@ -174,7 +172,7 @@ export function Setup({ host, status, readOnly, onConnected }: {
     });
   }
 
-  function pathField(target: Target, check?: SetupReport["main_rel"] | SetupReport["config"]) {
+  function pathField(target: Target, check?: SetupReport["main_rel"]) {
     return <section className="knowledge-memory-row warlock-setup-row" aria-label={target.label}>
       <div>
         <strong>{target.label}</strong>
@@ -205,7 +203,8 @@ export function Setup({ host, status, readOnly, onConnected }: {
       {readOnly && <p role="note" className="knowledge-muted">{readOnly}</p>}
       <p className="knowledge-muted">{status.runtime_detected ? "Reliquary runtime detected" : "Reliquary runtime unavailable"}</p>
       {!webDialogs && !host.pickOpenPath && <p role="note" className="knowledge-muted">Native file dialogs are unavailable for this connection.</p>}
-      <p className="knowledge-muted">Choose the General REL, active PHY, and optional processing routes JSON used by this Hermes profile.</p>
+      <p className="knowledge-muted">Choose the General REL and active PHY used by this Hermes profile. Hermes supplies model inference and authentication.</p>
+      <p className="knowledge-muted">Select an embedding model in Hermes before processing sources or using semantic recall.</p>
       <Button type="button" className="add-scope warlock-workflow-toggle" aria-expanded={manual} disabled={busy || !!confirm}
         onClick={() => setManual(value => !value)}>{manual ? "Hide manual paths" : "Enter path manually"}</Button>
       {status.configured && <p className="knowledge-muted">Existing sessions keep their accepted memory routes.</p>}
@@ -217,7 +216,6 @@ export function Setup({ host, status, readOnly, onConnected }: {
           <div className="knowledge-memory-rows">
             {pathField({ kind: "REL", label: "General memory", value: main, change: setMain, createKind: "general_rel" }, report?.main_rel)}
             {pathField({ kind: "PHY", label: "Active identity", value: phy, change: setPhy, createKind: "phy" }, report?.active_phy)}
-            {pathField({ kind: "config", label: "Processing routes JSON", value: config, change: setConfig }, report?.config)}
             {status.configured && <details className="knowledge-create warlock-projects">
               <summary>Project memories</summary>
               <p>Create or manage projects in Hermes, then refresh this list.</p>

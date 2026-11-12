@@ -13,8 +13,7 @@ from urllib.parse import urlsplit
 
 from .authority import Discovery
 from .protocol import Request, Response
-from .settings import PROVIDER_API_KEY_VAR, _profile_secret
-from .validation import (ContractError, MAX_WIRE_BYTES, canonical, decode, digest,
+from .validation import (ContractError, MAX_WIRE_BYTES, canonical, choice, decode, digest,
                          identifier, integer, obj, require, text)
 
 
@@ -128,9 +127,27 @@ class HostClient:
         except ContractError:
             raise HostUnavailable("invalid_runtime_response") from None
 
-    def attach_runtime(self, session_id: str) -> tuple[str, dict[str, int]]:
+    def inference_call(self, operation: str, value: dict, *, timeout: float = 5.0) -> dict:
+        """Send one profile-bound inference broker operation over the signed host channel."""
+        require(operation in {"identity", "claim", "request-part", "result-start", "result-part",
+                             "cancel", "heartbeat", "worker-error"}, "invalid_inference_operation")
+        require(type(timeout) in (int, float) and 0 < timeout <= 300, "invalid_timeout")
+        discovery = self._read_discovery()
+        if discovery is None:
+            raise HostUnavailable("host_unavailable")
+        reply = self._exchange(discovery, f"/v1/inference/{operation}", canonical(value),
+                               time.monotonic() + _CONNECT_SECONDS + float(timeout),
+                               response_seconds=float(timeout))
+        try:
+            result = decode(reply)
+            require(type(result) is dict, "invalid_inference_response")
+            return result
+        except ContractError:
+            raise HostUnavailable("invalid_inference_response") from None
+
+    def attach_runtime(self, session_id: str | None) -> tuple[str, dict[str, int]]:
         """Register this provider process as a live integration runtime."""
-        session = identifier(session_id)
+        session = None if session_id is None else identifier(session_id)
         result = self._runtime_call("/v1/runtime/attach", {
             "integration_kind": "hermes", "runtime_id": self._runtime_id,
             "principal_id": self._principal_id, "session_id": session,
@@ -141,7 +158,7 @@ class HostClient:
             raise HostUnavailable("invalid_runtime_response") from None
         scopes = self._parse_reconciliation_scopes(result)
         self._runtime_lease = lease
-        self._runtime_scopes = {session}
+        self._runtime_scopes = set() if session is None else {session}
         return lease, scopes
 
     def add_runtime_scope(self, session_id: str) -> tuple[str, dict[str, int]]:
@@ -307,9 +324,6 @@ class HostClient:
             raise HostUnavailable("host_not_configured")
         environment = {name: os.environ[name] for name in ("SystemRoot", "WINDIR") if name in os.environ}
         environment.update({name: str(self._state_dir) for name in ("TEMP", "TMP", "TMPDIR")})
-        provider_key = _profile_secret(self._state_dir.parent, PROVIDER_API_KEY_VAR, optional=True)
-        if provider_key is not None:
-            environment[PROVIDER_API_KEY_VAR] = provider_key
         platform = ({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt"
                     else {"start_new_session": True})
         try:
@@ -468,7 +482,12 @@ class HostClient:
         reply = self._exchange(discovery, "/v1/source/status", body,
                                time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS)
         try:
-            result = obj(decode(reply), {"session_id", "state", "receipt", "import_id", "owner_id", "snapshot_digest"})
+            result = decode(reply)
+            fields = {"session_id", "state", "receipt", "import_id", "owner_id", "snapshot_digest"}
+            require(fields <= set(result) <= fields | {"embedding_error"}, "invalid_source_status")
+            if result.get("embedding_error") is not None:
+                choice(result["embedding_error"], {"embedding_identity_stale", "embedding_identity_unbound",
+                    "embedding_identity_unavailable", "embedding_unavailable", "inference_unavailable", "inference_stale"})
             require(result["session_id"] == session and result["state"] in {
                 "none", "staged", "processing", "complete", "failed", "tombstoned", "unavailable"},
                 "invalid_source_status")

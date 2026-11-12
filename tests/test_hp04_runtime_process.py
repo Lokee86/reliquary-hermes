@@ -24,6 +24,7 @@ from test_host_client import TOKEN
 from test_hp03_host import binaries, config, install_setup_host, owner, stop
 from test_hp03_provider import history_provider
 from test_hp04_host import TEXT, _cli, _loopback_model, _processing_config, _turn, _when_ready
+from hosted_hermes_worker import start_hermes_worker, worker_command
 
 
 PROFILE = "profile-a"
@@ -31,7 +32,7 @@ PRINCIPAL = "principal-a"
 SESSION = "session-a"
 
 
-def _host(binary, cli, root, cleanup, *, processing_url=None):
+def _host(binary, cli, root, cleanup, *, processing_url=None, inference_checkout=None):
     rel, phy, state = root / "main.rel", root / "active.phy", root / "reliquary"
     owner(cli, "rel", rel, "unspecified")
     owner(cli, "phy", phy)
@@ -44,6 +45,10 @@ def _host(binary, cli, root, cleanup, *, processing_url=None):
     client.attach(SESSION)
     assert client._process is not None
     cleanup.callback(stop, client._process)
+    if processing_url is not None:
+        assert inference_checkout is not None
+        client._hosted_inference_worker = start_hermes_worker(
+            root, inference_checkout, processing_url, cleanup)
     return client, state
 
 
@@ -165,7 +170,7 @@ def test_history_provider_clean_drain_exits_and_restart_preserves_route(
         _wait_until(lambda: second_process.poll() is not None)
 
 
-def test_host_restart_during_reconciliation_advances_fence_epoch(tmp_path, binaries):
+def test_host_restart_during_reconciliation_advances_fence_epoch(tmp_path, binaries, inference_checkout):
     binary, cli = binaries
     with ExitStack() as cleanup:
         first, state = _host(binary, cli, tmp_path, cleanup)
@@ -220,7 +225,7 @@ def test_host_restart_during_reconciliation_advances_fence_epoch(tmp_path, binar
 
         processing_url = cleanup.enter_context(_loopback_model())
         _processing_config(cli, state, processing_url)
-
+        worker = start_hermes_worker(state.parent, inference_checkout, processing_url, cleanup)
 
         # The host dies during pending reconciliation. Its active lease adds a
         # newer durable fence when the replacement process opens the registry.
@@ -251,6 +256,7 @@ def test_host_restart_during_reconciliation_advances_fence_epoch(tmp_path, binar
         assert outbox.next_job(SESSION) is None
 
         third.detach_runtime()
+        assert worker_command(worker, "stop") == {"event": "stopped", "registered": False}
         assert third._process.wait(timeout=10) == 0
 
         conversation = "hermes-copy:" + sha256(
@@ -263,11 +269,12 @@ def test_host_restart_during_reconciliation_advances_fence_epoch(tmp_path, binar
 
 
 def test_ungraceful_runtime_exit_fences_scope_and_reconnects(
-        tmp_path, binaries, history_provider, history_checkout, monkeypatch):
+        tmp_path, binaries, history_provider, history_checkout, inference_checkout, monkeypatch):
     binary, cli = binaries
     with ExitStack() as cleanup:
         processing_url = cleanup.enter_context(_loopback_model())
-        host, state = _host(binary, cli, tmp_path, cleanup, processing_url=processing_url)
+        host, state = _host(binary, cli, tmp_path, cleanup, processing_url=processing_url,
+                            inference_checkout=inference_checkout)
         _enroll_and_create_session(tmp_path)
         original_binding = host.attach(SESSION)
         survivor_lease, initial_scopes = host.attach_runtime(SESSION)
@@ -286,10 +293,15 @@ def test_ungraceful_runtime_exit_fences_scope_and_reconnects(
         # A pinned Hermes process attaches through the real provider and is
         # terminated without provider.shutdown().
         repo_src = Path(__file__).resolve().parents[1] / "src"
-        script = f"""from time import sleep
+        script = f"""from pathlib import Path
+from time import sleep
+from agent.secret_scope import load_env_file, set_secret_scope
 from hermes_constants import set_hermes_home_override
+home = Path({str(state.parent)!r})
+scope = set_hermes_home_override(home)
+secrets = load_env_file(home / '.env')
+secret_scope = set_secret_scope(secrets, profile_home=str(home))
 from reliquary_hermes.provider import ReliquaryMemoryProvider
-scope = set_hermes_home_override({str(state.parent)!r})
 p = ReliquaryMemoryProvider()
 p.initialize({SESSION!r}, hermes_home={str(state.parent)!r})
 deadline = 10
@@ -311,14 +323,19 @@ sleep(120)
                     return True
                 try:
                     leases = json.loads(marker_path.read_text(encoding="utf-8"))["leases"]
-                    return len(leases) > 1
+                    return any(
+                        lease_id != survivor_lease and SESSION in lease.get("scopes", [])
+                        for lease_id, lease in leases.items()
+                    )
                 except (FileNotFoundError, json.JSONDecodeError, KeyError):
                     return False
 
             _wait_until(runtime_registered)
             marker = json.loads(marker_path.read_text(encoding="utf-8"))
-            new_leases = set(marker["leases"])
-            new_leases.discard(survivor_lease)
+            new_leases = {
+                lease_id for lease_id, lease in marker["leases"].items()
+                if lease_id != survivor_lease and SESSION in lease.get("scopes", [])
+            }
             assert len(new_leases) == 1, "the adapter subprocess did not register its lease"
             old_lease = new_leases.pop()
         finally:
@@ -381,6 +398,7 @@ sleep(120)
             "message_uid": "appended", "role": "user", "timestamp": time.time(),
             "content": TEXT["appended"],
         }]
+        from agent.secret_scope import load_env_file, reset_secret_scope, set_secret_scope
         from hermes_cli.config import load_config
         from hermes_cli.memory_setup import _post_setup_hook
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
@@ -390,6 +408,7 @@ sleep(120)
         prompts = iter(("", "", "", ""))
         monkeypatch.setattr("builtins.input", lambda _: next(prompts))
         scope = set_hermes_home_override(state.parent)
+        secret_scope = set_secret_scope(load_env_file(state.parent / ".env"), profile_home=str(state.parent))
         try:
             assert _post_setup_hook(provider, {})
             settings = read_settings(state.parent)
@@ -410,8 +429,10 @@ sleep(120)
             assert reconnect.deliver_source_job(initial_job) == initial_receipt
         finally:
             provider.shutdown()
+            reset_secret_scope(secret_scope)
             reset_hermes_home_override(scope)
 
+        worker_command(host._hosted_inference_worker, "stop")
         assert host._process.wait(timeout=10) == 0
 
         conversation = "hermes-copy:" + sha256(

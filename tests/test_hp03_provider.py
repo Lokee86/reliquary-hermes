@@ -3,6 +3,8 @@
 from hashlib import sha256
 import importlib
 import json
+import sys
+from pathlib import Path
 from threading import Event, Thread
 from time import monotonic, sleep
 from types import SimpleNamespace
@@ -27,8 +29,8 @@ def _profile(home, name):
     return values
 
 
-def _settled(provider, expected):
-    until = monotonic() + 3
+def _settled(provider, expected, *, timeout=3):
+    until = monotonic() + timeout
     while provider.lifecycle_status != expected and monotonic() < until:
         sleep(0.01)
     assert provider.lifecycle_status == expected
@@ -41,10 +43,25 @@ def pinned_provider(monkeypatch, pinned_checkout, tmp_path):
 
 @pytest.fixture
 def history_provider(monkeypatch, history_checkout, tmp_path):
-    provider = _provider_for_checkout(monkeypatch, history_checkout, tmp_path)
+    # Other provider tests can load the pinned Hermes copy first. Bind the
+    # history contract module directly from this fixture's trusted checkout so
+    # collection order cannot silently substitute the pinned implementation.
+    monkeypatch.syspath_prepend(str(history_checkout))
+    for module_name in tuple(sys.modules):
+        if (module_name == "agent" or module_name.startswith("agent.")
+                or module_name == "hermes_state" or module_name.startswith("hermes_state_")):
+            monkeypatch.delitem(sys.modules, module_name)
+
+    state_path = history_checkout / "hermes_state.py"
     from hermes_state import SessionDB
 
+    import hermes_state
+
+    state_module = hermes_state
+    assert Path(state_module.__file__).resolve() == state_path.resolve()
     assert SessionDB.HISTORY_EXPORT_VERSION == 2
+
+    provider = _provider_for_checkout(monkeypatch, history_checkout, tmp_path)
     return provider
 
 

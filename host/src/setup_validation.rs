@@ -2,9 +2,7 @@
 use super::{
     OwnerConfig, RegistryError, TOPOLOGY_FILE, owner_error, owner_file, validate_rel_scope,
 };
-use crate::{
-    service_http::MAX_WIRE_BYTES, service_protocol::decode, source_ingest::open_processing_runtime,
-};
+use crate::{service_http::MAX_WIRE_BYTES, service_protocol::decode};
 use reliquary_memory::{
     OwnerId, OwnerInfo, OwnerKind, OwnerScope, Phylactery, ProductErrorKind, Rel,
 };
@@ -12,14 +10,13 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::BTreeMap,
     io::{self, Read},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
     owners: OwnerConfig,
-    config_path: Option<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -28,7 +25,6 @@ struct Report {
     main_rel: OwnerCheck,
     active_phy: OwnerCheck,
     projects: BTreeMap<String, OwnerCheck>,
-    config: ConfigCheck,
     topology_error: Option<&'static str>,
 }
 
@@ -39,13 +35,6 @@ struct OwnerCheck {
     kind: Option<&'static str>,
     owner_id: Option<OwnerId>,
     scope: Option<OwnerScope>,
-    error: Option<&'static str>,
-}
-
-#[derive(Serialize)]
-struct ConfigCheck {
-    accepted: bool,
-    opened: bool,
     error: Option<&'static str>,
 }
 
@@ -157,25 +146,14 @@ fn report(request: Request, state_dir: &Path) -> Result<Report, RegistryError> {
             .map(|error| error.code()),
         _ => None,
     };
-    let config_error = request
-        .config_path
-        .as_deref()
-        .and_then(|path| open_processing_runtime(path).err());
-    let config = ConfigCheck {
-        accepted: config_error.is_none(),
-        opened: request.config_path.is_some() && config_error.is_none(),
-        error: config_error,
-    };
     Ok(Report {
         valid: main_rel.accepted
             && active_phy.accepted
             && projects.values().all(|check| check.accepted)
-            && config.accepted
             && topology_error.is_none(),
         main_rel,
         active_phy,
         projects,
-        config,
         topology_error,
     })
 }

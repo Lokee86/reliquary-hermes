@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from threading import Thread
@@ -16,8 +17,9 @@ from reliquary_hermes.client import HostUnavailable
 from reliquary_hermes.outbox import SourceOutbox
 from reliquary_hermes.source_capture import capture_snapshot
 from reliquary_hermes.validation import canonical, decode
+from hosted_hermes_worker import configure_hermes, start_hermes_worker, worker_command
 from test_hp03_host import stop
-from test_hp04_host import _cli, _fixture_reply, _seed_blank_processing_config, _when_ready
+from test_hp04_host import _cli, _fixture_reply, _when_ready
 
 
 PROFILE = "primary"
@@ -39,7 +41,16 @@ def _model_reply(request):
         return _fixture_reply(request)
     schema = request["response_format"]["json_schema"]
     shape = schema["schema"]["properties"]
-    match schema["name"]:
+    name = schema["name"]
+    if name == "plugin_structured_output":
+        user = next((message for message in request.get("messages", [])
+                     if message.get("role") == "user"), {})
+        content = user.get("content", [])
+        header = content[0].get("text", "") if content and isinstance(content[0], dict) else ""
+        schema_match = re.search(r"^Schema name:\s*([^\r\n]+)", header, re.MULTILINE)
+        if schema_match:
+            name = schema_match.group(1).strip()
+    match name:
         case "insomnia_authority_disposition_ledger":
             turns = {uid: [{"disposition": "retain", "authority_kind": "direct", "category": "fact",
                             "type": "project", "lifecycle": "current", "proposition": TURNS[uid][1],
@@ -63,7 +74,8 @@ def _model_reply(request):
             result = {"relation_supported": "yes", "direction_supported": "yes", "evidence_supported": "yes"}
         case _:
             return _fixture_reply(request)
-    return {"choices": [{"message": {"content": json.dumps(result)}}]}
+    return {"model": request.get("model", "fixture-chat"),
+            "choices": [{"message": {"content": json.dumps(result)}}]}
 
 
 @contextmanager
@@ -73,6 +85,8 @@ def _model():
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             try:
+                if self.headers.get("Authorization") != "Bearer synthetic-hosted-inference-key":
+                    raise ValueError("synthetic provider credential was not scoped to Hermes")
                 request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 body = canonical(_model_reply(request))
             except (KeyError, TypeError, ValueError) as error:
@@ -100,16 +114,7 @@ def _model():
 
 
 def _configure(cli, state, url):
-    runtime = state / "hu04.cfg"
-    _seed_blank_processing_config(runtime)
-    flags = ["--config", runtime, "config"]
-    _cli(cli, *flags, "credential", "add-api-key", "HU04_FIXTURE", "--stdin",
-         stdin=b"synthetic-hu04-model-token\n")
-    for route in ("general", "entity-resolution", "dream", "embedding"):
-        dimensions = ["--dimensions", "2"] if route == "embedding" else []
-        _cli(cli, *flags, "model", f"set-{route}", "--model", "fixture", "--url", url,
-             "--credential", "HU04_FIXTURE", "--provider", "openai-ready", *dimensions)
-    return runtime
+    configure_hermes(state.parent, url)
 
 
 def _hermes_sessions(home, checkout, sessions, *, archive=None):
@@ -146,15 +151,17 @@ def _deliver(outbox, client, job):
     assert outbox.acknowledge(job, receipt)
 
 
-def _settle(cli, rel, state, session, runtime):
-    # Match the HP05 process proof: read the host's accepted import ID from its
-    # isolated test state and pass it to the public Root CLI with the lease free.
-    key = sha256(session.encode("ascii")).hexdigest()
-    accepted = decode((state / "sources-v1" / f"{key}.json").read_bytes())["accepted"]
-    run = subprocess.run([str(cli), "rel", "process", str(rel), "--config", str(runtime),
-                          "--until", "ready", "--import", accepted["import_id"]],
-                         cwd=state, capture_output=True, timeout=40)
-    assert run.returncode == 0, run.stderr.decode("utf-8", errors="replace")
+def _settle(client, session, expected_memories):
+    """Wait for the hosted Root runtime to finish processing the accepted source."""
+    import time
+
+    deadline = time.monotonic() + 35
+    while time.monotonic() < deadline:
+        status = client.read_source_status(session)
+        if status.get("state") == "complete":
+            return
+        time.sleep(0.1)
+    pytest.fail(f"hosted Hermes processor did not complete {expected_memories} Memories for {session}")
 
 
 def _memory_rows(cli, rel):
@@ -181,7 +188,7 @@ def _expect_graph(cli, rel, copied, companion):
     pytest.fail("HU04 seed did not create the expected active Dream Topical edge")
 
 
-def seed_profile(home, checkout, binaries, client, cleanup):
+def seed_profile(home, checkout, inference_checkout, binaries, client, cleanup):
     """Use the real Rust service for source receipts, then release its lease for processing."""
     _, cli = binaries
     state = home / "reliquary"
@@ -202,11 +209,15 @@ def seed_profile(home, checkout, binaries, client, cleanup):
         _deliver(outbox, client, job)
 
     assert client._process is not None
-    stop(client._process)
     with _model() as url:
-        runtime = _configure(cli, state, url)
-        _settle(cli, main, state, GENERAL_SESSION, runtime)
-        _settle(cli, project, state, PROJECT_SESSION, runtime)
+        _configure(cli, state, url)
+        worker = start_hermes_worker(home, inference_checkout, url, cleanup)
+        _settle(client, GENERAL_SESSION, len(GENERAL_UIDS))
+        _settle(client, PROJECT_SESSION, 1)
+
+        # Release the hosted Root process before inspecting its Windows-backed REL files.
+        worker_command(worker, "stop")
+        stop(client._process)
 
     memories = _memory_rows(cli, main)
     copied, companion = (_expect_memory(memories, uid) for uid in GENERAL_UIDS[:2])
@@ -225,6 +236,10 @@ def seed_profile(home, checkout, binaries, client, cleanup):
         "branch_id": None, "source_revision": None, "content_digest": bytes(imported["source_digest"]).hex(),
         "range": None,
     }
+    worker_command(worker, "start")
+    client.attach(GENERAL_SESSION)
+    if client._process is not None:
+        cleanup.callback(stop, client._process)
     _hermes_sessions(home, checkout, {}, archive=PROJECT_SESSION)
     try:
         client.attach(GENERAL_SESSION)

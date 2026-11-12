@@ -77,10 +77,14 @@ def test_missing_or_corrupt_enrollment_fails_closed(tmp_path, payload):
 def test_export_v1_keeps_auto_capture_but_requires_v2_for_unbounded_manual(monkeypatch):
     from hermes_state import SessionDB
 
-    monkeypatch.setattr(SessionDB, "HISTORY_EXPORT_VERSION", 1)
+    monkeypatch.setattr(SessionDB, "export_history", lambda *_args, **_kwargs: None, raising=False)
+    if hasattr(SessionDB, "HISTORY_EXPORT_VERSION"):
+        monkeypatch.setattr(SessionDB, "HISTORY_EXPORT_VERSION", None)
+    assert not capture_policy.history_supported()
+    monkeypatch.setattr(SessionDB, "HISTORY_EXPORT_VERSION", 1, raising=False)
     assert capture_policy.history_supported()
     assert not capture_policy.unbounded_history_supported()
-    monkeypatch.setattr(SessionDB, "HISTORY_EXPORT_VERSION", 2)
+    monkeypatch.setattr(SessionDB, "HISTORY_EXPORT_VERSION", 2, raising=False)
     assert capture_policy.history_supported()
     assert capture_policy.unbounded_history_supported()
 

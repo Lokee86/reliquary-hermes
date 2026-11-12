@@ -47,7 +47,8 @@ def _community_input(cli, scratch):
 
 @pytest.fixture
 def runtime(tmp_path, request):
-    required = ("HP01_HERMES_CHECKOUT", "HP03_HOST_BINARY", "HP03_RELIQUARY_CLI")
+    required = ("HP01_HERMES_CHECKOUT", "HP_INFERENCE_HERMES_CHECKOUT",
+                "HP03_HOST_BINARY", "HP03_RELIQUARY_CLI")
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
         message = "Set " + ", ".join(missing) + " for the HU04 process tests"
@@ -55,6 +56,7 @@ def runtime(tmp_path, request):
             pytest.fail(message)
         pytest.skip(message)
     checkout = request.getfixturevalue("pinned_checkout")
+    inference_checkout = request.getfixturevalue("inference_checkout")
     process_binaries = request.getfixturevalue("binaries")
     snapshot = expected = None
     if getattr(request, "param", None) == "community":
@@ -70,7 +72,7 @@ def runtime(tmp_path, request):
         foreign = start_profile(home / "profiles/secondary", "secondary", process_binaries, cleanup,
                                 seed_main=seed_main)
         dashboard, secondary = start_dashboard(primary, foreign, checkout, tmp_path, cleanup)
-        yield primary, foreign, dashboard, secondary, checkout, process_binaries, cleanup, expected
+        yield primary, foreign, dashboard, secondary, checkout, inference_checkout, process_binaries, cleanup, expected
 
 
 def test_hu04_live_owner_and_session_enumeration(runtime):
@@ -156,8 +158,8 @@ def _verify_foreign_scope(primary, foreign, dashboard, secondary):
 def test_hu04_live_reads_writes_and_restart(runtime):
     from hu04_seed import seed_profile
 
-    primary, foreign, dashboard, secondary, checkout, process_binaries, cleanup, _ = runtime
-    seed = seed_profile(primary.home, checkout, process_binaries, primary.client, cleanup)
+    primary, foreign, dashboard, secondary, checkout, inference_checkout, process_binaries, cleanup, _ = runtime
+    seed = seed_profile(primary.home, checkout, inference_checkout, process_binaries, primary.client, cleanup)
     seed.update(project_owner_id=primary.ids["project"], phy_owner_id=primary.ids["phy"],
                 general_session_id=primary.general_session, project_session_id="session-project")
     dashboard.refresh()
@@ -186,7 +188,7 @@ def test_hu04_live_reads_writes_and_restart(runtime):
 @pytest.mark.skipif(not FULL_GATE, reason="Set HU04_LIVE_ACCEPTANCE=1 when HU03 live operations are ready")
 @pytest.mark.parametrize("runtime", ["community"], indirect=True)
 def test_hu04_live_community_members_rename_and_restart(runtime):
-    primary, _, dashboard, _, _, _, _, expected = runtime
+    primary, _, dashboard, _, _, _, _, _, expected = runtime
     dashboard.default_owner_id = primary.ids["project"]
     dashboard.refresh()
     capabilities = dashboard.binding()["capabilities"]

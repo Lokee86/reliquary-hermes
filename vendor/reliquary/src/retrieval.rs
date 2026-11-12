@@ -44,6 +44,19 @@ impl RetrievalSession {
 }
 
 impl Instance {
+    /// Reports whether this authorized owner has vectors under an active
+    /// profile. Hosts can bind non-secret runtime metadata before first
+    /// publication without opening the owner store.
+    pub fn has_active_vectors(&self, owner: OwnerId) -> Result<bool, ProductError> {
+        let rel_access = self.require_rel_read(owner);
+        if rel_access.is_err() && self.require_phy_read(owner).is_err() {
+            rel_access?;
+        }
+        self.inner
+            .has_active_vectors(owner.into())
+            .map_err(Into::into)
+    }
+
     /// Passive search over the current REL cut. Lexical search invokes no provider.
     pub fn search(
         &self,

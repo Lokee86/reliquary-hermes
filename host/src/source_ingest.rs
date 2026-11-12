@@ -11,14 +11,13 @@ use reliquary_memory::{
     Instance, MemoryId, NativeImportPlan, NativeImportState, OwnerId, OwnerProcessingJob,
     ProcessOptions, RetrievalMemory, RetrievalPreview, SourceAvailability, SourceTurn,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::File,
-    io::Read,
     path::Path,
+    sync::Arc,
 };
 
 const STALE: HttpError = HttpError::new(409, "source_generation_stale", false);
@@ -45,7 +44,7 @@ pub(crate) struct DashboardSourceStatus {
 
 pub(crate) struct SourceService {
     store: SourceStore,
-    runtime: Option<ConfiguredRuntime>,
+    runtime: Option<Arc<ConfiguredRuntime>>,
     jobs: BTreeMap<OwnerId, OwnerProcessingJob>,
     active_imports: BTreeMap<OwnerId, String>,
 }
@@ -54,10 +53,14 @@ impl SourceService {
     pub(crate) fn open(state_dir: &Path) -> Result<Self, &'static str> {
         Ok(Self {
             store: SourceStore::open(state_dir)?,
-            runtime: configured_runtime(state_dir)?,
+            runtime: None,
             jobs: BTreeMap::new(),
             active_imports: BTreeMap::new(),
         })
+    }
+
+    pub(crate) fn bind_runtime(&mut self, runtime: Arc<ConfiguredRuntime>) {
+        self.runtime = Some(runtime);
     }
 
     pub(crate) fn dashboard_status(
@@ -184,16 +187,33 @@ impl SourceService {
                   "owner_id": owner.to_string(), "snapshot_digest": head.wire_digest}))
     }
 
-    pub(crate) fn resume_all(&mut self, instance: &Instance) -> Result<(), HttpError> {
+    pub(crate) fn resume_all(
+        &mut self,
+        instance: &Instance,
+        registry: &Registry,
+        runtimes: &mut RuntimeRegistry,
+        mut embedding_allowed: impl FnMut(OwnerId) -> bool,
+    ) -> Result<(), HttpError> {
         if self.runtime.is_none() {
             return Ok(());
         }
         let store = self.store.clone();
         let mut resumed = 0;
-        store.visit_manual_imports(|owner_id, import_id| {
+        store.visit_resumable_imports(|session, owner_id, import_id, manual| {
             let Ok(owner) = owner_id.parse::<OwnerId>() else {
                 return true;
             };
+            let authorized_owner = if manual {
+                registry.configured_source_owner(&owner_id).ok()
+            } else {
+                registry.source_owner(&session, true).ok()
+            };
+            if authorized_owner != Some(owner)
+                || runtimes.has_fence("hermes", &session).unwrap_or(true)
+                || !embedding_allowed(owner)
+            {
+                return true;
+            }
             let status = instance
                 .native_import_status(owner, &import_id)
                 .ok()
@@ -204,8 +224,9 @@ impl SourceService {
                     NativeImportState::Staged | NativeImportState::Settled
                 )
             }) {
-                self.schedule(instance, owner, &import_id);
-                resumed += 1;
+                if self.schedule(instance, owner, &import_id) {
+                    resumed += 1;
+                }
             }
             resumed < 130
         });
@@ -218,6 +239,7 @@ impl SourceService {
         owner: OwnerId,
         request: SourceRequest,
         reconciliation_required: bool,
+        bind_embedding_identity: impl FnOnce() -> Result<(), HttpError>,
     ) -> Result<HttpResponse, HttpError> {
         let snapshot = if request.operation.is_snapshot() {
             Some(Snapshot::parse(&request)?)
@@ -228,6 +250,7 @@ impl SourceService {
             &request,
             snapshot.as_ref().map(|snapshot| snapshot.digest.as_str()),
         )?;
+        let bind_embedding_identity = Some(bind_embedding_identity);
         let path = self.store.path(&request.session_id);
         let mut state = self.store.read(&path)?;
         state.session_id = Some(request.session_id.clone());
@@ -294,6 +317,7 @@ impl SourceService {
             snapshot.ok_or(INVALID)?,
             &path,
             state,
+            bind_embedding_identity,
         )
     }
 
@@ -305,6 +329,7 @@ impl SourceService {
         snapshot: Snapshot,
         path: &Path,
         mut state: SourceState,
+        mut bind_embedding_identity: Option<impl FnOnce() -> Result<(), HttpError>>,
     ) -> Result<HttpResponse, HttpError> {
         let reconciling = request.fence_epoch.is_some();
         if state.pending.is_some() {
@@ -325,7 +350,11 @@ impl SourceService {
         if !reconciling
             && let Some(evidence) = self.store.read_receipt(path, &request.idempotency_key)?
         {
-            if let Some(accepted) = &state.accepted {
+            if let Some(accepted) = &state.accepted
+                && bind_embedding_identity
+                    .take()
+                    .is_some_and(|bind| bind().is_ok())
+            {
                 self.schedule(instance, owner, &accepted.import_id);
             }
             return Ok(receipt(request, hex(&evidence)));
@@ -344,7 +373,12 @@ impl SourceService {
                 let evidence = accepted.receipt.ok_or(UNAVAILABLE)?;
                 self.store
                     .write_receipt(path, &request.idempotency_key, evidence)?;
-                self.schedule(instance, owner, &accepted.import_id);
+                if bind_embedding_identity
+                    .take()
+                    .is_some_and(|bind| bind().is_ok())
+                {
+                    self.schedule(instance, owner, &accepted.import_id);
+                }
                 return Ok(receipt(request, hex(&evidence)));
             }
             let status = instance
@@ -410,7 +444,12 @@ impl SourceService {
         state.pending = None;
         state.accepted = Some(candidate);
         self.store.write(path, &state)?;
-        self.schedule(instance, owner, &staged.import_id);
+        if bind_embedding_identity
+            .take()
+            .is_some_and(|bind| bind().is_ok())
+        {
+            self.schedule(instance, owner, &staged.import_id);
+        }
         Ok(receipt(request, hex(&staged.receipt_digest)))
     }
 
@@ -647,7 +686,16 @@ impl SourceService {
         Ok(self.store.read(&self.store.path(session))?.terminal)
     }
 
-    pub(crate) fn resume(&mut self, instance: &Instance, owner: OwnerId, session: &str) {
+    pub(crate) fn resume(
+        &mut self,
+        instance: &Instance,
+        owner: OwnerId,
+        session: &str,
+        embedding_allowed: bool,
+    ) {
+        if !embedding_allowed {
+            return;
+        }
         let path = self.store.path(session);
         if let Ok(state) = self.store.read(&path) {
             if !state.terminal {
@@ -663,12 +711,12 @@ impl SourceService {
         }
     }
 
-    fn schedule(&mut self, instance: &Instance, owner: OwnerId, import_id: &str) {
+    fn schedule(&mut self, instance: &Instance, owner: OwnerId, import_id: &str) -> bool {
         let Some(runtime) = self.runtime.as_ref() else {
-            return;
+            return false;
         };
         if self.jobs.get(&owner).is_some_and(|job| !job.is_finished()) {
-            return;
+            return false;
         }
         if let Some(job) = self.jobs.remove(&owner) {
             let _ = job.join();
@@ -685,7 +733,7 @@ impl SourceService {
                 )
             })
         {
-            return;
+            return false;
         }
         if let Ok(job) = instance.start_processing(
             owner,
@@ -698,7 +746,9 @@ impl SourceService {
         ) {
             self.jobs.insert(owner, job);
             self.active_imports.insert(owner, import_id.to_owned());
+            return true;
         }
+        false
     }
 }
 
@@ -775,35 +825,4 @@ fn receipt(request: &SourceRequest, receipt: String) -> HttpResponse {
         "receipt": receipt,
         "durable": true,
     }))
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProcessingConfig {
-    config_path: std::path::PathBuf,
-}
-
-pub(crate) fn configured_runtime(
-    state_dir: &Path,
-) -> Result<Option<ConfiguredRuntime>, &'static str> {
-    let path = state_dir.join("processing.json");
-    match path.symlink_metadata() {
-        Ok(metadata) if metadata.is_file() => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        _ => return Err("invalid_processing_config"),
-    }
-    let mut raw = Vec::new();
-    File::open(path)
-        .and_then(|file| file.take(8193).read_to_end(&mut raw))
-        .map_err(|_| "invalid_processing_config")?;
-    if raw.len() > 8192 {
-        return Err("invalid_processing_config");
-    }
-    let config: ProcessingConfig =
-        crate::service_protocol::decode(&raw).map_err(|_| "invalid_processing_config")?;
-    open_processing_runtime(&config.config_path).map(Some)
-}
-
-pub(crate) fn open_processing_runtime(path: &Path) -> Result<ConfiguredRuntime, &'static str> {
-    crate::catalog_processing::open(path)
 }
