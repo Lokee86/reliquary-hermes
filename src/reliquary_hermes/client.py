@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 from .authority import Discovery
 from .protocol import Request, Response
-from .validation import (ContractError, MAX_WIRE_BYTES, canonical, decode, digest,
+from .validation import (ContractError, MAX_WIRE_BYTES, canonical, choice, decode, digest,
                          identifier, integer, obj, require, text)
 
 
@@ -482,7 +482,12 @@ class HostClient:
         reply = self._exchange(discovery, "/v1/source/status", body,
                                time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS)
         try:
-            result = obj(decode(reply), {"session_id", "state", "receipt", "import_id", "owner_id", "snapshot_digest"})
+            result = decode(reply)
+            fields = {"session_id", "state", "receipt", "import_id", "owner_id", "snapshot_digest"}
+            require(fields <= set(result) <= fields | {"embedding_error"}, "invalid_source_status")
+            if result.get("embedding_error") is not None:
+                choice(result["embedding_error"], {"embedding_identity_stale", "embedding_identity_unbound",
+                    "embedding_identity_unavailable", "embedding_unavailable", "inference_unavailable", "inference_stale"})
             require(result["session_id"] == session and result["state"] in {
                 "none", "staged", "processing", "complete", "failed", "tombstoned", "unavailable"},
                 "invalid_source_status")
