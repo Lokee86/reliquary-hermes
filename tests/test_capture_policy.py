@@ -78,7 +78,8 @@ def test_export_v1_keeps_auto_capture_but_requires_v2_for_unbounded_manual(monke
     from hermes_state import SessionDB
 
     monkeypatch.setattr(SessionDB, "export_history", lambda *_args, **_kwargs: None, raising=False)
-    monkeypatch.delattr(SessionDB, "HISTORY_EXPORT_VERSION", raising=False)
+    if hasattr(SessionDB, "HISTORY_EXPORT_VERSION"):
+        monkeypatch.setattr(SessionDB, "HISTORY_EXPORT_VERSION", None)
     assert not capture_policy.history_supported()
     monkeypatch.setattr(SessionDB, "HISTORY_EXPORT_VERSION", 1, raising=False)
     assert capture_policy.history_supported()
