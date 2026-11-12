@@ -10,6 +10,12 @@ The Python DTOs define the provider boundary. The HP03 Rust host authenticates a
 
 ## Transport and authentication
 
+The signed source-status response includes nullable `embedding_error` metadata.
+An unavailable or incompatible embedding identity is reported without removing
+the accepted import receipt. The worker logs the actual bound general and
+embedding provider/model, dimensions, input semantics and normalization at INFO
+level; it does not log prompts, source content or authentication material.
+
 The Rust service listens on `127.0.0.1` and publishes a literal loopback HTTP endpoint. Discovery pins `endpoint`, `instance_id`, `profile_id`, `protocol_version`, `hermes_revision` and `lease_id`. The client rejects other profiles or versions, non-loopback addresses, DNS hostnames, userinfo, route paths, query parameters and fragments.
 
 The profile secret stays in Hermes secret storage and is passed to the local process on standard input. HTTP authenticates both peers with HMAC-SHA256. The HMAC of the UTF-8 strings `reliquary-hermes-transport-v1`, instance ID and lease ID, separated by NUL bytes, derives a binary per-instance key from the secret.

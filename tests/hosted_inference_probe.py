@@ -77,11 +77,11 @@ def reply(request):
                 "reason": "context_match" if existing else "named_referent",
                 "target_candidate_index": 0 if existing else -1,
                 "identity_relation": "same_identity" if existing else "related_distinct",
-                "mention_kind": "project"}
+                "mention_kind": "tool"}
     if name == "entity_admission":
         return {"decision": "create_new", "reason": "first_seen_identity",
-                "promotion_policy": "immediate", "entity_kind": "project",
-                "entity_summary": "Lantern is the named release project."}
+                "promotion_policy": "immediate", "entity_kind": "tool",
+                "entity_summary": "Lantern is the named release tool."}
     if name == "decision_answers":
         return {"answers": {key: {"type": "choice", "choice":
                 "unresolved" if "unresolved" in definition["criteria"] else next(iter(definition["criteria"]))}

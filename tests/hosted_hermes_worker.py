@@ -234,7 +234,7 @@ def stop_hermes_worker(process: subprocess.Popen) -> None:
             worker_command(process, "quit")
             process.stdin.close()
             process.wait(timeout=5)
-        except (BrokenPipeError, OSError, subprocess.TimeoutExpired):
+        except (AssertionError, BrokenPipeError, OSError, subprocess.TimeoutExpired):
             process.terminate()
             try:
                 process.wait(timeout=5)

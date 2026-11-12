@@ -2,11 +2,13 @@
 
 from contextlib import ExitStack
 import json
+import subprocess
 from shutil import copyfile
 from time import monotonic, sleep
 
 from hosted_hermes_worker import configure_hermes, start_hermes_worker, worker_command
 from hosted_inference_probe import hosted_model
+from reliquary_hermes import client as client_module
 from reliquary_hermes.client import HostClient, HostUnavailable
 from reliquary_hermes.outbox import SourceOutbox
 from reliquary_hermes.settings import TOKEN_VAR, save_settings
@@ -79,15 +81,38 @@ def test_real_hermes_hosted_inference_processing_recall_identity_and_restart(
     monkeypatch.setitem(TEXT, "appended", "Lantern release keeps an amber checklist for backups.")
     monkeypatch.setitem(TEXT, "traveler", "Lantern release evidence is stored in the binder.")
     outbox = SourceOutbox(state, PROFILE, PRINCIPAL)
+    native_log = home / "native-host.log"
+    original_popen = subprocess.Popen
+
+    def traced_popen(args, **kwargs):
+        if str(args[0]) == str(binary):
+            with native_log.open("ab") as stream:
+                kwargs["stderr"] = stream
+                return original_popen(args, **kwargs)
+        return original_popen(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", traced_popen)
+    original_response = client_module._response
+
+    def traced_response(*args, **kwargs):
+        try:
+            return original_response(*args, **kwargs)
+        except (OSError, ValueError) as error:
+            with native_log.open("a", encoding="utf-8") as stream:
+                stream.write(f"HTTP parser: {type(error).__name__} {error}\n")
+            raise
+
+    monkeypatch.setattr(client_module, "_response", traced_response)
 
     with hosted_model(DIMENSIONS) as (url, model), ExitStack() as cleanup:
         client = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
+        cleanup.callback(lambda: stop(client._process) if client._process is not None else None)
         client.attach(SESSION)
-        cleanup.callback(stop, client._process)
         worker = start_hermes_worker(home, inference_checkout, url, cleanup, dimensions=DIMENSIONS)
         log = home / "hosted-worker.log"
         def diagnostic():
-            return log.read_text(encoding="utf-8", errors="replace"), model["calls"], model["errors"]
+            return (log.read_text(encoding="utf-8", errors="replace"), model["calls"], model["errors"],
+                    native_log.read_text(encoding="utf-8", errors="replace"))
         wait_for(lambda: any(row.get("dimensions") == DIMENSIONS for row in audit(home)), diagnostic=diagnostic)
         assert not (state / "processing.json").exists()
         assert not list(home.rglob("*.cfg"))
@@ -134,8 +159,8 @@ def test_real_hermes_hosted_inference_processing_recall_identity_and_restart(
         assert worker_command(worker, "stop")["registered"] is False
         stop(client._process)
         restarted = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
+        cleanup.callback(lambda: stop(restarted._process) if restarted._process is not None else None)
         restarted.attach(SESSION)
-        cleanup.callback(stop, restarted._process)
         assert worker_command(worker, "start")["registered"] is True
         wait_for(lambda: query(restarted, "restart-stale") == "embedding_identity_stale", diagnostic=diagnostic)
         assert restarted.deliver_source_job(job) == receipt

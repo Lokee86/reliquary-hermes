@@ -10,7 +10,6 @@ import subprocess
 import sys
 from queue import Empty, Queue
 from threading import Thread
-from threading import Thread
 
 import pytest
 

@@ -216,6 +216,12 @@ class HostedInferenceWorker:
         require(bound.get("identity") == identity, "inference_identity_mismatch")
         self._identity, self._lease_epoch, self._bound_scope = identity, epoch, scope
         self._configuration_revision = revision
+        logger.info("Reliquary hosted inference bound: general=%r/%r embedding=%r/%r "
+                    "dimensions=%d input_type_handling=%s normalization=%s",
+                    identity["general"]["provider"], identity["general"]["model"],
+                    identity["embedding"]["provider"], identity["embedding"]["model"],
+                    identity["embedding"]["dimensions"], identity["embedding"]["input_type_handling"],
+                    identity["embedding"]["normalization"])
 
     def _configuration_stamp(self) -> tuple[int, int, int] | None:
         # Notice a Hermes configuration revision without reading or selecting its models.
