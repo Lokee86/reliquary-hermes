@@ -10,6 +10,8 @@ import pytest
 
 from reliquary_hermes import HERMES_REVISION
 
+HERMES_INFERENCE_REVISION = "168a923023a7018be3dbf66530531dd20b1834b9"
+
 
 @pytest.fixture(scope="session")
 def pinned_checkout():
@@ -29,6 +31,17 @@ def history_checkout():
         pytest.skip("Set HU08_HERMES_INSTALLED_CHECKOUT for the trusted Hermes history contract")
     checkout = Path(value).resolve(strict=True)
     assert (checkout / "hermes_state.py").is_file()
+    return checkout
+
+
+@pytest.fixture(scope="session")
+def inference_checkout():
+    value = os.environ.get("HP_INFERENCE_HERMES_CHECKOUT")
+    if not value:
+        pytest.skip("Set HP_INFERENCE_HERMES_CHECKOUT for hosted inference process tests")
+    checkout = Path(value).resolve(strict=True)
+    actual = subprocess.check_output(["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True).strip()
+    assert actual == HERMES_INFERENCE_REVISION, "unsupported Hermes inference revision"
     return checkout
 
 
