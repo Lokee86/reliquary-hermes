@@ -135,6 +135,32 @@ def test_readiness_probe_cancels_if_its_runtime_lease_is_lost(tmp_path):
     asyncio.run(run())
 
 
+def test_selection_change_during_call_rejects_result_before_publication(tmp_path):
+    worker = HostedInferenceWorker(object(), str(tmp_path))
+    worker._settings = SimpleNamespace(profile_id="profile-a")
+    worker._identity = {"general": {"provider": "fixture", "model": "old"}}
+    worker._lease_epoch = 2
+    worker._bound_scope = ("instance-a", "lease-a")
+    worker._last_heartbeat = time.monotonic()
+    discovery = SimpleNamespace(instance_id="instance-a", lease_id="lease-a")
+    worker._client = SimpleNamespace(_read_discovery=lambda: discovery,
+        inference_call=lambda *args, **kwargs: {"state": "claimed"})
+    worker._validate_claim = lambda *args: {"operation": "complete_structured",
+        "job_id": "job-a", "correlation_id": "corr-a", "lease_epoch": 2}
+    worker._download_request = lambda job: b'{}'
+    uploaded = []
+    worker._upload_result = lambda job, result: uploaded.append(result)
+
+    async def complete(job, request):
+        (tmp_path / "config.yaml").write_text("model: changed\n", encoding="utf-8")
+        return {"status": "ok", "provider": "fixture", "model": "old", "parsed": {"ready": True}}
+
+    worker._execute_with_heartbeat = complete
+    worker._poll_once()
+    assert uploaded == [{"status": "error", "error_code": "inference_identity_changed"}]
+    assert worker._identity is None
+
+
 def test_worker_rejects_malformed_embedding_result_and_provider_semantics(tmp_path):
     class Llm:
         async def aembed(self, inputs, **kwargs):

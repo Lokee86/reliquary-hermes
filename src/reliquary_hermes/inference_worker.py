@@ -375,7 +375,8 @@ class HostedInferenceWorker:
             request = _decode_job(raw_request)
             result = asyncio.run(self._execute_with_heartbeat(job, request))
             bound_identity = self._identity["embedding" if job["operation"] == "embed" else "general"]
-            identity_changed = (result["provider"] != bound_identity["provider"] or
+            identity_changed = (self._configuration_revision != self._configuration_stamp() or
+                                result["provider"] != bound_identity["provider"] or
                                 result["model"] != bound_identity["model"] or
                                 (job["operation"] == "embed" and result["dimensions"] != bound_identity["dimensions"]))
             if identity_changed:
