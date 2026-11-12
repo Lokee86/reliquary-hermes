@@ -48,10 +48,10 @@ setup = import_provider_module("reliquary", "setup")
 inventory = setup.projects
 path = "/api/plugins/reliquary-hermes/setup-v1"
 candidate = {"main_rel": "C:/owners/main.rel", "active_phy": "C:/owners/user.phy"}
-defaults = {"main_rel": None, "active_phy": None, "projects": {}, "config_path": None}
+defaults = {"main_rel": None, "active_phy": None, "projects": {}}
 owner = {"accepted": True, "opened": True, "error": None}
 report = {
-    "valid": True, "topology_error": None, "projects": {}, "config": owner,
+    "valid": True, "topology_error": None, "projects": {},
     "main_rel": {**owner, "kind": "REL", "owner_id": "rel-test", "scope": "unspecified"},
     "active_phy": {**owner, "kind": "PHY", "owner_id": "phy-test", "scope": None},
 }
@@ -59,8 +59,7 @@ calls = []
 
 def status(selected):
     assert selected == home
-    return {"configured": "apply" in calls, "runtime_detected": True,
-            "config_path": None, "defaults": defaults}
+    return {"configured": "apply" in calls, "runtime_detected": True, "defaults": defaults}
 
 def validate(selected, value, *, project_aware):
     assert selected == home and project_aware
@@ -127,7 +126,7 @@ with TestClient(loopback_app) as client:
     assert client.post(path + dialog_route, headers=grant(), params={"profile": "foreign"},
                        json={"mode": "open_rel"}).status_code == 403
     for bad_dialog in ({"mode": "browse"}, {"mode": "open_rel", "path": "C:/secret.rel"},
-                       {"mode": "save_config"}, {}):
+                       {"mode": "open_config"}, {"mode": "save_config"}, {}):
         response = client.post(path + dialog_route, headers=same, json=bad_dialog)
         assert response.status_code == 400 and response.json() == {"detail": "invalid_dialog_mode"}
     body = {"kind": "project_rel", "path": str(project_root / "new.rel"), "project_id": project}
@@ -157,7 +156,8 @@ with TestClient(loopback_app) as client:
     for bad in (auth, {**same, "Origin": "http://other"}, {**same, "Origin": "null"}):
         assert client.post(path + "/apply", headers=bad, json=candidate).status_code == 403
     assert client.post(path + "/apply", headers={**auth, HEADER: "fake"}, json=candidate).status_code == 401
-    for authority in ("profile", "profile_id", "principal_id", "token", "binary", "desktop_native_mutations"):
+    for authority in ("profile", "profile_id", "principal_id", "token", "binary", "desktop_native_mutations",
+                      "config_path"):
         response = client.post(path + "/apply", headers=same, json={**candidate, authority: "foreign"})
         assert response.status_code == 400 and response.json() == {"detail": "invalid_setup_request"}
     assert client.post(path + "/apply", headers=same, data=candidate).status_code == 415

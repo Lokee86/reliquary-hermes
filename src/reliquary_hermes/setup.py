@@ -38,23 +38,13 @@ def _local_path(value):
 def _defaults(home):
     state = _state_dir(home)
     prior = _read_optional(state / "owners.json")
-    processing = _read_optional(state / "processing.json")
-    config = obj(processing, {"config_path"})["config_path"] if processing else None
-    if config is None:
-        detected = os.environ.get("RELIQUARY_CONFIG_PATH") or str(state / "reliquary.cfg")
-        try:
-            detected = _local_path(detected)
-            if Path(detected).is_file():
-                config = detected
-        except ContractError:
-            pass
     installed = home / "plugins" / "reliquary" / "host" / "reliquary-hermes-host.exe"
     # Existing installations may already refer to a separately provisioned host.
     saved = _read_optional(state / "provider.json").get("binary")
     binary = installed if installed.is_file() or not saved else Path(saved)
     defaults = {"main_rel": prior.get("main_rel"), "active_phy": prior.get("active_phy"),
-                "projects": prior.get("projects", {}), "config_path": config}
-    return prior, processing, binary, defaults
+                "projects": prior.get("projects", {})}
+    return prior, binary, defaults
 
 
 def _activation(home):
@@ -84,14 +74,14 @@ def status(home):
             capture_status = "enrolled" if configured else "setup_required"
         except ContractError:
             capture_status = "setup_required"
-    _, _, binary, defaults = _defaults(home)
+    _, binary, defaults = _defaults(home)
     return {"configured": configured, "capture_status": capture_status, "runtime_detected": binary.is_absolute() and binary.is_file(),
-            "config_path": defaults["config_path"], "defaults": defaults}
+            "defaults": defaults}
 
 
 def _candidate(home, candidate, prior, defaults, *, project_aware=False):
     fields = {"main_rel", "active_phy"}
-    require(type(candidate) is dict and fields <= set(candidate) <= fields | {"projects", "config_path"},
+    require(type(candidate) is dict and fields <= set(candidate) <= fields | {"projects"},
             "invalid_fields")
     projects = candidate.get("projects", defaults["projects"])
     require(type(projects) is dict and len(projects) <= 128, "invalid_project_config")
@@ -102,11 +92,6 @@ def _candidate(home, candidate, prior, defaults, *, project_aware=False):
         for project in projects.keys() | previous.keys():
             if projects.get(project) != previous.get(project):
                 require(project in active, "unknown_hermes_project")
-    config = candidate.get("config_path")
-    if config is None:
-        config = defaults["config_path"]
-    if config is not None:
-        config = _local_path(config)
     # The canonical profile location supplies fresh IDs. Persisted IDs remain stable.
     home_key = os.path.normcase(str(home)).encode("utf-8")
     profile_id = prior.get("profile_id", "hermes-" + hashlib.sha256(home_key).hexdigest()[:32])
@@ -119,7 +104,7 @@ def _candidate(home, candidate, prior, defaults, *, project_aware=False):
         require(type(mappings) is dict and all(type(project) is str and project in projects
                 for project in mappings.values()), "invalid_project_config")
         owners["session_projects"] = mappings
-    return {"owners": owners, "config_path": config}
+    return {"owners": owners}
 
 
 def _owner_report(value):
@@ -147,17 +132,14 @@ def _host_setup(home, binary, operation, request):
 def _preflight(home, binary, request):
     try:
         result = _host_setup(home, binary, "setup-validate", request)
-        report = obj(decode(result.stdout), {"valid", "main_rel", "active_phy", "projects", "config", "topology_error"})
+        report = obj(decode(result.stdout), {"valid", "main_rel", "active_phy", "projects", "topology_error"})
         require(type(report["valid"]) is bool, "invalid_preflight")
         _owner_report(report["main_rel"])
         _owner_report(report["active_phy"])
         for row in obj(report["projects"], set(request["owners"]["projects"])).values():
             _owner_report(row)
-        config = obj(report["config"], {"accepted", "opened", "error"})
-        require(type(config["accepted"]) is bool and type(config["opened"]) is bool, "invalid_preflight")
-        for error in (config["error"], report["topology_error"]):
-            if error is not None:
-                identifier(error)
+        if report["topology_error"] is not None:
+            identifier(report["topology_error"])
         return report
     except ContractError as exc:
         if str(exc) in {"runtime_unavailable", "setup_request_too_large"}:
@@ -181,7 +163,7 @@ def create(home, candidate):
     home = profile_home(home)
     require(not is_managed(), "managed_setup")
     with profile_setup_lock(home):
-        _, _, binary, _ = _defaults(home)
+        _, binary, _ = _defaults(home)
         if kind == "project_rel":
             require(identifier(candidate["project_id"]) in active_projects(home), "unknown_hermes_project")
         file_kind = "phy" if kind == "phy" else "rel"
@@ -220,7 +202,7 @@ def _owners_fingerprint(state, owners):
     return hashlib.sha256(raw).hexdigest()
 
 
-def _running_report(home, prior, processing, request):
+def _running_report(home, prior, request):
     state = _state_dir(home)
     if not (state / "discovery.json").is_file():
         return None
@@ -231,11 +213,7 @@ def _running_report(home, prior, processing, request):
     except (OSError, ValueError, HostUnavailable):
         return None
 
-    config = request["config_path"]
-    changed = request["owners"] != prior or (
-        config is not None and Path(config) != Path(processing.get("config_path") or "")
-    )
-    require(not changed, "service_restart_required")
+    require(request["owners"] == prior, "service_restart_required")
     try:
         fingerprint = _owners_fingerprint(state, request["owners"])
         topology = client.read_dashboard_topology(None, owners_fingerprint=fingerprint)
@@ -252,15 +230,14 @@ def _running_report(home, prior, processing, request):
                 "owner_id": row["owner_id"], "scope": None, "error": None} for row in rows]
     return {"valid": True, "main_rel": reports[0], "active_phy": reports[-1],
             "projects": dict(zip(projects, reports[1:-1])),
-            "config": {"accepted": True, "opened": config is not None, "error": None},
             "topology_error": None}
 
 
 def validate(home, candidate, *, project_aware=False):
     home = profile_home(home)
-    prior, processing, binary, defaults = _defaults(home)
+    prior, binary, defaults = _defaults(home)
     request = _candidate(home, candidate, prior, defaults, project_aware=project_aware)
-    return _running_report(home, prior, processing, request) or _preflight(home, binary, request)
+    return _running_report(home, prior, request) or _preflight(home, binary, request)
 
 
 def _activate(home):
@@ -288,25 +265,17 @@ def apply(home, candidate, *, project_aware=False):
     try:
         require(not is_managed(), "managed_setup")
         with profile_setup_lock(home):
-            prior, processing, binary, defaults = _defaults(home)
+            prior, binary, defaults = _defaults(home)
             request = _candidate(home, candidate, prior, defaults, project_aware=project_aware)
-            if _running_report(home, prior, processing, request) is not None:
+            if _running_report(home, prior, request) is not None:
                 capture_cutoff(home, enroll=True)
                 _activate(home)
                 return {"valid": True, "configured": True}
-            processing_path = state / "processing.json"
-            config_path = request["config_path"]
-            prior_config = processing.get("config_path")
-            config_changed = config_path is not None and (
-                prior_config is None or Path(prior_config) != Path(config_path)
-            )
             report = _preflight(home, binary, request)
             if not report["valid"]:
                 return {**report, "configured": False}
 
             paths = [state / "owners.json", state / "provider.json"]
-            if config_changed:
-                paths.append(processing_path)
             previous = {path: _read_optional(path) for path in paths}
             service_files = {path: _read_optional(path) for path in (
                 state / "discovery.json", state / "topology-v1.json",
@@ -314,8 +283,6 @@ def apply(home, candidate, *, project_aware=False):
             ensure_setup_token(home)
             client = None
             try:
-                if config_changed:
-                    atomic_json_write(processing_path, {"config_path": config_path}, mode=0o600, fsync_dir=True)
                 save_settings(home, {**request["owners"], "binary": str(binary)})
                 settings = read_settings(home)
                 client = HostClient(settings.state_dir, settings.profile_id, settings.principal_id,
@@ -360,8 +327,7 @@ def cli_setup(home):
         print("Configure the existing Reliquary owners and local host.")
         candidate = {}
         for key, prompt in (("main_rel", "Absolute path to the existing main REL"),
-                            ("active_phy", "Absolute path to the existing active PHY"),
-                            ("config_path", "Reliquary config path (optional)")):
+                            ("active_phy", "Absolute path to the existing active PHY")):
             default = defaults[key]
             label = f"{prompt} [{default}]" if default else prompt
             candidate[key] = input(f"{label}: ").strip() or default
@@ -373,7 +339,7 @@ def cli_setup(home):
         if apply(home, candidate)["configured"]:
             print("Reliquary configured. Start a new Hermes session to attach.")
         else:
-            print("Reliquary setup could not validate the selected owners or configuration.")
+            print("Reliquary setup could not validate the selected owners.")
     except (EOFError, KeyboardInterrupt):
         print("Reliquary setup cancelled.")
     except (OSError, RuntimeError, ValueError):

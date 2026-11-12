@@ -15,7 +15,6 @@ from pathlib import Path
 _FILTERS = {
     "open_rel": ("Choose a Reliquary REL", "Reliquary REL", ".rel", None),
     "open_phy": ("Choose a Reliquary PHY", "Reliquary PHY", ".phy", None),
-    "open_config": ("Choose a Reliquary configuration", "Reliquary configuration", ".cfg", None),
     "save_rel": ("Create a Reliquary REL", "Reliquary REL", ".rel", "general.rel"),
     "save_phy": ("Create a Reliquary PHY", "Reliquary PHY", ".phy", "active.phy"),
 }

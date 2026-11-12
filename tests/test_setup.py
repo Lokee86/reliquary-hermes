@@ -21,11 +21,13 @@ def setup_profile(pinned_provider, monkeypatch, tmp_path):
     host.parent.mkdir(parents=True)
     host.touch()
     candidate = {}
-    for field, name in (("main_rel", "main.rel"), ("active_phy", "active.phy"), ("config_path", "reliquary.cfg")):
+    for field, name in (("main_rel", "main.rel"), ("active_phy", "active.phy")):
         path = home / name
         path.touch()
         candidate[field] = str(path)
-    monkeypatch.setenv("RELIQUARY_CONFIG_PATH", candidate["config_path"])
+    stale_config = home / "reliquary.cfg"
+    stale_config.write_bytes(b"legacy local inference config; must remain untouched\n")
+    monkeypatch.setenv("RELIQUARY_CONFIG_PATH", str(stale_config))
     def preflight(home, binary, request):
         return {"valid": True, "main_rel": {"owner_id": "general"}, "active_phy": {"owner_id": "identity"},
                 "projects": {key: {"owner_id": key} for key in request["owners"]["projects"]}}
@@ -43,28 +45,31 @@ def setup_profile(pinned_provider, monkeypatch, tmp_path):
 def test_fresh_setup_derives_private_values_and_preserves_existing_processing(setup_profile):
     home, candidate = setup_profile
     state = home / "reliquary"
+    state.mkdir()
+    processing = state / "processing.json"
+    prior = b'{"config_path":"C:/legacy/reliquary.cfg"}\n'
+    processing.write_bytes(prior)
+    stale_config = home / "reliquary.cfg"
+    stale_config_before = stale_config.read_bytes()
     before = setup.status(home)
     assert not before["configured"] and before["runtime_detected"]
-    assert before["config_path"] == candidate["config_path"]
+    assert "config_path" not in before and "config_path" not in before["defaults"]
     assert setup.validate(home, candidate)["valid"]
-    assert not state.exists() and not (home / ".env").exists()
+    assert not (home / ".env").exists()
 
     assert setup.apply(home, candidate)["configured"]
     assert setup.status(home)["configured"]
     token = read_token(home)
     assert len(token) == 43 and token in (home / ".env").read_text(encoding="utf-8")
-    for name in ("owners.json", "provider.json", "processing.json"):
+    for name in ("owners.json", "provider.json"):
         assert token not in (state / name).read_text(encoding="utf-8")
     assert TOKEN_VAR not in (home / "config.yaml").read_text(encoding="utf-8")
 
     enrollment = state / "capture-enrollment-v1.json"
     cutoff = enrollment.read_bytes()
-    processing = state / "processing.json"
-    prior = processing.read_bytes() + b"\n"
-    processing.write_bytes(prior)
-    candidate.pop("config_path")
     assert setup.apply(home, candidate)["configured"]
     assert processing.read_bytes() == prior
+    assert stale_config.read_bytes() == stale_config_before
     assert enrollment.read_bytes() == cutoff
     assert read_token(home) == token
 

@@ -127,6 +127,24 @@ class HostClient:
         except ContractError:
             raise HostUnavailable("invalid_runtime_response") from None
 
+    def inference_call(self, operation: str, value: dict, *, timeout: float = 5.0) -> dict:
+        """Send one profile-bound inference broker operation over the signed host channel."""
+        require(operation in {"identity", "claim", "request-part", "result-start", "result-part",
+                             "cancel", "heartbeat", "worker-error"}, "invalid_inference_operation")
+        require(type(timeout) in (int, float) and 0 < timeout <= 300, "invalid_timeout")
+        discovery = self._read_discovery()
+        if discovery is None:
+            raise HostUnavailable("host_unavailable")
+        reply = self._exchange(discovery, f"/v1/inference/{operation}", canonical(value),
+                               time.monotonic() + _CONNECT_SECONDS + float(timeout),
+                               response_seconds=float(timeout))
+        try:
+            result = decode(reply)
+            require(type(result) is dict, "invalid_inference_response")
+            return result
+        except ContractError:
+            raise HostUnavailable("invalid_inference_response") from None
+
     def attach_runtime(self, session_id: str) -> tuple[str, dict[str, int]]:
         """Register this provider process as a live integration runtime."""
         session = identifier(session_id)

@@ -28,7 +28,7 @@ router = APIRouter()
 _SETUP_BODY_BYTES = 65536
 _DIALOG_BODY_BYTES = 128
 _SETUP_REQUIRED_FIELDS = frozenset({"main_rel", "active_phy"})
-_SETUP_FIELDS = _SETUP_REQUIRED_FIELDS | {"projects", "config_path"}
+_SETUP_FIELDS = _SETUP_REQUIRED_FIELDS | {"projects"}
 _SETUP_ERRORS = {
     "runtime_unavailable": (503, "runtime_unavailable"),
     "preflight_unavailable": (503, "preflight_unavailable"),
