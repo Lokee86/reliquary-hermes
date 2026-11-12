@@ -563,4 +563,83 @@ mod tests {
             assert_eq!(error.status_code(), 401, "wrong HMAC for {path}");
         }
     }
+
+    #[test]
+    fn signed_inference_identity_rejects_wrong_profile_with_proven_response() {
+        let token = "inference-profile-fixture-token-is-not-secret";
+        let instance = "instance-fixture";
+        let lease = "lease-fixture";
+        let expected_profile = "expected-profile";
+        let key = TransportKey::derive(token, instance, lease);
+        let nonce = *b"22222222222222222222222222222222";
+        let body = serde_json::to_vec(&json!({
+            "worker_id": "worker-fixture",
+            "profile_id": "wrong-profile",
+            "instance_id": instance,
+            "service_lease_id": lease,
+            "general": {"provider": "openai-api", "model": "fixture-general"},
+            "embedding": {
+                "provider": "openai-api",
+                "model": "fixture-embedding",
+                "dimensions": 3,
+                "input_type_handling": "shared",
+                "normalization": "none"
+            }
+        }))
+        .unwrap();
+        let tag = mac(
+            &key.0,
+            &[b"request\0", INFERENCE_IDENTITY.as_bytes(), b"\0", &nonce, b"\0", &body],
+        );
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(address).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let expected_host = format!("127.0.0.1:{}", address.port());
+        let request = format!(
+            "POST {INFERENCE_IDENTITY} HTTP/1.1\r\nHost: {expected_host}\r\nAuthorization: Reliquary {}\r\nX-Reliquary-Nonce: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            hex(tag.as_ref()),
+            std::str::from_utf8(&nonce).unwrap(),
+            body.len(),
+        );
+        client.write_all(request.as_bytes()).unwrap();
+        client.write_all(&body).unwrap();
+        let parsed = read_request(&mut server, Instant::now(), &expected_host, &key).unwrap();
+        let result = crate::hosted_inference::Broker::new().handle(
+            &parsed.path,
+            &parsed.body,
+            expected_profile,
+            instance,
+            lease,
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("wrong profile must be rejected"),
+        };
+        assert_eq!(error.status_code(), 403);
+        write_response(
+            &mut server,
+            error.into_response(),
+            Some((&key, &parsed.nonce)),
+        )
+        .unwrap();
+        server.shutdown(Shutdown::Write).unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        let header_end = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap();
+        let headers = std::str::from_utf8(&response[..header_end]).unwrap();
+        assert!(headers.starts_with("HTTP/1.1 403"));
+        let proof = headers
+            .lines()
+            .find_map(|line| line.strip_prefix("X-Reliquary-Proof: "))
+            .unwrap();
+        let response_body = &response[header_end + 4..];
+        assert_eq!(
+            proof,
+            key.response_proof(&parsed.nonce, 403, response_body)
+        );
+    }
 }
