@@ -34,6 +34,14 @@ pub(crate) const RUNTIME_ATTACH: &str = "/v1/runtime/attach";
 pub(crate) const RUNTIME_HEARTBEAT: &str = "/v1/runtime/heartbeat";
 pub(crate) const RUNTIME_DETACH: &str = "/v1/runtime/detach";
 pub(crate) const RUNTIME_SCOPE: &str = "/v1/runtime/scope";
+pub(crate) const INFERENCE_IDENTITY: &str = "/v1/inference/identity";
+pub(crate) const INFERENCE_CLAIM: &str = "/v1/inference/claim";
+pub(crate) const INFERENCE_REQUEST_PART: &str = "/v1/inference/request-part";
+pub(crate) const INFERENCE_RESULT_START: &str = "/v1/inference/result-start";
+pub(crate) const INFERENCE_RESULT_PART: &str = "/v1/inference/result-part";
+pub(crate) const INFERENCE_CANCEL: &str = "/v1/inference/cancel";
+pub(crate) const INFERENCE_HEARTBEAT: &str = "/v1/inference/heartbeat";
+pub(crate) const INFERENCE_WORKER_ERROR: &str = "/v1/inference/worker-error";
 
 pub(crate) struct TransportKey(hmac::Key);
 
@@ -273,6 +281,14 @@ fn parse_headers(bytes: &[u8], expected_host: &str) -> Result<RequestHeaders, Ht
         Some(RUNTIME_HEARTBEAT) => RUNTIME_HEARTBEAT,
         Some(RUNTIME_DETACH) => RUNTIME_DETACH,
         Some(RUNTIME_SCOPE) => RUNTIME_SCOPE,
+        Some(INFERENCE_IDENTITY) => INFERENCE_IDENTITY,
+        Some(INFERENCE_CLAIM) => INFERENCE_CLAIM,
+        Some(INFERENCE_REQUEST_PART) => INFERENCE_REQUEST_PART,
+        Some(INFERENCE_RESULT_START) => INFERENCE_RESULT_START,
+        Some(INFERENCE_RESULT_PART) => INFERENCE_RESULT_PART,
+        Some(INFERENCE_CANCEL) => INFERENCE_CANCEL,
+        Some(INFERENCE_HEARTBEAT) => INFERENCE_HEARTBEAT,
+        Some(INFERENCE_WORKER_ERROR) => INFERENCE_WORKER_ERROR,
         _ => return Err(INVALID),
     };
     let fields = parsed.headers;
@@ -420,6 +436,65 @@ pub(crate) fn write_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Shutdown;
+
+    fn signed_roundtrip(
+        path: &'static str,
+        valid_tag: bool,
+    ) -> Result<(HttpRequest, bool), HttpError> {
+        let token = "inference-route-fixture-token-is-not-secret";
+        let instance = "instance-fixture";
+        let lease = "lease-fixture";
+        let key = TransportKey::derive(token, instance, lease);
+        let nonce = *b"11111111111111111111111111111111";
+        let body = b"{}";
+        let mut tag = mac(
+            &key.0,
+            &[b"request\0", path.as_bytes(), b"\0", &nonce, b"\0", body],
+        )
+        .as_ref()
+        .to_vec();
+        if !valid_tag {
+            tag[0] ^= 1;
+        }
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(address).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let expected_host = format!("127.0.0.1:{}", address.port());
+        let request = format!(
+            "POST {path} HTTP/1.1\r\nHost: {expected_host}\r\nAuthorization: Reliquary {}\r\nX-Reliquary-Nonce: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            hex(&tag),
+            std::str::from_utf8(&nonce).unwrap(),
+            body.len(),
+        );
+        client.write_all(request.as_bytes()).unwrap();
+        client.write_all(body).unwrap();
+        let parsed = read_request(&mut server, Instant::now(), &expected_host, &key)?;
+        let response_nonce = parsed.nonce;
+        write_response(
+            &mut server,
+            HttpResponse::ok(json!({"state":"accepted"})),
+            Some((&key, &response_nonce)),
+        )
+        .unwrap();
+        server.shutdown(Shutdown::Write).unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        let Some(header_end) = response.windows(4).position(|window| window == b"\r\n\r\n") else {
+            return Err(INVALID);
+        };
+        let headers = std::str::from_utf8(&response[..header_end]).map_err(|_| INVALID)?;
+        let Some(proof) = headers
+            .lines()
+            .find_map(|line| line.strip_prefix("X-Reliquary-Proof: "))
+        else {
+            return Err(INVALID);
+        };
+        let response_body = &response[header_end + 4..];
+        let expected_proof = key.response_proof(&response_nonce, 200, response_body);
+        Ok((parsed, proof == expected_proof))
+    }
 
     #[test]
     fn authentication_binds_instance_route_nonce_status_and_exact_body() {
@@ -462,5 +537,30 @@ mod tests {
             assert!(parse_headers(with(extra).as_bytes(), "127.0.0.1:88").is_err());
         }
         assert!(parse_headers(with("").as_bytes(), "127.0.0.1:90").is_err());
+    }
+
+    #[test]
+    fn inference_routes_pass_signed_loopback_transport_and_reject_bad_hmac() {
+        for path in [
+            INFERENCE_IDENTITY,
+            INFERENCE_CLAIM,
+            INFERENCE_REQUEST_PART,
+            INFERENCE_RESULT_START,
+            INFERENCE_RESULT_PART,
+            INFERENCE_CANCEL,
+            INFERENCE_HEARTBEAT,
+            INFERENCE_WORKER_ERROR,
+        ] {
+            let (request, proof_valid) = signed_roundtrip(path, true).unwrap();
+            assert_eq!(request.path, path);
+            assert_eq!(request.body, b"{}");
+            assert!(proof_valid, "response proof failed for {path}");
+
+            let error = match signed_roundtrip(path, false) {
+                Err(error) => error,
+                Ok(_) => panic!("invalid HMAC accepted for {path}"),
+            };
+            assert_eq!(error.status_code(), 401, "wrong HMAC for {path}");
+        }
     }
 }

@@ -18,14 +18,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) const IDENTITY: &str = "/v1/inference/identity";
-pub(crate) const CLAIM: &str = "/v1/inference/claim";
-pub(crate) const REQUEST_PART: &str = "/v1/inference/request-part";
-pub(crate) const RESULT_START: &str = "/v1/inference/result-start";
-pub(crate) const RESULT_PART: &str = "/v1/inference/result-part";
-pub(crate) const CANCEL: &str = "/v1/inference/cancel";
-pub(crate) const HEARTBEAT: &str = "/v1/inference/heartbeat";
-pub(crate) const WORKER_ERROR: &str = "/v1/inference/worker-error";
+pub(crate) const IDENTITY: &str = crate::service_http::INFERENCE_IDENTITY;
+pub(crate) const CLAIM: &str = crate::service_http::INFERENCE_CLAIM;
+pub(crate) const REQUEST_PART: &str = crate::service_http::INFERENCE_REQUEST_PART;
+pub(crate) const RESULT_START: &str = crate::service_http::INFERENCE_RESULT_START;
+pub(crate) const RESULT_PART: &str = crate::service_http::INFERENCE_RESULT_PART;
+pub(crate) const CANCEL: &str = crate::service_http::INFERENCE_CANCEL;
+pub(crate) const HEARTBEAT: &str = crate::service_http::INFERENCE_HEARTBEAT;
+pub(crate) const WORKER_ERROR: &str = crate::service_http::INFERENCE_WORKER_ERROR;
 
 const MAX_PENDING: usize = 4;
 const MAX_JOB_BYTES: usize = 8 * 1024 * 1024;
