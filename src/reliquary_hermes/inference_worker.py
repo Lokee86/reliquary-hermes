@@ -522,11 +522,12 @@ class HostedInferenceWorker:
                 "invalid_inference_request")
         input_type = choice(raw["input_type"], {"query", "document"})
         kwargs = {"input_type": input_type, "purpose": text(raw["purpose"], 128), "timeout": timeout}
-        if "dimensions" in raw:
-            kwargs["dimensions"] = integer(raw["dimensions"], 1, 65536)
+        expected_dimensions = integer(raw["dimensions"], 1, 65536) if "dimensions" in raw else None
         result = await asyncio.wait_for(self._llm.aembed(inputs, **kwargs), timeout=timeout)
         vectors = _field(result, "vectors")
         dimensions = integer(_field(result, "dimensions"), 1, 65536)
+        require(expected_dimensions is None or dimensions == expected_dimensions,
+                "inference_invalid_response")
         require(type(vectors) is list and len(vectors) == len(inputs), "inference_invalid_response")
         clean_vectors = []
         for vector in vectors:

@@ -37,6 +37,7 @@ def test_worker_executes_embedding_with_query_document_identity_and_no_overrides
     class Llm:
         async def aembed(self, inputs, **kwargs):
             assert inputs == ["a", "b"]
+            assert set(kwargs) == {"input_type", "purpose", "timeout"}
             assert kwargs["input_type"] == "query" and kwargs["purpose"] == "switchboard-query"
             assert 19 < kwargs["timeout"] <= 20
             return SimpleNamespace(vectors=[[0.1, 0.2], [0.3, 0.4]], dimensions=2,
@@ -45,7 +46,7 @@ def test_worker_executes_embedding_with_query_document_identity_and_no_overrides
 
     worker = HostedInferenceWorker(Llm(), str(tmp_path))
     result = asyncio.run(worker._execute("embed", {"inputs": ["a", "b"], "input_type": "query",
-        "purpose": "switchboard-query"}, time.monotonic() + 20))
+        "purpose": "switchboard-query", "dimensions": 2}, time.monotonic() + 20))
     assert result["status"] == "ok"
     assert result["dimensions"] == 2 and result["provider"] == "openai-api"
     assert result["vectors"] == [[0.1, 0.2], [0.3, 0.4]]
