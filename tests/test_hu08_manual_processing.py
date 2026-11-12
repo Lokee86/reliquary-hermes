@@ -12,7 +12,7 @@ from test_hosted_desktop_api import _release_host
 from test_hp03_host import binaries, install_setup_host, owner, setup_hosts
 from test_hp03_provider import history_provider
 from test_hp04_host import TEXT, _loopback_model, _processing_config, _turn
-from hosted_hermes_worker import start_hermes_worker
+from hosted_hermes_worker import start_hermes_worker, worker_command
 
 
 @pytest.mark.parametrize("live_attached", [False, True], ids=["standalone", "other-session-live"])
@@ -52,7 +52,11 @@ def test_selected_history_reaches_complete(
         with _loopback_model() as url:
             _processing_config(cli, state, url)
             assert setup.apply(home, {"main_rel": str(rel), "active_phy": str(phy)})["configured"]
-            inference_worker = start_hermes_worker(home, inference_checkout, url, worker_cleanup)
+            # _processing_config already wrote the synthetic Hermes route. Do not let
+            # worker startup overwrite setup activation or leave an extra setup lease.
+            inference_worker = start_hermes_worker(
+                home, inference_checkout, url, worker_cleanup, configure=False,
+            )
             with SessionDB(home / "state.db") as db:
                 db.create_session(live, source="cli", profile_name="default")
             provider = history_provider.ReliquaryMemoryProvider()
@@ -92,9 +96,12 @@ def test_selected_history_reaches_complete(
                 changed = history.queue(home, {**selection, "session_ids": old_ids[:1]})
                 assert changed["sessions"][0]["status"] == "unavailable", changed
             finally:
-                provider.shutdown()
                 if inference_worker is not None:
+                    assert worker_command(inference_worker, "stop") == {
+                        "event": "stopped", "registered": False,
+                    }
                     worker_cleanup.close()
+                provider.shutdown()
                 # A manual-only runtime may cleanly detach and stop the host
                 # between the last status receipt and this cleanup check.
                 discovery = state / "discovery.json"
