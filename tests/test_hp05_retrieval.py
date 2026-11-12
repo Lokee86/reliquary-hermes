@@ -152,6 +152,22 @@ def _settled(provider, status="attached"):
     _wait(lambda: provider.lifecycle_status == status, seconds=10)
 
 
+def _wait_for_embedding_ready(provider, *, seconds=10):
+    deadline = monotonic() + seconds
+    last_status = None
+    last_error_type = None
+    while monotonic() < deadline:
+        try:
+            last_status = provider._client.read_source_status(SESSION)
+        except HostUnavailable as error:
+            last_error_type = type(error).__name__
+        else:
+            if last_status.get("embedding_error") is None:
+                return last_status
+        sleep(0.05)
+    raise AssertionError({"source_status": last_status, "error_type": last_error_type})
+
+
 def _dashboard_binding(client, session_id):
     topology = client.read_dashboard_topology(session_id)
     owner = next(row for row in topology["owners"]
@@ -264,6 +280,7 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
             manager.initialize_all(SESSION, hermes_home=str(home))
             cleanup.callback(manager.shutdown_all)
             _settled(provider)
+            _wait_for_embedding_ready(provider)
             return manager, provider, host_process
 
         def prepare(manager, provider):
