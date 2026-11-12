@@ -589,7 +589,14 @@ mod tests {
         .unwrap();
         let tag = mac(
             &key.0,
-            &[b"request\0", INFERENCE_IDENTITY.as_bytes(), b"\0", &nonce, b"\0", &body],
+            &[
+                b"request\0",
+                INFERENCE_IDENTITY.as_bytes(),
+                b"\0",
+                &nonce,
+                b"\0",
+                &body,
+            ],
         );
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let address = listener.local_addr().unwrap();
@@ -637,9 +644,6 @@ mod tests {
             .find_map(|line| line.strip_prefix("X-Reliquary-Proof: "))
             .unwrap();
         let response_body = &response[header_end + 4..];
-        assert_eq!(
-            proof,
-            key.response_proof(&parsed.nonce, 403, response_body)
-        );
+        assert_eq!(proof, key.response_proof(&parsed.nonce, 403, response_body));
     }
 }

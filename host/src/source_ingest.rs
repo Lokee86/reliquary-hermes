@@ -190,6 +190,8 @@ impl SourceService {
     pub(crate) fn resume_all(
         &mut self,
         instance: &Instance,
+        registry: &Registry,
+        runtimes: &mut RuntimeRegistry,
         mut embedding_allowed: impl FnMut(OwnerId) -> bool,
     ) -> Result<(), HttpError> {
         if self.runtime.is_none() {
@@ -197,10 +199,21 @@ impl SourceService {
         }
         let store = self.store.clone();
         let mut resumed = 0;
-        store.visit_manual_imports(|owner_id, import_id| {
+        store.visit_resumable_imports(|session, owner_id, import_id, manual| {
             let Ok(owner) = owner_id.parse::<OwnerId>() else {
                 return true;
             };
+            let authorized_owner = if manual {
+                registry.configured_source_owner(&owner_id).ok()
+            } else {
+                registry.source_owner(&session, true).ok()
+            };
+            if authorized_owner != Some(owner)
+                || runtimes.has_fence("hermes", &session).unwrap_or(true)
+                || !embedding_allowed(owner)
+            {
+                return true;
+            }
             let status = instance
                 .native_import_status(owner, &import_id)
                 .ok()
@@ -211,10 +224,9 @@ impl SourceService {
                     NativeImportState::Staged | NativeImportState::Settled
                 )
             }) {
-                if embedding_allowed(owner) {
-                    self.schedule(instance, owner, &import_id);
+                if self.schedule(instance, owner, &import_id) {
+                    resumed += 1;
                 }
-                resumed += 1;
             }
             resumed < 130
         });
@@ -699,12 +711,12 @@ impl SourceService {
         }
     }
 
-    fn schedule(&mut self, instance: &Instance, owner: OwnerId, import_id: &str) {
+    fn schedule(&mut self, instance: &Instance, owner: OwnerId, import_id: &str) -> bool {
         let Some(runtime) = self.runtime.as_ref() else {
-            return;
+            return false;
         };
         if self.jobs.get(&owner).is_some_and(|job| !job.is_finished()) {
-            return;
+            return false;
         }
         if let Some(job) = self.jobs.remove(&owner) {
             let _ = job.join();
@@ -721,7 +733,7 @@ impl SourceService {
                 )
             })
         {
-            return;
+            return false;
         }
         if let Ok(job) = instance.start_processing(
             owner,
@@ -734,7 +746,9 @@ impl SourceService {
         ) {
             self.jobs.insert(owner, job);
             self.active_imports.insert(owner, import_id.to_owned());
+            return true;
         }
+        false
     }
 }
 

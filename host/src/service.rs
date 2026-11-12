@@ -179,12 +179,12 @@ impl Service {
                             .lock()
                             .map_err(|_| UNAVAILABLE)?
                             .bind_runtime(runtime);
-                        self.sources
-                            .lock()
-                            .map_err(|_| UNAVAILABLE)?
-                            .resume_all(&self.instance, |owner| {
-                                self.ensure_embedding_owner(owner).is_ok()
-                            })?;
+                        let registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
+                        let mut sources = self.sources.lock().map_err(|_| UNAVAILABLE)?;
+                        let mut runtimes = self.runtimes.lock().map_err(|_| UNAVAILABLE)?;
+                        sources.resume_all(&self.instance, &registry, &mut runtimes, |owner| {
+                            self.ensure_embedding_owner(owner).is_ok()
+                        })?;
                         Ok(())
                     },
                 )?;
@@ -1126,10 +1126,17 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
             graph_render.expire();
         }
         if Instant::now() >= next_source_resume {
-            if let Ok(mut sources) = service.sources.try_lock() {
-                let _ = sources.resume_all(&service.instance, |owner| {
-                    service.ensure_embedding_owner(owner).is_ok()
-                });
+            if let Ok(registry) = service.registry.try_lock() {
+                if let Ok(mut sources) = service.sources.try_lock() {
+                    if let Ok(mut runtimes) = service.runtimes.try_lock() {
+                        let _ = sources.resume_all(
+                            &service.instance,
+                            &registry,
+                            &mut runtimes,
+                            |owner| service.ensure_embedding_owner(owner).is_ok(),
+                        );
+                    }
+                }
             }
             next_source_resume = Instant::now() + Duration::from_secs(5);
         }
