@@ -75,6 +75,22 @@ impl EmbeddingBindingStore {
         }
     }
 
+    pub(crate) fn status_owner(
+        &self,
+        owner: OwnerId,
+        expected: &EmbeddingBinding,
+        has_active_vectors: impl FnOnce() -> Result<bool, ()>,
+    ) -> Result<Option<&'static str>, &'static str> {
+        match read_marker(&self.path(owner))? {
+            Some(actual) if &actual == expected => Ok(None),
+            Some(_) => Ok(Some("embedding_identity_stale")),
+            None if has_active_vectors().map_err(|_| "embedding_identity_unavailable")? => {
+                Ok(Some("embedding_identity_unbound"))
+            }
+            None => Ok(None),
+        }
+    }
+
     fn path(&self, owner: OwnerId) -> PathBuf {
         self.directory.join(format!("{}.json", owner))
     }
@@ -223,5 +239,30 @@ mod tests {
             Err("embedding_identity_unavailable")
         );
         assert!(!store.path(owner).exists());
+    }
+
+    #[test]
+    fn status_inspection_is_read_only_and_distinguishes_stale_legacy_from_new_owner() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = EmbeddingBindingStore::open(temp.path()).unwrap();
+        let owner = "00000000000000000000000000000005".parse().unwrap();
+        assert_eq!(
+            store.status_owner(owner, &binding("model-a"), || Ok(false)),
+            Ok(None)
+        );
+        assert!(!store.path(owner).exists());
+        assert_eq!(
+            store.status_owner(owner, &binding("model-a"), || Ok(true)),
+            Ok(Some("embedding_identity_unbound"))
+        );
+        store
+            .write_marker(&store.path(owner), &binding("model-a"))
+            .unwrap();
+        assert_eq!(
+            store.status_owner(owner, &binding("model-b"), || panic!(
+                "a stale marker must short-circuit vector inspection"
+            )),
+            Ok(Some("embedding_identity_stale"))
+        );
     }
 }

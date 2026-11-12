@@ -438,12 +438,31 @@ impl Service {
         let registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
         let sources = self.sources.lock().map_err(|_| UNAVAILABLE)?;
         let mut runtimes = self.runtimes.lock().map_err(|_| UNAVAILABLE)?;
-        Ok(HttpResponse::ok(sources.import_status(
+        let mut status = sources.import_status(
             &request.session_id,
             &self.instance,
             &registry,
             &mut runtimes,
-        )?))
+        )?;
+        let owner = status["owner_id"]
+            .as_str()
+            .and_then(|value| value.parse::<reliquary_memory::OwnerId>().ok());
+        let embedding_error = match owner {
+            Some(owner) if status["state"] != "tombstoned" && status["state"] != "none" => {
+                match self.inference.embedding_binding() {
+                    Err(code) => Some(code),
+                    Ok(identity) => self
+                        .embedding_bindings
+                        .status_owner(owner, &identity, || {
+                            self.instance.has_active_vectors(owner).map_err(|_| ())
+                        })
+                        .unwrap_or(Some("embedding_identity_unavailable")),
+                }
+            }
+            _ => None,
+        };
+        apply_embedding_status(&mut status, embedding_error);
+        Ok(HttpResponse::ok(status))
     }
 
     fn source(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
@@ -730,6 +749,15 @@ fn reserved_worker_path(path: &str) -> bool {
         )
 }
 
+fn apply_embedding_status(status: &mut serde_json::Value, error: Option<&'static str>) {
+    if let Some(code) = error {
+        status["state"] = json!("unavailable");
+        status["embedding_error"] = json!(code);
+    } else {
+        status["embedding_error"] = serde_json::Value::Null;
+    }
+}
+
 fn admit_worker_request(path: &str, blocking_workers: &AtomicUsize) -> bool {
     reserved_worker_path(path)
         || blocking_workers
@@ -764,6 +792,15 @@ mod admission_tests {
             assert!(admit_worker_request(path, &active), "{path}");
         }
         assert_eq!(active.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn embedding_identity_errors_are_visible_without_hiding_accepted_receipts() {
+        let mut status = json!({"state":"complete","receipt":"accepted"});
+        apply_embedding_status(&mut status, Some("embedding_identity_stale"));
+        assert_eq!(status["state"], "unavailable");
+        assert_eq!(status["embedding_error"], "embedding_identity_stale");
+        assert_eq!(status["receipt"], "accepted");
     }
 }
 

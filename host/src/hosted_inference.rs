@@ -1465,4 +1465,14 @@ mod tests {
         assert!(post(&broker, IDENTITY, body).is_err());
         assert_eq!(broker.unavailable_code(), Some("embedding_unavailable"));
     }
+
+    #[test]
+    fn generation_model_changes_do_not_change_embedding_binding() {
+        let broker = Broker::new();
+        bind(&broker, "worker-one", "gpt-one");
+        let before = broker.embedding_binding().unwrap();
+        let response = post(&broker, IDENTITY, identity_body("worker-one", "gpt-two")).unwrap();
+        assert_eq!(response["state"], "bound");
+        assert_eq!(broker.embedding_binding().unwrap(), before);
+    }
 }
