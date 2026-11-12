@@ -69,6 +69,11 @@ def configure_hermes(home: Path, model_url: str, *, embedding_model: str = "fixt
         "    timeout: 20\n",
         encoding="utf-8",
     )
+    env_path = home / ".env"
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.is_file() else []
+    lines = [line for line in lines if not line.startswith("RELIQUARY_FIXTURE_API_KEY=")]
+    lines.append("RELIQUARY_FIXTURE_API_KEY=synthetic-hosted-inference-key")
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def start_hermes_worker(home: Path, checkout: Path, model_url: str, cleanup, *,
@@ -90,7 +95,6 @@ from hermes_cli.plugins_manifest import PluginManifest
 home = Path(sys.argv[1])
 scope = set_hermes_home_override(home)
 secrets = load_env_file(home / ".env")
-secrets["RELIQUARY_FIXTURE_API_KEY"] = "synthetic-hosted-inference-key"
 secret_scope = set_secret_scope(secrets, profile_home=str(home))
 marker = home / "hosted-worker-registration.json"
 manager = PluginManager(scope_key=str(home))
@@ -99,10 +103,36 @@ def start():
     manifest = PluginManifest(name="reliquary-hermes", key="reliquary-hermes",
                               data_namespace="reliquary-hermes")
     context = PluginContext(manifest, manager)
+    install_audit(context)
     from reliquary_hermes import register
     register(context)
     contexts.append(context)
     return context
+
+def install_audit(context):
+    import os
+    llm = context.llm
+    original_complete = llm.acomplete_structured
+    original_embed = llm.aembed
+    audit_path = home / "hosted-inference-audit.jsonl"
+    def record(value):
+        fd = os.open(audit_path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as stream:
+            stream.write(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
+    async def audited_complete(*args, **kwargs):
+        result = await original_complete(*args, **kwargs)
+        record({"method": "acomplete_structured", "schema_name": kwargs.get("schema_name"),
+                "purpose": kwargs.get("purpose"), "provider": getattr(result, "provider", None),
+                "model": getattr(result, "model", None)})
+        return result
+    async def audited_embed(*args, **kwargs):
+        result = await original_embed(*args, **kwargs)
+        record({"method": "aembed", "input_type": kwargs.get("input_type"),
+                "purpose": kwargs.get("purpose"), "provider": getattr(result, "provider", None),
+                "model": getattr(result, "model", None), "dimensions": getattr(result, "dimensions", None)})
+        return result
+    llm.acomplete_structured = audited_complete
+    llm.aembed = audited_embed
 
 def stop(context):
     for registration in reversed(context._staged):
@@ -133,12 +163,14 @@ try:
                 marker.write_text(json.dumps({"registered": True}), encoding="utf-8")
             print(json.dumps({"event": "started", "registered": bool(contexts)}), flush=True)
         elif operation == "quit":
+            print(json.dumps({"event": "quitting"}), flush=True)
             break
         else:
             print(json.dumps({"event": "error", "code": "unknown_operation"}), flush=True)
 finally:
     for current in reversed(contexts):
         stop(current)
+    marker.unlink(missing_ok=True)
     reset_secret_scope(secret_scope)
     reset_hermes_home_override(scope)
 '''
@@ -149,7 +181,6 @@ finally:
         TEMP=str(home), TMP=str(home), TMPDIR=str(home),
         PYTHONPATH=os.pathsep.join((str(repo_src), str(checkout))),
         PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1", HERMES_DISABLE_LAZY_INSTALLS="1",
-        RELIQUARY_FIXTURE_API_KEY="synthetic-hosted-inference-key",
     )
     log_path = home / "hosted-worker.log"
     log = log_path.open("w", encoding="utf-8")
