@@ -178,6 +178,13 @@ def test_real_hermes_hosted_inference_processing_recall_identity_and_restart(
         wait_for(lambda: isinstance(query(restarted, "restored"), dict), diagnostic=diagnostic)
         assert marker.read_bytes() == original_marker
 
+        selection = home / "config.yaml"
+        selection.write_text(selection.read_text(encoding="utf-8").replace("fixture-chat", "fixture-chat-v2"),
+                             encoding="utf-8")
+        wait_for(lambda: any(row.get("model") == "fixture-chat-v2" for row in audit(home)), diagnostic=diagnostic)
+        wait_for(lambda: isinstance(query(restarted, "new-chat-model"), dict), diagnostic=diagnostic)
+        assert marker.read_bytes() == original_marker
+
         # Authentication remains Hermes-owned. A provider-side revocation cannot
         # fall back to a Reliquary credential, and recovery retains vector identity.
         model["revoked"] = True
