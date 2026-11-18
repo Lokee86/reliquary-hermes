@@ -2,7 +2,10 @@
 
 import importlib
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from time import monotonic, sleep, time
 from types import SimpleNamespace
 
@@ -39,8 +42,34 @@ def _persist_turn(db, session_id, content):
     return durable
 
 
-def test_hu08_installed_automatic_capture_is_new_root_only(
-        tmp_path, binaries, history_checkout, monkeypatch, setup_hosts):
+def test_hu08_installed_automatic_capture_is_new_root_only(tmp_path, binaries, history_checkout):
+    # HP01 and HU08 import the same module names from different Hermes revisions.
+    # Run the installed-history probe with a fresh interpreter and isolated profile.
+    binary, cli = binaries
+    env = {key: value for key, value in os.environ.items()
+           if key.lower() in {"path", "systemroot", "windir", "comspec", "lang", "lc_all"}}
+    env.update(
+        HP03_HOST_BINARY=str(binary),
+        HP03_RELIQUARY_CLI=str(cli),
+        HU08_HERMES_INSTALLED_CHECKOUT=str(history_checkout),
+        HERMES_HOME=str(tmp_path / "profile"),
+        PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
+        PYTHONNOUSERSITE="1",
+        PYTHONIOENCODING="utf-8",
+        TEMP=str(tmp_path),
+        TMP=str(tmp_path),
+        TMPDIR=str(tmp_path),
+    )
+    result = subprocess.run(
+        [sys.executable, "-B", "-m", "pytest", "-q", "-o", "python_functions=capture_probe",
+         "--basetemp", str(tmp_path / "probe"), f"{Path(__file__).resolve()}::capture_probe"],
+        cwd=tmp_path, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        encoding="utf-8", timeout=120,
+    )
+    assert result.returncode == 0, result.stdout
+
+
+def capture_probe(tmp_path, binaries, history_checkout, monkeypatch, setup_hosts):
     """Old resume/branch/compression continuation stay silent; a fresh root is durable."""
     binary, cli = binaries
     home = tmp_path / "isolated-hermes-profile"

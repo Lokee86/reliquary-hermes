@@ -28,6 +28,10 @@ The real process acceptance and SDK credential-renewal fixtures passed both test
 
 The final complete public-package Python run finished with **425 passed, 5 skipped and 1 failed** in 332.31 seconds. The sole failure was `tests/test_hu08_capture.py::test_hu08_installed_automatic_capture_is_new_root_only`: it asserted that `agent.memory_manager` came from the HU08 history checkout, but an earlier test had cached the HP01 module. The failure occurs at the fixture source-path assertion before automatic-capture behavior. Per the final scope instruction, no unrelated fixture change or rerun was added. The focused process cases passed 8/8. This final Python run used the shared reference host binary; the packaged native host was tested separately. Its log is `.test-temp/final-public-python.log`. The core integration separately passed 422 tests with 5 skipped. The five skipped gates require separately enabled installed/live/Desktop fixtures. No installed profile, host or live REL/PHY was changed.
 
+On November 18, 2026, running the pinned HP04 capture test before HU08 reproduced that source-path failure. HU08 now runs in a fresh Python process and still checks the origin of the imported module. Both capture tests passed in either order with the audited HP01 checkout, Hermes `168a9230` with the restored history patches, the packaged native host and the standalone Reliquary CLI. The probes use synthetic profiles and owner files.
+
+The full local Python suite passed 426 tests in 385.63 seconds. It used a clean `168a9230` checkout for the hosted inference process tests. Five optional live checks were skipped, including two hosted Desktop compatibility cases and three HU04 acceptance cases.
+
 One repository-tool gate remains unavailable in the environment: installed Pitlord 0.1.2 rejects an unchanged baseline policy directive. Cached Pitlord 0.1.3 validates all 24 areas and 13 rules, but the full policy-tools command also requires an unavailable Lexicon executable. This limitation is separate from the passing product, architecture and documentation suites; it is not reported as a successful full policy-tools run.
 
 The public package's approved vendored Root baseline passed all 36 Switchboard tests with locked offline dependencies. Its two development-only Lodestone references now use the already approved local source subset; no additional dependency source or lockfile changes were needed. The packaged native host separately passed the same 124 tests with one existing scale characterization ignored.
@@ -44,11 +48,12 @@ From the plugin repository with Python 3.11+, pytest 9.1.x, jsonschema 4.x, the 
 $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 $env:PYTHONDONTWRITEBYTECODE='1'
 $env:HP01_HERMES_CHECKOUT='C:\!bin\workspace\hermes-agent-reliquary-hp01-v023'
+$env:PYTHONPATH=$env:HP01_HERMES_CHECKOUT
 python -B -m pytest -q --basetemp .pytest/_tmp
 git diff --check
 ```
 
-The checkout must be at the exact SHA in [host audit](host-audit.md). Without `HP01_HERMES_CHECKOUT`, checkout-based probes skip explicitly. The Python suite uses deterministic inputs and keeps pytest state in this worktree. The shared documentation checker and commit comparison commands are in the [documentation policy](documentation-policy.md).
+The checkout must be at the exact SHA in [host audit](host-audit.md). It supplies `agent.memory_provider` during test collection. Without `HP01_HERMES_CHECKOUT`, checkout-based probes skip explicitly. The Python suite uses deterministic inputs and keeps pytest state in this worktree. The shared documentation checker and commit comparison commands are in the [documentation policy](documentation-policy.md).
 
 ## Evidence covered
 
