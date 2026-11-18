@@ -213,8 +213,8 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
     monkeypatch.setenv("HERMES_HOME", str(home))
     assert profile_name_for_home(home) == "default"
     rel, phy, project = home / "main.rel", home / "active.phy", home / "project.rel"
-    ids = {"main": owner(cli, "rel", rel, "unspecified"), "phy": owner(cli, "phy", phy),
-           "project": owner(cli, "rel", project, "project")}
+    ids = {"main": owner(cli, "rel", rel), "phy": owner(cli, "phy", phy),
+           "project": owner(cli, "rel", project)}
     installed, settings = _install(home, history_checkout, binary, rel, phy, project, ids)
     state = settings.state_dir
     with _retrieval_fixture_model() as (url, calls, _), ExitStack() as cleanup:

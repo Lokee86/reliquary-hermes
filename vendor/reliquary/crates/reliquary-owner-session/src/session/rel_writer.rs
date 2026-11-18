@@ -1,12 +1,21 @@
 use super::*;
 
-impl RelWriter {
-    pub(super) fn ensure_write_ready(&self) -> Result<(), OwnerSessionError> {
-        if self.session.write_poisoned {
+impl RelSession {
+    pub(super) fn ensure_write_certain(&self) -> Result<(), OwnerSessionError> {
+        if self.write_poisoned {
             Err(OwnerSessionError::Record(
                 "owner session requires reopen after an uncertain write".into(),
             ))
-        } else if self.session.imports.open_epoch().is_some() {
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl RelWriter {
+    pub(super) fn ensure_write_ready(&self) -> Result<(), OwnerSessionError> {
+        self.session.ensure_write_certain()?;
+        if self.session.imports.open_epoch().is_some() {
             Err(OwnerSessionError::Record(
                 "owner mutation is fenced by an open import epoch".into(),
             ))
@@ -33,13 +42,16 @@ impl RelWriter {
             }
         }
     }
-    /// Create and initialize a new REL owner through the public owner scope.
+    /// Create and initialize a new REL owner with the neutral header scope.
     pub fn create_current_path(
         path: impl AsRef<Path>,
-        scope: OwnerScope,
         owner_id: [u8; 16],
     ) -> Result<Self, OwnerSessionError> {
-        Self::create_path(path, scope.into_container_scope(), owner_id)
+        Self::create_path(
+            path,
+            reliquary_container::ReliquaryScope::Unspecified,
+            owner_id,
+        )
     }
 
     /// Create and initialize a new REL owner, then open its canonical writer.

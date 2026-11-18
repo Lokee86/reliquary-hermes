@@ -1,7 +1,5 @@
 //! One-shot setup preflight over Root's read-only owner verification.
-use super::{
-    OwnerConfig, RegistryError, TOPOLOGY_FILE, owner_error, owner_file, validate_rel_scope,
-};
+use super::{OwnerConfig, RegistryError, TOPOLOGY_FILE, owner_error, owner_file};
 use crate::{service_http::MAX_WIRE_BYTES, service_protocol::decode};
 use reliquary_memory::{
     OwnerId, OwnerInfo, OwnerKind, OwnerScope, Phylactery, ProductErrorKind, Rel,
@@ -81,11 +79,7 @@ impl Role {
     fn report(self, info: OwnerInfo) -> OwnerCheck {
         let error = match (self, info.kind) {
             (Self::ActivePhy, OwnerKind::Phylactery) => None,
-            (Self::MainRel | Self::ProjectRel, OwnerKind::Rel) => {
-                validate_rel_scope(info.scope, matches!(self, Self::ProjectRel))
-                    .err()
-                    .map(|error| error.code())
-            }
+            (Self::MainRel | Self::ProjectRel, OwnerKind::Rel) => None,
             _ => Some("wrong_owner_kind"),
         };
         OwnerCheck {

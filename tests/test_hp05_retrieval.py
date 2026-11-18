@@ -261,7 +261,7 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
     home.mkdir()
     state = home / "reliquary"
     rel, phy = tmp_path / "main.rel", tmp_path / "active.phy"
-    owner(cli, "rel", rel, "unspecified")
+    owner(cli, "rel", rel)
     owner(cli, "phy", phy)
     config(state, rel, phy, profile=PROFILE)
     _provider_profile(home, state, rel, phy, binary)

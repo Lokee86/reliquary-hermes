@@ -102,7 +102,7 @@ def capture_probe(tmp_path, binaries, history_checkout, monkeypatch, setup_hosts
 
     # Exercise the actual enrollment boundary after historical rows exist.
     rel, phy = home / "general.rel", home / "identity.phy"
-    owner(cli, "rel", rel, "unspecified")
+    owner(cli, "rel", rel)
     owner(cli, "phy", phy)
     install_setup_host(home, binary)
     prompts = iter((str(rel), str(phy), "", ""))

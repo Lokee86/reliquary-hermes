@@ -1,7 +1,7 @@
 //! Create an explicitly requested owner through Root, then publish it without clobbering.
 use super::{OwnerCheck, Role, read_request, write_report};
 use crate::registry::store;
-use reliquary_memory::{OwnerScope, Phylactery, Rel};
+use reliquary_memory::{Phylactery, Rel};
 use serde::Deserialize;
 use std::{
     io::ErrorKind,
@@ -47,10 +47,7 @@ fn create(role: Role, path: &Path) -> Result<OwnerCheck, &'static str> {
     let stage = staging.tempdir_in(parent).map_err(|_| CREATE_FAILED)?;
     let staged = TempPath::try_from_path(stage.path().join("owner")).map_err(|_| CREATE_FAILED)?;
     let owner_id = match role {
-        Role::MainRel => {
-            Rel::create(&staged, OwnerScope::Unspecified).map(|owner| owner.owner_id())
-        }
-        Role::ProjectRel => Rel::create(&staged, OwnerScope::Project).map(|owner| owner.owner_id()),
+        Role::MainRel | Role::ProjectRel => Rel::create(&staged).map(|owner| owner.owner_id()),
         Role::ActivePhy => Phylactery::create(&staged).map(|owner| owner.owner_id()),
     }
     .map_err(|_| CREATE_FAILED)?;

@@ -117,17 +117,6 @@ pub enum OwnerScope {
     Connection,
 }
 
-impl OwnerScope {
-    pub(crate) fn into_container_scope(self) -> reliquary_container::ReliquaryScope {
-        match self {
-            Self::Unspecified => reliquary_container::ReliquaryScope::Unspecified,
-            Self::Organization => reliquary_container::ReliquaryScope::Organization,
-            Self::Project => reliquary_container::ReliquaryScope::Project,
-            Self::Connection => reliquary_container::ReliquaryScope::Connection,
-        }
-    }
-}
-
 impl From<reliquary_container::ReliquaryScope> for OwnerScope {
     fn from(value: reliquary_container::ReliquaryScope) -> Self {
         match value {
@@ -256,6 +245,7 @@ struct CommonState {
 /// here; private fields prevent exposing a public bag of stores.
 pub struct RelSession {
     owner_id: [u8; 16],
+    rel_dependencies: RelDependencyDeclaration,
     archive: Archive,
     echo: EchoStore,
     common: CommonState,
@@ -1031,6 +1021,8 @@ pub use archive_vector_publication::{
     MAX_ARCHIVE_VECTOR_RESPONSE_BYTES,
 };
 pub use vector_publication::{MemoryVectorInput, MemoryVectorRow};
+mod community_recompute;
+pub use community_recompute::{CommunityRecomputeCut, CommunityRecomputeInput};
 mod management;
 mod management_association;
 pub use management_association::MemoryAssociationCut;
@@ -1038,6 +1030,10 @@ pub use management_association::MemoryAssociationCut;
 mod user_memory;
 pub use user_memory::{UserMemoryCorrection, UserMemoryCorrectionResult};
 mod phy_writer;
+mod rel_dependencies;
+pub use rel_dependencies::{
+    MAX_REL_DEPENDENCIES, RelDependencyDeclaration, canonical_rel_dependency_ids,
+};
 mod rel_session;
 mod rel_writer;
 pub use management::{

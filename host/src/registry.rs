@@ -1,8 +1,8 @@
 //! Service-owned owner topology and durable Hermes session binding.
 use reliquary_memory::{
     Gateway, HostAdmissionAdapter, HostCredentialBinding, InspectionQuery, Instance,
-    MemoryListFilters, OwnerGrant, OwnerId, OwnerKind, OwnerScope, Phylactery, ProductError,
-    ProductErrorKind, Rel, TrustedHostAdmission,
+    MemoryListFilters, OwnerGrant, OwnerId, OwnerKind, Phylactery, ProductError, ProductErrorKind,
+    Rel, TrustedHostAdmission,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -144,13 +144,11 @@ impl Registry {
         let lease = acquire_service_lease(&state_dir)?;
         let gateway = Gateway::new();
         let main = open_rel(&config.main_rel)?;
-        validate_rel_scope(main.info().map_err(owner_error)?.scope, false)?;
         let main_rel = main.owner_id();
         let mut rels = vec![main];
         let mut projects = BTreeMap::new();
         for (project_id, path) in &config.projects {
             let rel = open_rel(path)?;
-            validate_rel_scope(rel.info().map_err(owner_error)?.scope, true)?;
             projects.insert(project_id.clone(), rel.owner_id());
             rels.push(rel);
         }
@@ -600,16 +598,6 @@ impl Topology {
         }
         Err(RegistryError::Conflict("owner_topology_changed"))
     }
-}
-
-// Temporary Hermes integration compatibility: legacy REL scope is not a
-// property of the General owner role. The homogeneous-REL/DAG correction is
-// deferred to the Reliquary roadmap; do not rewrite existing owner headers.
-fn validate_rel_scope(scope: OwnerScope, project: bool) -> Result<(), RegistryError> {
-    if project && scope != OwnerScope::Project {
-        return Err(RegistryError::Invalid("project_rel_scope"));
-    }
-    Ok(())
 }
 
 fn valid_id(value: &str) -> bool {

@@ -55,6 +55,16 @@ git diff --check
 
 The checkout must be at the exact SHA in [host audit](host-audit.md). It supplies `agent.memory_provider` during test collection. Without `HP01_HERMES_CHECKOUT`, checkout-based probes skip explicitly. The Python suite uses deterministic inputs and keeps pytest state in this worktree. The shared documentation checker and commit comparison commands are in the [documentation policy](documentation-policy.md).
 
+## Scope-free REL setup and restart
+
+Use the locked offline host suite and the HP03 process binary settings with the CLI built at the [vendored Core revision](../vendor/reliquary/SOURCE-PROVENANCE.md). The isolated `tests/test_hp03_host.py` cases exercise the real Python setup, signed attach and restart. The Rust setup and registry cases cover all three legacy scopes in both roles, neutral creation in both roles, verified reopen, and occupied or duplicate owner refusal.
+
+The test fixtures in `host/tests/support/legacy-rel-2.1.json` contain the bytes emitted before the creation change by Core `36c6383a`. The tests use disposable copies of those Organization, Project and Connection RELs and compare their recorded owner IDs and complete contents. The matched Python/native checks also validate a newly created dedicated REL as General and preserve a dedicated session binding after restart.
+
+On November 18, 2026, the locked offline native suite passed 124 tests, with the large synthetic graph characterization ignored. The native binary's SHA-256 was `0f2a1761ecd875f5437fc2141b5fdeecd9a58cb2665c97aaa84b9ba6694ba157`. The vendored workspace and detached consumer resolved with locked offline dependencies. The source audit verified the 673-file inventory against the Core pin and its documented Lodestone adaptations.
+
+The matching Python suite passed 426 tests with five optional Desktop or live probes skipped. It used audited Hermes `2bd378ed1`, inference `168a9230` and a disposable history checkout with the HU08 patch. The paired process test received a neutral dedicated creation receipt and verified the same owner ID as a General candidate. The setup hook activated the legacy Project REL and recovered its General session binding. The signed process test restored the dedicated Connection-scoped route after restart and matched both legacy REL hashes. Local logs and the Python case report are in `.test-temp/homog/`.
+
 ## Evidence covered
 
 - Strict bounded request and response DTOs reject spoofed authority, extra fields, malformed wire data and mismatched IDs, cuts or provenance. Each selected Memory has one correlated source-provenance entry.

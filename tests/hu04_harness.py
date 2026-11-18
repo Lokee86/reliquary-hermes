@@ -98,12 +98,12 @@ def start_profile(home, profile_id, binaries, cleanup, *, project=False, seed_ma
     _stage_plugin(home)
     copytree(REPO / "dashboard" / "dist", home / "plugins/reliquary/dashboard/dist")
     main_rel, active_phy = home / "main.rel", home / "active.phy"
-    ids = {"main": owner(cli, "rel", main_rel, "unspecified"), "phy": owner(cli, "phy", active_phy)}
+    ids = {"main": owner(cli, "rel", main_rel), "phy": owner(cli, "phy", active_phy)}
     seeded_memory_id = seed_main(cli, main_rel) if seed_main is not None else None
     project_rel = home / "project.rel" if project else None
     if project_rel is not None:
         if project_snapshot is None:
-            ids["project"] = owner(cli, "rel", project_rel, "project")
+            ids["project"] = owner(cli, "rel", project_rel)
         else:
             copyfile(project_snapshot, project_rel)
             ids["project"] = _cli(cli, "rel", "verify", project_rel)["owner"]["owner_id"]

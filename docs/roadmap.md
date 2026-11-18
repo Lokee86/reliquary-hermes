@@ -32,13 +32,11 @@ Before implementation, define:
 
 Do not add this policy opportunistically during HP04. It belongs to a later service lifecycle/configuration phase.
 
-## Deferred REL scope retirement (core architecture)
+## REL homogeneity
 
-**Status:** deferred. ADR 0029 (accepted 2026-09-04) requires homogeneous RELs and a dependency DAG. The rebuilt core still persists legacy `OwnerScope` values, and this Hermes integration historically rejected project-scoped RELs as General memory.
+Core creation uses the neutral 2.1 header value. Hermes accepts any verified REL 2.1 as General or dedicated project memory and keeps the original owner identity and stored scope. Explicit configuration and trusted attribution supply the role and routing. The [local service guide](local-service.md#configuration-and-setup) describes setup and matching the Python and native revisions.
 
-**Immediate bridge:** The Hermes host now accepts **any valid legacy REL scope in the General slot** while preserving all existing owner identity, format, PHY, project route, writer grant and topology checks. Dedicated project entries retain their existing scope check for now. The bridge is not a new REL class or a migration.
-
-**Full correction:** The authoritative roadmap is `C:\!bin\workspace\Reliquary\docs\rel-homogeneity-and-dependency-roadmap-2026-11-10.md`. Inventory and remove behavioral scope predicates from core and host adapters, preserve legacy owner file compatibility, and verify/restore explicit multi-parent inter-REL dependency DAG semantics. No core change or on-disk rewrite is authorized as part of the Hermes test workaround.
+The [vendored Core revision](../vendor/reliquary/SOURCE-PROVENANCE.md) includes the durable REL dependency port. Those declarations belong to the owner files. Hermes project assignments belong to the profile configuration.
 
 ## Active UI rebuild specification
 
@@ -46,11 +44,11 @@ The current dashboard is scheduled for a **hard-cut replacement**, not increment
 
 ## Purpose
 
-Record active UI architecture correction and deferred service lifecycle/REL-homogeneity work.
+Record the UI architecture plan, pending service lifecycle features and the REL homogeneity status.
 
 ## Overview
 
-The Warlock-parity UI hard-cut has its own implementation specification. Separate deferred items are configurable queued-work keepalive and the core REL-scope/homogeneous-dependency correction.
+The Warlock-parity UI hard-cut has its own implementation specification. Configurable queued-work keepalive remains a separate proposed service feature.
 
 ## Related docs
 
@@ -60,4 +58,4 @@ The Warlock-parity UI hard-cut has its own implementation specification. Separat
 
 ## Notes
 
-These roadmap entries do not authorize the deferred architectural work during the current Hermes compatibility patch.
+See the local service and verification guides for the current owner setup contract and accepted checks.

@@ -47,7 +47,7 @@ def _host(binary, state, cleanup):
 
 def _owners(cli, root, binary):
     rel, phy, state = root / "main.rel", root / "active.phy", root / "reliquary"
-    owner(cli, "rel", rel, "unspecified")
+    owner(cli, "rel", rel)
     owner(cli, "phy", phy)
     config(state, rel, phy, profile=PROFILE)
     (state / "provider.json").write_bytes(canonical({"binary": str(binary)}))
@@ -361,7 +361,7 @@ def test_hp04_trusted_provider_delivers_and_fences_late_same_session_callback(
     home.mkdir()
     monkeypatch.setenv("HERMES_HOME", str(home))
     rel, phy = tmp_path / "provider.rel", tmp_path / "provider.phy"
-    owner(cli, "rel", rel, "unspecified")
+    owner(cli, "rel", rel)
     owner(cli, "phy", phy)
     provider = history_provider.ReliquaryMemoryProvider()
     install_setup_host(home, binary)

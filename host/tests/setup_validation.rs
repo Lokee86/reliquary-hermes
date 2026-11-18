@@ -1,4 +1,4 @@
-use reliquary_memory::{Gateway, OwnerScope, Phylactery, Rel};
+use reliquary_memory::{Gateway, Phylactery, Rel};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -6,6 +6,9 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
 };
+
+#[path = "support/legacy_rel.rs"]
+mod legacy_rel;
 
 struct Fixture {
     scratch: tempfile::TempDir,
@@ -24,9 +27,9 @@ impl Fixture {
         let main = scratch.path().join("main.owner");
         let phy = scratch.path().join("person.owner");
         let project = scratch.path().join("project.owner");
-        Rel::create(&main, OwnerScope::Organization).unwrap();
+        Rel::create(&main).unwrap();
         Phylactery::create(&phy).unwrap();
-        Rel::create(&project, OwnerScope::Project).unwrap();
+        Rel::create(&project).unwrap();
         Self {
             scratch,
             state,
@@ -103,7 +106,7 @@ fn detects_and_opens_real_owners_without_creating_state_or_leases() {
         json!({
             "valid": true,
             "main_rel": {
-                "accepted": true, "opened": true, "kind": "rel", "scope": "organization",
+                "accepted": true, "opened": true, "kind": "rel", "scope": "unspecified",
                 "owner_id": rel.owner_id(), "error": null
             },
             "active_phy": {
@@ -112,7 +115,7 @@ fn detects_and_opens_real_owners_without_creating_state_or_leases() {
             },
             "projects": {
                 "demo": {
-                    "accepted": true, "opened": true, "kind": "rel", "scope": "project",
+                    "accepted": true, "opened": true, "kind": "rel", "scope": "unspecified",
                     "owner_id": project.owner_id(), "error": null
                 }
             },
@@ -139,7 +142,7 @@ fn detects_and_opens_real_owners_without_creating_state_or_leases() {
 }
 
 #[test]
-fn identifies_wrong_kind_wrong_scope_missing_and_corrupt_files() {
+fn identifies_wrong_kind_missing_and_corrupt_files_and_accepts_neutral_project() {
     let fixture = Fixture::new();
     let corrupt = fixture.scratch.path().join("corrupt.owner");
     fs::write(&corrupt, b"corrupt owner").unwrap();
@@ -147,7 +150,7 @@ fn identifies_wrong_kind_wrong_scope_missing_and_corrupt_files() {
     request["owners"]["main_rel"] = json!(fixture.phy);
     request["owners"]["active_phy"] = json!(fixture.main);
     request["owners"]["projects"] = json!({
-        "wrong-scope": fixture.main,
+        "neutral": fixture.main,
         "missing": fixture.scratch.path().join("missing.owner"),
         "corrupt": corrupt
     });
@@ -158,10 +161,8 @@ fn identifies_wrong_kind_wrong_scope_missing_and_corrupt_files() {
     assert_eq!(report["main_rel"]["opened"], true);
     assert_eq!(report["active_phy"]["error"], "wrong_owner_kind");
     assert_eq!(report["active_phy"]["kind"], "rel");
-    assert_eq!(
-        report["projects"]["wrong-scope"]["error"],
-        "project_rel_scope"
-    );
+    assert_eq!(report["projects"]["neutral"]["accepted"], true);
+    assert_eq!(report["projects"]["neutral"]["scope"], "unspecified");
     assert_eq!(report["projects"]["missing"]["error"], "owner_unavailable");
     assert_eq!(report["projects"]["corrupt"]["accepted"], false);
     assert_eq!(report["projects"]["corrupt"]["opened"], false);
@@ -170,23 +171,32 @@ fn identifies_wrong_kind_wrong_scope_missing_and_corrupt_files() {
     request["owners"]["main_rel"] = json!(fixture.project);
     let report = fixture.report(&request);
     assert_eq!(report["main_rel"]["accepted"], true);
-    assert_eq!(report["main_rel"]["scope"], "project");
+    assert_eq!(report["main_rel"]["scope"], "unspecified");
 }
 
 #[test]
-fn project_scoped_existing_rel_is_accepted_as_general_without_mutation() {
-    let fixture = Fixture::new();
-    let project_scoped_main = fixture.scratch.path().join("historical-general.rel");
-    Rel::create(&project_scoped_main, OwnerScope::Project).unwrap();
-    let before = fs::read(&project_scoped_main).unwrap();
-    let mut request = fixture.request();
-    request["owners"]["main_rel"] = json!(project_scoped_main);
-    let report = fixture.report(&request);
-    assert_eq!(report["valid"], true, "{report:?}");
-    assert_eq!(report["main_rel"]["scope"], "project");
-    assert_eq!(report["main_rel"]["accepted"], true);
-    assert_eq!(fs::read(&project_scoped_main).unwrap(), before);
-    assert!(!fixture.state.exists());
+fn legacy_rel_headers_are_accepted_in_both_roles_without_mutation() {
+    for (main, project) in legacy_rel::role_pairs() {
+        let fixture = Fixture::new();
+        let main_bytes = main.bytes();
+        let project_bytes = project.bytes();
+        fs::write(&fixture.main, &main_bytes).unwrap();
+        fs::write(&fixture.project, &project_bytes).unwrap();
+
+        let report = fixture.report(&fixture.request());
+        assert_eq!(report["valid"], true, "{report:?}");
+        for (check, legacy) in [
+            (&report["main_rel"], main),
+            (&report["projects"]["demo"], project),
+        ] {
+            assert_eq!(check["accepted"], true);
+            assert_eq!(check["scope"], legacy.scope);
+            assert_eq!(check["owner_id"], legacy.owner_id);
+        }
+        assert_eq!(fs::read(&fixture.main).unwrap(), main_bytes);
+        assert_eq!(fs::read(&fixture.project).unwrap(), project_bytes);
+        assert!(!fixture.state.exists());
+    }
 }
 
 #[test]
@@ -240,7 +250,7 @@ fn rejects_duplicate_identity_and_mismatched_persisted_topology_without_writes()
     assert_eq!(fixture.report(&request)["valid"], true);
 
     let other_main = fixture.scratch.path().join("other.owner");
-    Rel::create(&other_main, OwnerScope::Organization).unwrap();
+    Rel::create(&other_main).unwrap();
     request["owners"]["main_rel"] = json!(other_main);
     let report = fixture.report(&request);
     assert_eq!(report["valid"], false);
@@ -257,7 +267,12 @@ fn creates_all_roles_and_reselects_them_through_setup_validation() {
     for (role, file, kind, scope) in [
         ("main_rel", "new general.REL", "rel", json!("unspecified")),
         ("active_phy", "new identity.phy", "phy", Value::Null),
-        ("project_rel", "new project.rel", "rel", json!("project")),
+        (
+            "project_rel",
+            "new project.rel",
+            "rel",
+            json!("unspecified"),
+        ),
     ] {
         let path = fixture.scratch.path().join(file);
         let output = fixture.create(role, &path);

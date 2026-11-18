@@ -186,8 +186,8 @@ def create(home, candidate):
                 _owner_report(report)
                 require(report["accepted"] and report["opened"] and report["kind"] == file_kind
                         and report["owner_id"] is not None, "owner_created_unverified")
-                scope = {"general_rel": "unspecified", "project_rel": "project", "phy": None}[kind]
-                require(report["scope"] == scope, "owner_created_unverified")
+                expected_scope = "unspecified" if file_kind == "rel" else None
+                require(report["scope"] == expected_scope, "owner_created_unverified")
             except ContractError:
                 raise ContractError("owner_created_unverified") from None
             return {**report, "path": str(path)}

@@ -38,10 +38,10 @@ def _start_profile(home, profile_id, binaries, cleanup, *, project):
     binary, cli = binaries
     _stage_plugin(home)
     main, phy = home / "main.rel", home / "active.phy"
-    ids = {"main": owner(cli, "rel", main, "unspecified"), "phy": owner(cli, "phy", phy)}
+    ids = {"main": owner(cli, "rel", main), "phy": owner(cli, "phy", phy)}
     project_rel = home / "project.rel" if project else None
     if project_rel:
-        ids["project"] = owner(cli, "rel", project_rel, "project")
+        ids["project"] = owner(cli, "rel", project_rel)
     state = home / "reliquary"
     config(state, main, phy, profile=profile_id, project_rel=project_rel)
     (state / "provider.json").write_bytes(canonical({"binary": str(binary)}))

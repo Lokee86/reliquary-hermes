@@ -2,38 +2,30 @@
 
 ## Purpose
 
-This directory is a source-only snapshot of the Reliquary Root repository at
-`dca06ffa9933f8a6105036b05814cabbbccb17ef` (`Restore partial community decoding
-for Hermes graph rendering`), with the narrow hosted inference changes listed
-below. The host depends on the public `reliquary-memory` API.
+This directory is a source-only snapshot of Reliquary Core at
+`76c9e08540ce8972940d13fe49244ac67de07eba` (Create REL owners without a scope
+argument). The host depends on the public `reliquary-memory` API.
 
 ## Overview
 
-The hosted inference seam and authorized active-vector inspection are applied
-from Root commits `2941cd86d3b66ee6ad83018d77b65f1cb99f928b`,
-`10863a84be0230fc5550f9b07d161f3ac9510861`,
-`e176c8399c0cd309f0302ab7ac55b9286da72801`, and
-`0b0838933eb4d45ce8a40bb1fd2794809ff62d9f`. Only their `src/` and `crates/`
-changes are included. These changes add no storage schema or provider dependency.
-They preserve standalone configured inference. The preexisting graph snapshot
-and approved dependency packaging remain the distribution baseline.
+This revision includes the active-Memory Leiden recompute and durable REL
+dependency support. It carries forward the prior snapshot's partial Community
+decode and exact-cut graph projection, plus the already integrated hosted
+inference and authorized active-vector changes.
 
-Packaging changes replace the vector-store's private Lodestone Git reference with
-the approved local `vendor/lodestone/crates/packed` source subset. The corresponding
-Lodestone Git source entries are removed from the Root and host lockfiles; other
-dependency versions retain their pins. See [Lodestone provenance](../lodestone/SOURCE-PROVENANCE.md).
-
-The application and owner-session development dependencies also use that same
-local subset, so the vendored Switchboard tests run with `--locked --offline`.
-This corrects the source package's remaining development-only Git references;
-the lockfiles and the approved Lodestone source are unchanged.
+The application, owner-session, and vector-store manifests resolve
+`lodestone-packed` through the approved local
+`vendor/lodestone/crates/packed` source subset. The vendored workspace and
+detached consumer lockfiles omit the Git source field for that package.
+The workspace, consumer, and host lockfiles add `leiden-rs` 0.8.1 and retain their
+existing dependency pins. See [Lodestone provenance](../lodestone/SOURCE-PROVENANCE.md).
 
 The snapshot contains the Root Cargo workspace manifests and lockfile, Rust
-sources (including test modules), the Rust workspace crate manifests and sources,
-the referenced G4 JSON test fixture, and the patched `quinn-proto` source. It
-preserves the vendored package's existing Apache-2.0 and MIT license files. It
-omits Git history, Root documentation and tooling, generated build output,
-executables, profile configuration, credentials, and REL/PHY owner files.
+sources and tests, the referenced G4 JSON test fixture, and the packaged
+`quinn-proto` source. It preserves the existing Apache-2.0 and MIT license
+files. Its inventory excludes Git history, Root documentation and tooling,
+build output, executables, profile configuration, credentials, and REL/PHY
+owner files.
 
 ## Related docs
 
@@ -42,6 +34,5 @@ executables, profile configuration, credentials, and REL/PHY owner files.
 
 ## Notes
 
-The Root source repository at this revision has no top-level license file. This
-provenance record does not grant an additional license. The existing third-party
-license files remain alongside their sources.
+The Root source repository at this revision has no top-level license file. The
+existing third-party license files remain alongside their sources.

@@ -34,7 +34,7 @@ SESSION = "session-a"
 
 def _host(binary, cli, root, cleanup, *, processing_url=None, inference_checkout=None):
     rel, phy, state = root / "main.rel", root / "active.phy", root / "reliquary"
-    owner(cli, "rel", rel, "unspecified")
+    owner(cli, "rel", rel)
     owner(cli, "phy", phy)
     config(state, rel, phy, profile=PROFILE)
     (state / "provider.json").write_bytes(canonical({"binary": str(binary)}))
@@ -125,7 +125,7 @@ def test_history_provider_clean_drain_exits_and_restart_preserves_route(
 
     binary, cli = binaries
     rel, phy, state = tmp_path / "main.rel", tmp_path / "active.phy", tmp_path / "reliquary"
-    owner(cli, "rel", rel, "unspecified")
+    owner(cli, "rel", rel)
     owner(cli, "phy", phy)
     config(state, rel, phy, profile=PROFILE)
     (state / "provider.json").write_bytes(canonical({"binary": str(binary)}))

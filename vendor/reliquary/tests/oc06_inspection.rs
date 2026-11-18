@@ -2,9 +2,9 @@ use reliquary_memory::{
     ConversationSubmissionId, CreateMemoryRequest, CreateRelationshipRequest, EntityId,
     FinalizeCapture, Gateway, GraphNode, HostCredentialBinding, InspectionItem, InspectionQuery,
     MAX_MANAGEMENT_PAGE_BYTES, MAX_MANAGEMENT_PAGE_ITEMS, MemoryBodyId, MemoryId,
-    MemoryListFilters, MemoryListLifecycle, MemoryTextField, OwnerGrant, OwnerKind, OwnerScope,
-    Phylactery, ProductErrorKind, Rel, RelationshipParticipantEvidence, SourceAvailability,
-    SubmissionId, TrustedHostAdmission,
+    MemoryListFilters, MemoryListLifecycle, MemoryTextField, OwnerGrant, OwnerKind, Phylactery,
+    ProductErrorKind, Rel, RelationshipParticipantEvidence, SourceAvailability, SubmissionId,
+    TrustedHostAdmission,
 };
 use std::path::PathBuf;
 
@@ -42,9 +42,9 @@ fn draft(request_id: &str, content: String) -> CreateMemoryRequest {
 #[test]
 fn oc06_mounted_inspection_enforces_grants_cuts_and_byte_budget() {
     let dir = TestDirectory::create();
-    let rel = Rel::create(dir.0.join("project.rel"), OwnerScope::Project).unwrap();
+    let rel = Rel::create(dir.0.join("project.rel")).unwrap();
     let phy = Phylactery::create(dir.0.join("private.phy")).unwrap();
-    let other = Rel::create(dir.0.join("readonly.rel"), OwnerScope::Project).unwrap();
+    let other = Rel::create(dir.0.join("readonly.rel")).unwrap();
     let gateway = Gateway::new();
     let owner = gateway.mount_rel(&rel, true).unwrap();
     let private = gateway.mount_phylactery(&phy, true).unwrap();
@@ -286,7 +286,7 @@ fn oc06_mounted_inspection_enforces_grants_cuts_and_byte_budget() {
 #[test]
 fn oc06_archive_uses_exact_node_and_revision_across_branch_advances() {
     let dir = TestDirectory::create();
-    let rel = Rel::create(dir.0.join("source.rel"), OwnerScope::Project).unwrap();
+    let rel = Rel::create(dir.0.join("source.rel")).unwrap();
     let gateway = Gateway::new();
     let owner = gateway.mount_rel(&rel, true).unwrap();
     let token = "s".repeat(48);
@@ -391,7 +391,7 @@ fn oc06_archive_uses_exact_node_and_revision_across_branch_advances() {
 fn hp02_memory_summaries_filter_and_page_without_returning_bodies() {
     let dir = TestDirectory::create();
     let path = dir.0.join("summary.rel");
-    let rel = Rel::create(&path, OwnerScope::Project).unwrap();
+    let rel = Rel::create(&path).unwrap();
     let gateway = Gateway::new();
     let owner = gateway.mount_rel(&rel, true).unwrap();
     let manager_token = "m".repeat(48);
@@ -497,12 +497,15 @@ fn hp02_memory_summaries_filter_and_page_without_returning_bodies() {
 #[test]
 fn hp02_memory_graph_expands_active_neighbors_at_one_cut() {
     use reliquary_graph::{NodeRef, RelationChange};
-    use reliquary_memory::{MemoryGraphQuery, RelationKind, RelationOrigin};
+    use reliquary_memory::{
+        MemoryGraphQuery, RelationKind, RelationOrigin, SemanticGraphProjectionItem,
+        SemanticGraphProjectionStatus,
+    };
     use reliquary_owner_session::{DreamMemoryCut, DreamRelationCut, GraphAdmission, RelWriter};
 
     let dir = TestDirectory::create();
     let path = dir.0.join("graph.rel");
-    let rel = Rel::create(&path, OwnerScope::Project).unwrap();
+    let rel = Rel::create(&path).unwrap();
     let token = "g".repeat(48);
     let (owner, [first, second, third]) = {
         let gateway = Gateway::new();
@@ -631,6 +634,81 @@ fn hp02_memory_graph_expands_active_neighbors_at_one_cut() {
         relation_page = next_page;
     }
     assert_eq!(semantic_relations.len(), 2);
+
+    let render_cut = instance
+        .semantic_graph_inspection_cut(owner, OwnerKind::Rel)
+        .unwrap();
+    assert_eq!(render_cut, one.cut);
+    let filters = MemoryListFilters {
+        query: " FIRST ".to_owned(),
+        category: Some("fact".into()),
+        memory_type: Some("note".into()),
+        lifecycle: Some(MemoryListLifecycle::Active),
+        ..Default::default()
+    };
+    let list = instance
+        .inspect_owner(
+            owner,
+            OwnerKind::Rel,
+            &InspectionQuery::MemorySummaries(filters.clone()),
+            None,
+            10,
+        )
+        .unwrap();
+    let mut selected = Vec::new();
+    let status = instance
+        .visit_semantic_graph_projection(owner, OwnerKind::Rel, render_cut, &filters, |item| {
+            match item {
+                SemanticGraphProjectionItem::Memory { id, title, .. } => selected.push((id, title)),
+                SemanticGraphProjectionItem::Relation(_) => {
+                    panic!("excluded endpoints must suppress edges")
+                }
+                SemanticGraphProjectionItem::Community(_) => {}
+            }
+            std::ops::ControlFlow::Continue(())
+        })
+        .unwrap();
+    assert_eq!(status, SemanticGraphProjectionStatus::Complete);
+    let [InspectionItem::MemoryListEntry(entry)] = list.items.as_slice() else {
+        panic!("exactly one Memory matches the list filter");
+    };
+    assert_eq!(
+        selected,
+        vec![(MemoryId(id(&entry.id)), entry.title.clone())]
+    );
+    assert!(
+        instance
+            .memory_matches_filter(owner, OwnerKind::Rel, render_cut, &filters, first.id)
+            .unwrap()
+    );
+    assert!(
+        !instance
+            .memory_matches_filter(owner, OwnerKind::Rel, render_cut, &filters, second.id)
+            .unwrap()
+    );
+    let mut stale = render_cut;
+    stale.memory += 1;
+    let error = instance
+        .visit_semantic_graph_projection(owner, OwnerKind::Rel, stale, &filters, |_| {
+            panic!("stale cut must fail before the visitor")
+        })
+        .unwrap_err();
+    assert_eq!(error.kind(), ProductErrorKind::Stale);
+    let mut visited = 0;
+    let status = instance
+        .visit_semantic_graph_projection(
+            owner,
+            OwnerKind::Rel,
+            render_cut,
+            &MemoryListFilters::default(),
+            |_| {
+                visited += 1;
+                std::ops::ControlFlow::Break(())
+            },
+        )
+        .unwrap();
+    assert_eq!(status, SemanticGraphProjectionStatus::VisitorStopped);
+    assert_eq!(visited, 1);
 
     let expansion = MemoryGraphQuery {
         depth: 2,

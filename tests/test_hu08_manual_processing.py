@@ -28,7 +28,7 @@ def test_selected_history_reaches_complete(
     # service credential; setup must create and scope this profile's own token.
     monkeypatch.delenv(TOKEN_VAR, raising=False)
     rel, phy = home / "general.rel", home / "active.phy"
-    rel_id = owner(cli, "rel", rel, "unspecified")
+    rel_id = owner(cli, "rel", rel)
     owner(cli, "phy", phy)
     install_setup_host(home, binary)
     old_ids = ["manual-synthetic-one", "manual-synthetic-two"]

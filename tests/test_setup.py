@@ -159,8 +159,8 @@ def test_exited_setup_host_releases_unaccepted_topology(pinned_provider, binarie
     state.mkdir(parents=True)
     install_setup_host(home, binary)
     main, replacement, phy = (home / name for name in ("main.rel", "replacement.rel", "active.phy"))
-    owner(cli, "rel", main, "unspecified")
-    owner(cli, "rel", replacement, "unspecified")
+    owner(cli, "rel", main)
+    owner(cli, "rel", replacement)
     owner(cli, "phy", phy)
     runtime_registry = state / "integration-runtimes-v1.json"
     runtime_registry.write_bytes(b"corrupt startup state")

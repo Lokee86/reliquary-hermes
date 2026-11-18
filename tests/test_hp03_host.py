@@ -1,5 +1,6 @@
 from contextlib import ExitStack
 from hashlib import sha256
+import json
 import os
 from pathlib import Path
 from shutil import copyfile
@@ -26,13 +27,18 @@ def binaries():
     return paths
 
 
-def owner(cli, kind, path, scope=None):
+def owner(cli, kind, path):
     args = [str(cli), kind, "create", str(path)]
-    if scope:
-        args += ["--scope", scope]
     result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
     assert result.returncode == 0, "synthetic Root owner creation failed"
     return decode(result.stdout)["owner"]["owner_id"]
+
+
+def legacy_rel(path, scope):
+    fixtures = Path(__file__).resolve().parents[1] / "host/tests/support/legacy-rel-2.1.json"
+    row = next(row for row in json.loads(fixtures.read_bytes()) if row["scope"] == scope)
+    path.write_bytes(bytes.fromhex(row["hex"]))
+    return row["owner_id"]
 
 
 def config(state, main_rel, active_phy, *, profile="profile-a", project_rel=None):
@@ -88,8 +94,9 @@ def test_live_host_start_attach_scope_leases_outage_and_restart(tmp_path, binari
     binary, cli = binaries
     main_rel, project_rel = tmp_path / "general.rel", tmp_path / "lantern.rel"
     active_phy = tmp_path / "active.phy"
-    main_id = owner(cli, "rel", main_rel, "unspecified")
-    project_id = owner(cli, "rel", project_rel, "project")
+    main_id = legacy_rel(main_rel, "organization")
+    project_id = legacy_rel(project_rel, "connection")
+    original = {path: sha256(path.read_bytes()).digest() for path in (main_rel, project_rel)}
     user_id = owner(cli, "phy", active_phy)
     state = tmp_path / "profile-a"
     config(state, main_rel, active_phy, project_rel=project_rel)
@@ -166,6 +173,7 @@ def test_live_host_start_attach_scope_leases_outage_and_restart(tmp_path, binari
         second_discovery = decode((state / "discovery.json").read_bytes())
         assert second_discovery["instance_id"] != first_discovery["instance_id"]
         assert second_discovery["lease_id"] != first_discovery["lease_id"]
+    assert {path: sha256(path.read_bytes()).digest() for path in original} == original
 
 
 def test_stock_provider_preserves_accepted_project_route_after_downgrade(
@@ -176,8 +184,8 @@ def test_stock_provider_preserves_accepted_project_route_after_downgrade(
 
     binary, cli = binaries
     main_rel, project_rel, active_phy = (tmp_path / name for name in ("main.rel", "lantern.rel", "active.phy"))
-    main_id = owner(cli, "rel", main_rel, "unspecified")
-    dedicated_id = owner(cli, "rel", project_rel, "project")
+    main_id = owner(cli, "rel", main_rel)
+    dedicated_id = owner(cli, "rel", project_rel)
     phy_id = owner(cli, "phy", active_phy)
     project_folder = tmp_path / "lantern"
     project_folder.mkdir()
@@ -242,7 +250,7 @@ def test_two_profiles_can_explicitly_select_the_same_read_only_phy(tmp_path, bin
         bindings = []
         for name in ("profile-a", "profile-b"):
             rel = tmp_path / f"{name}.rel"
-            owner(cli, "rel", rel, "unspecified")
+            owner(cli, "rel", rel)
             state = tmp_path / name
             config(state, rel, active_phy, profile=name)
             client = HostClient(state, name, "principal-a", TOKEN, binary=binary)
@@ -259,17 +267,23 @@ def test_pinned_setup_provider_attaches_and_recovers_real_process(
         tmp_path, binaries, pinned_provider, monkeypatch, setup_hosts):
     from agent.secret_scope import load_env_file, reset_secret_scope, set_secret_scope
     from hermes_cli.memory_setup import _post_setup_hook
+    from hermes_cli.projects_db import connect_closing, create_project
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    from reliquary_hermes import setup, setup_paths
 
     binary, cli = binaries
     home = tmp_path / "hermes-profile"
     home.mkdir()
     main_rel, active_phy = tmp_path / "main.rel", tmp_path / "active.phy"
-    rel_id = owner(cli, "rel", main_rel, "unspecified")
+    rel_id = legacy_rel(main_rel, "project")
     user_id = owner(cli, "phy", active_phy)
     initial_rel = main_rel.read_bytes()
     provider = pinned_provider.ReliquaryMemoryProvider()
     install_setup_host(home, binary)
+    with connect_closing(home / "projects.db") as registry:
+        project = create_project(registry, name="Lantern", folders=[str(tmp_path)])
+    monkeypatch.setattr(setup_paths, "_default_home", lambda: home)
     values = iter((str(main_rel), str(active_phy), "", ""))
     monkeypatch.setattr("builtins.input", lambda _: next(values))
 
@@ -284,6 +298,13 @@ def test_pinned_setup_provider_attaches_and_recovers_real_process(
     scope = set_hermes_home_override(home)
     secret_scope = set_secret_scope(load_env_file(home / ".env"), profile_home=str(home))
     try:
+        dedicated = tmp_path / "new-dedicated.rel"
+        created = setup.create(home, {"kind": "project_rel", "path": str(dedicated), "project_id": project})
+        assert created["scope"] == "unspecified"
+        cross_role = setup.validate(home, {"main_rel": str(dedicated), "active_phy": str(active_phy)})
+        assert cross_role["valid"]
+        assert cross_role["main_rel"]["owner_id"] == created["owner_id"]
+
         assert _post_setup_hook(provider, {})
         [setup_host] = setup_hosts
         original = setup_host._process

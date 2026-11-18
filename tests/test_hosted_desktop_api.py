@@ -89,7 +89,7 @@ def test_hosted_desktop_compatibility(tmp_path, hosted_checkout, binaries, plugi
             assert any(item["value"]["current"] for item in page["items"]), "Community fixture has no current partition"
             main_id = bytes(page["cut"]["owner_id"]).hex()
         else:
-            main_id = owner(cli, "rel", main, "unspecified")
+            main_id = owner(cli, "rel", main)
         owners[profile] = {"main": main_id, "phy": owner(cli, "phy", phy)}
     (launch / "config.yaml").write_text("plugins:\n  enabled: [reliquary]\n  isolation: host\n", encoding="utf-8")
 

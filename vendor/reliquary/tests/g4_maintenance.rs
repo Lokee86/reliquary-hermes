@@ -84,7 +84,7 @@ fn public_maintenance_rewrites_history_and_reconciles_quiescent_rel_copies() {
     let divergent_merged = paths.path("divergent-merged.rel");
     let collision = paths.path("collision.rel");
 
-    let rel = Rel::create(&source_path, OwnerScope::Project).unwrap();
+    let rel = Rel::create(&source_path).unwrap();
     let source_id = rel.owner_id();
     drop(rel);
     add_memory(&source_path, "cohort-fact", "A populated REL memory", 100);
@@ -213,6 +213,130 @@ fn public_maintenance_rewrites_history_and_reconciles_quiescent_rel_copies() {
     );
 }
 
+#[test]
+fn rel_dependency_history_survives_supported_maintenance() {
+    use reliquary_container::{Container, ReliquaryScope};
+    use reliquary_owner_session::RelWriter;
+
+    fn dependency_frames(path: &Path) -> Vec<Vec<u8>> {
+        Container::open_read_only(path)
+            .unwrap()
+            .read_frames()
+            .unwrap()
+            .into_iter()
+            .map(|frame| frame.payload)
+            .filter(|payload| payload.starts_with(b"RELDEP01"))
+            .collect()
+    }
+
+    let paths = TestPaths::new();
+    let source_path = paths.path("dependencies.rel");
+    let base_path = paths.path("legacy-prefix.rel");
+    let target_path = paths.path("other-owner.rel");
+    drop(RelWriter::create_path(&source_path, ReliquaryScope::Organization, [1; 16]).unwrap());
+    let source = Rel::open(&source_path).unwrap();
+    assert_eq!(source.info().unwrap().scope, OwnerScope::Organization);
+    let target = Rel::create(&target_path).unwrap();
+    let legacy = fs::read(source.path()).unwrap();
+    fs::write(&base_path, &legacy).unwrap();
+    {
+        let gateway = Gateway::new();
+        let source_id = gateway.mount_rel(&source, true).unwrap();
+        let target_id = gateway.mount_rel(&target, false).unwrap();
+        let token = "g4-maintenance-rel-dependencies-0000";
+        let (adapter, _) = TrustedHostAdmission::new([HostCredentialBinding::new(
+            "dependency-maintenance",
+            token,
+            [
+                OwnerGrant::ManageRel(source_id),
+                OwnerGrant::ViewRel(target_id),
+            ],
+        )])
+        .install(&gateway)
+        .unwrap();
+        let management = adapter
+            .authenticate(token)
+            .unwrap()
+            .workspace_management(source_id)
+            .unwrap();
+        management
+            .replace_rel_dependencies(0, &[target_id])
+            .unwrap();
+        management.replace_rel_dependencies(1, &[]).unwrap();
+    }
+    let accepted = fs::read(&source_path).unwrap();
+    assert!(accepted.starts_with(&legacy));
+    let history = dependency_frames(&source_path);
+    assert_eq!(history.len(), 2);
+    let source = Rel::open(&source_path).unwrap();
+
+    let prefix_copy = paths.path("prefix-copy.rel");
+    reconcile_rel(&base_path, &source_path, &prefix_copy).unwrap();
+    assert_eq!(fs::read(&prefix_copy).unwrap(), accepted);
+
+    let reclaimed = paths.path("reclaimed.rel");
+    let copy_plan = VerifiedCopyPlan::prepare(&source_path).unwrap();
+    reclaim_storage_copy(&copy_plan, &source_path, &reclaimed).unwrap();
+    assert_eq!(dependency_frames(&reclaimed), history);
+
+    let preserve_policy = RewritePolicy {
+        identity: RewriteIdentityMode::PreserveOwner,
+        ..RewritePolicy::default()
+    };
+    let plan = source.plan_rewrite(preserve_policy).unwrap();
+    let retained = paths.path("retained.rel");
+    execute_rewrite(&plan, &source_path, &retained).unwrap();
+    for copy in [&reclaimed, &retained] {
+        let info = Rel::verify(copy).unwrap();
+        assert_eq!(info.owner_id, source.owner_id());
+        assert_eq!(info.scope, OwnerScope::Organization);
+    }
+    assert_eq!(dependency_frames(&retained), history);
+
+    let new_owner = paths.path("new-owner.rel");
+    let plan = source.plan_rewrite(RewritePolicy::default()).unwrap();
+    assert!(
+        execute_rewrite(&plan, &source_path, &new_owner)
+            .unwrap_err()
+            .message()
+            .contains("operational evidence")
+    );
+    assert!(!new_owner.exists());
+
+    let other_tail = paths.path("other-tail.rel");
+    fs::write(&other_tail, &legacy).unwrap();
+    add_memory(&other_tail, "other tail", "A valid divergent Memory", 101);
+    let refused = paths.path("refused.rel");
+    assert!(
+        reconcile_rel(&source_path, &other_tail, &refused)
+            .unwrap_err()
+            .message()
+            .contains("exact replay contract")
+    );
+    assert!(!refused.exists());
+
+    let left = paths.path("left.rel");
+    let right = paths.path("right.rel");
+    fs::write(&left, &accepted).unwrap();
+    fs::write(&right, &accepted).unwrap();
+    add_memory(
+        &left,
+        "left fact",
+        "Left branch after common dependencies",
+        102,
+    );
+    add_memory(
+        &right,
+        "right fact",
+        "Right branch after common dependencies",
+        103,
+    );
+    let merged = paths.path("merged.rel");
+    reconcile_rel(&left, &right, &merged).unwrap();
+    assert_eq!(dependency_frames(&merged), history);
+    assert_eq!(fs::read(&source_path).unwrap(), accepted);
+}
+
 // The public product API has no Phylactery mutation operation yet. This test
 // checks owner-kind, rewrite identity, and history-generation behavior on PHY.
 #[test]
@@ -265,7 +389,7 @@ fn historical_cuts_distinguish_foreign_future_tampered_and_unavailable_state() {
 
     let paths = TestPaths::new();
     let rel_path = paths.path("history-rel.rel");
-    let rel = Rel::create(&rel_path, OwnerScope::Project).unwrap();
+    let rel = Rel::create(&rel_path).unwrap();
     let rel_owner_id = rel.owner_id();
     drop(rel);
     add_memory(
@@ -346,7 +470,7 @@ fn active_archive_prune_request_fails_closed_and_reclaim_is_exact_noop_on_popula
     let reclaimed = paths.path("reclaimed-copy.rel");
     let second = paths.path("reclaimed-copy-again.rel");
 
-    let rel = Rel::create(&source, OwnerScope::Project).unwrap();
+    let rel = Rel::create(&source).unwrap();
     let owner = rel.owner_id().as_bytes();
     drop(rel);
     add_memory(&source, "active-fact", "Active state stays available", 1);
@@ -414,7 +538,7 @@ fn active_archive_prune_request_fails_closed_and_reclaim_is_exact_noop_on_popula
     assert!(pruned_proof.unavailable_payloads > source_proof.unavailable_payloads);
     drop(pruned_reader);
 
-    drop(Rel::create(&reclaim_source, OwnerScope::Project).unwrap());
+    drop(Rel::create(&reclaim_source).unwrap());
     add_memory(
         &reclaim_source,
         "reclaim-live-fact",

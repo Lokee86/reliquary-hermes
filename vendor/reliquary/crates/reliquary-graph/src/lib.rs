@@ -9,6 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod association;
 mod community_names;
+mod community_scan_merge;
+mod community_scan_merge_plan;
+mod community_scan_merge_reduce;
+mod community_scan_merge_workers;
 mod history;
 mod partial_community;
 pub use association::{
@@ -17,6 +21,7 @@ pub use association::{
 pub use community_names::{
     CommunityRename, CommunityRenameReceipt, rename_graph_version_in_frame, validate_community_name,
 };
+pub use community_scan_merge::{CommunityGraph, CommunityPartition};
 use std::fmt;
 
 type Id = [u8; 32];
@@ -152,6 +157,7 @@ pub enum GraphError {
     InvalidClosure(&'static str),
     InvalidRelation(&'static str),
     InvalidCommunity(&'static str),
+    Leiden(String),
     StaleCommunity,
     UnknownCommunity,
     CommunityRequestConflict,
@@ -166,6 +172,7 @@ impl fmt::Display for GraphError {
             Self::InvalidClosure(s) => write!(f, "Graph endpoint closure rejected: {s}"),
             Self::InvalidRelation(s) => write!(f, "invalid Graph relation: {s}"),
             Self::InvalidCommunity(s) => write!(f, "invalid Community snapshot: {s}"),
+            Self::Leiden(s) => write!(f, "Leiden calculation failed: {s}"),
             Self::StaleCommunity => f.write_str("Community rename cut is stale"),
             Self::UnknownCommunity => f.write_str("Community does not exist at the accepted cut"),
             Self::CommunityRequestConflict => {
@@ -451,6 +458,9 @@ impl GraphStore {
             .collect()
     }
     fn active_memory_nodes_at(&self, version: u64) -> Result<BTreeSet<Id>, GraphError> {
+        if version == self.graph_version {
+            return Ok(self.active_memory_nodes());
+        }
         if version > self.graph_version {
             return Err(GraphError::InvalidCommunity("snapshot is ahead of Graph"));
         }
@@ -729,7 +739,7 @@ impl CommunityStore {
     pub fn current(&self) -> Option<&CommunitySnapshot> {
         self.current.as_ref()
     }
-    /// True for an explicitly imported subset; unlisted graph nodes are ungrouped.
+    /// Whether the current generation is stored as a subset of the Graph closure.
     pub fn has_partial_coverage(&self) -> bool {
         self.partial_coverage
     }
@@ -827,7 +837,7 @@ impl CommunityStore {
                 return Err(GraphError::InvalidCommunity("community identity"));
             }
         }
-        if (partial && !seen.is_subset(&closure)) || (!partial && seen != closure) {
+        if !seen.is_subset(&closure) || (!partial && seen.len() != closure.len()) {
             return Err(GraphError::InvalidCommunity(
                 "snapshot does not cover active graph memory closure",
             ));
@@ -921,8 +931,7 @@ fn encode_community(owner: [u8; 16], s: &CommunitySnapshot) -> Result<Vec<u8>, G
     Ok(o)
 }
 fn decode_community(b: &[u8]) -> Result<Option<([u8; 16], CommunitySnapshot)>, GraphError> {
-    if b.get(..8) != Some(COMMUNITY_MAGIC.as_slice())
-        && b.get(..8) != Some(PARTIAL_COMMUNITY_MAGIC.as_slice())
+    if !matches!(b.get(..8), Some(magic) if magic == COMMUNITY_MAGIC || magic == PARTIAL_COMMUNITY_MAGIC)
     {
         return Ok(None);
     };

@@ -7,9 +7,8 @@ use reliquary_memory::test_support::mock_master_key_store;
 use reliquary_memory::{
     ConfiguredRuntime, CredentialId, EmbeddingModelEndpoint, EmbeddingNormalization, EpisodeId,
     Gateway, GeneralModelEndpoint, GeneralRoute, HostCredentialBinding, ModelProvider, ModelRoute,
-    ModelSlot, NativeImportFormat, NativeImportPlan, OwnerGrant, OwnerScope, Phylactery,
-    ProcessOptions, ProcessingState, ProductErrorKind, Rel, ReliquaryConfig, SecretString,
-    TrustedHostAdmission,
+    ModelSlot, NativeImportFormat, NativeImportPlan, OwnerGrant, Phylactery, ProcessOptions,
+    ProcessingState, ProductErrorKind, Rel, ReliquaryConfig, SecretString, TrustedHostAdmission,
 };
 use serde_json::{Value, json};
 use std::{
@@ -149,7 +148,6 @@ fn configured_fixture(
     general_routes: &[(ModelSlot, &str)],
     embedding: bool,
 ) -> ConfiguredRuntime {
-    let _keys = mock_master_key_store();
     let mut config = ReliquaryConfig::new_blank(path);
     let credential_id = CredentialId::new("KEY").unwrap();
     config.add_api_key(
@@ -193,6 +191,7 @@ fn configured_fixture(
 
 #[test]
 fn configured_import_processes_rel_and_phy_and_reopens_without_republication() {
+    let _keys = mock_master_key_store();
     let compatible_drift = Arc::new(AtomicBool::new(false));
     let fixture = Fixture::start_with({
         let compatible_drift = Arc::clone(&compatible_drift);
@@ -239,7 +238,7 @@ fn configured_import_processes_rel_and_phy_and_reopens_without_republication() {
         ],
         true,
     );
-    let rel = Rel::create(&rel_path, OwnerScope::Project).unwrap();
+    let rel = Rel::create(&rel_path).unwrap();
     let phy = Phylactery::create(&phy_path).unwrap();
     let token = "external-fixture-operator-admission-credential";
     let mount = |rel: &Rel, phy: &Phylactery| {
@@ -290,6 +289,7 @@ fn configured_import_processes_rel_and_phy_and_reopens_without_republication() {
         .unwrap();
     assert_eq!(held.state, ProcessingState::Held, "{held:?}");
     assert_eq!(held.insomnia.held, 1);
+    assert!(!instance.has_active_vectors(destination).unwrap());
     let incomplete = &held.insomnia.incomplete_ids[0];
     assert_eq!(incomplete.len(), 64);
     let mut episode = [0; 32];
@@ -343,6 +343,8 @@ fn configured_import_processes_rel_and_phy_and_reopens_without_republication() {
     assert_eq!(report.insomnia.rel_memories, 1);
     assert_eq!(report.insomnia.phy_memories, 1);
     assert!(report.insomnia.import_complete);
+    assert!(instance.has_active_vectors(owner).unwrap());
+    assert!(instance.has_active_vectors(destination).unwrap());
     management.quiesce().unwrap();
     assert_eq!(management.verify_quiesced().unwrap().memory_count, 1);
     management.reopen().unwrap();

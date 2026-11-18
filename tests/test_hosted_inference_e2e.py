@@ -66,7 +66,7 @@ def test_real_hermes_hosted_inference_processing_recall_identity_and_restart(
     binary, cli = binaries
     # Acceptance operates on copies, never installed owners or the user's profile.
     seed_rel, seed_phy = tmp_path / "seed.rel", tmp_path / "seed.phy"
-    owner(cli, "rel", seed_rel, "unspecified")
+    owner(cli, "rel", seed_rel)
     owner(cli, "phy", seed_phy)
     rel, phy = tmp_path / "main.rel", tmp_path / "active.phy"
     copyfile(seed_rel, rel)

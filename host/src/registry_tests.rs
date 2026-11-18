@@ -3,6 +3,9 @@ use super::*;
 const TOKEN: &str = "registry-test-profile-credential-value";
 const NEW_TOKEN: &str = "registry-test-replacement-credential-value";
 
+#[path = "../tests/support/legacy_rel.rs"]
+mod legacy_rel;
+
 struct Fixture {
     _directory: tempfile::TempDir,
     state: PathBuf,
@@ -22,13 +25,9 @@ impl Fixture {
         let state = directory.path().join("state");
         std::fs::create_dir(&state).unwrap();
         let main = directory.path().join("main.rel");
-        let main_id = Rel::create(&main, OwnerScope::Unspecified)
-            .unwrap()
-            .owner_id();
+        let main_id = Rel::create(&main).unwrap().owner_id();
         let project = directory.path().join("project.rel");
-        let project_id = Rel::create(&project, OwnerScope::Project)
-            .unwrap()
-            .owner_id();
+        let project_id = Rel::create(&project).unwrap().owner_id();
         let phy = directory.path().join("human.phy");
         let phy_id = Phylactery::create(&phy).unwrap().owner_id();
         Self {
@@ -118,35 +117,44 @@ fn routes_persist_across_restart_and_keep_the_active_phy_independent() {
 }
 
 #[test]
-fn legacy_project_scoped_general_rel_mounts_without_rewriting_file_or_routes() {
-    let fixture = Fixture::new();
-    let legacy_general = fixture.main.with_file_name("legacy-general.rel");
-    let owner_id = Rel::create(&legacy_general, OwnerScope::Project)
-        .unwrap()
-        .owner_id();
-    let original_bytes = std::fs::read(&legacy_general).unwrap();
-    let mut config = fixture.config();
-    config.main_rel = legacy_general.clone();
-    let initial = {
-        let mut registry = Registry::open(config, &fixture.state, TOKEN).unwrap();
-        let fallback = registry
-            .bind_session("legacy-general-session", None)
-            .unwrap();
-        assert_eq!(fallback.rel_id, owner_id.to_string());
-        assert_eq!(fallback.user_id, fixture.phy_id.to_string());
-        fallback
-    };
-    let mut config = fixture.config();
-    config.main_rel = legacy_general.clone();
-    let mut reopened = Registry::open(config, &fixture.state, TOKEN).unwrap();
-    assert_eq!(
-        reopened
-            .bind_session("legacy-general-session", None)
-            .unwrap(),
-        initial
-    );
-    drop(reopened);
-    assert_eq!(std::fs::read(&legacy_general).unwrap(), original_bytes);
+fn legacy_rel_headers_mount_in_both_roles_and_preserve_routes_on_reopen() {
+    for (main, project) in legacy_rel::role_pairs() {
+        let fixture = Fixture::new();
+        let main_bytes = main.bytes();
+        let project_bytes = project.bytes();
+        std::fs::write(&fixture.main, &main_bytes).unwrap();
+        std::fs::write(&fixture.project, &project_bytes).unwrap();
+
+        let (general, dedicated) = {
+            let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
+            let general = registry.bind_session("legacy-general", None).unwrap();
+            let dedicated = registry
+                .bind_session("legacy-project", Some("demo"))
+                .unwrap();
+            assert_eq!(general.rel_id, main.owner_id, "General: {}", main.scope);
+            assert_eq!(
+                dedicated.rel_id, project.owner_id,
+                "project: {}",
+                project.scope
+            );
+            assert_eq!(general.user_id, fixture.phy_id.to_string());
+            assert_eq!(dedicated.user_id, general.user_id);
+            (general, dedicated)
+        };
+        {
+            let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
+            assert_eq!(
+                registry.bind_session("legacy-general", None).unwrap(),
+                general
+            );
+            assert_eq!(
+                registry.bind_session("legacy-project", None).unwrap(),
+                dedicated
+            );
+        }
+        assert_eq!(std::fs::read(&fixture.main).unwrap(), main_bytes);
+        assert_eq!(std::fs::read(&fixture.project).unwrap(), project_bytes);
+    }
 }
 
 #[test]
@@ -246,7 +254,7 @@ fn separate_profiles_can_share_the_phy_but_cannot_share_the_rel_writer() {
     assert!(!second_state.join("topology-v1.json").exists());
 
     let second_rel = fixture.main.with_file_name("second.rel");
-    Rel::create(&second_rel, OwnerScope::Unspecified).unwrap();
+    Rel::create(&second_rel).unwrap();
     let mut config = fixture.config();
     config.profile_id = "profile-two".into();
     config.principal_id = "principal-two".into();
@@ -310,9 +318,7 @@ fn invalid_owner_is_rejected_and_accepted_route_wins_over_new_attribution() {
 fn extending_topology_preserves_accepted_fallback_and_project_routes() {
     let fixture = Fixture::new();
     let second_path = fixture.project.with_file_name("second.rel");
-    let second_id = Rel::create(&second_path, OwnerScope::Project)
-        .unwrap()
-        .owner_id();
+    let second_id = Rel::create(&second_path).unwrap().owner_id();
     let (fallback, dedicated, old_route) = {
         let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
         let fallback = registry
@@ -364,7 +370,7 @@ fn extending_topology_preserves_accepted_fallback_and_project_routes() {
         "owner_topology_changed"
     );
     let third_path = fixture.project.with_file_name("third.rel");
-    Rel::create(&third_path, OwnerScope::Project).unwrap();
+    Rel::create(&third_path).unwrap();
     let mut config = fixture.config();
     config.projects.insert("second".into(), third_path);
     assert_eq!(

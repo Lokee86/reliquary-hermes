@@ -2,8 +2,8 @@ use reliquary_memory::{
     ConfiguredRuntime, CredentialId, DecisionModelEndpoint, EmbeddingModelEndpoint,
     EmbeddingNormalization, Gateway, GeneralModelEndpoint, GeneralRoute, HostAdmissionAdapter,
     HostAdmissionControl, HostCredentialBinding, Instance, ModelProvider, ModelRoute, ModelSlot,
-    NativeImportFormat, NativeImportPlan, OwnerGrant, OwnerId, OwnerScope, Phylactery,
-    ProcessOptions, ProcessingState, Rel, ReliquaryConfig, SecretString, TrustedHostAdmission,
+    NativeImportFormat, NativeImportPlan, OwnerGrant, OwnerId, Phylactery, ProcessOptions,
+    ProcessingState, Rel, ReliquaryConfig, SecretString, TrustedHostAdmission,
 };
 use serde_json::{Value, json};
 use std::{
@@ -56,7 +56,7 @@ impl Fixture {
         let endpoint = Endpoint::new(include_private);
         let (runtime, processing_runtime) = runtimes(directory.path(), endpoint.address);
         let rel_path = directory.path().join("project.rel");
-        Rel::create(&rel_path, OwnerScope::Project).unwrap();
+        Rel::create(&rel_path).unwrap();
         Self {
             rel_path,
             runtime,
