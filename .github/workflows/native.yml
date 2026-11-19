@@ -82,3 +82,68 @@ jobs:
         uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: host/target/release/reliquary-hermes-host.exe
+
+  unix:
+    name: Native host (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - platform: linux-arm64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - platform: macos-x86_64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - platform: macos-arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+    env:
+      CARGO_HOME: ${{ github.workspace }}/.cargo-home
+      CARGO_TARGET_DIR: ${{ github.workspace }}/host/target
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: '1'
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      HOST_TARGET: ${{ matrix.target }}
+    steps:
+      - name: Check out the pinned source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install the stable Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - name: Restore locked Cargo dependencies and compiler output
+        id: cargo-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .cargo-home
+            host/target
+          key: unix-native-release-o1-${{ matrix.target }}-${{ hashFiles('host/Cargo.lock', 'vendor/reliquary/**/*.rs', 'vendor/reliquary/**/Cargo.toml', 'vendor/lodestone/**/*.rs', 'vendor/lodestone/**/Cargo.toml') }}
+      - name: Set up the native test directory
+        shell: bash
+        run: |
+          scratch="$(pwd -P)/host/.test-tmp/native-ci"
+          mkdir -p "$scratch"
+          printf 'TMPDIR=%s\n' "$scratch" >> "$GITHUB_ENV"
+      - name: Build the native host
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          rustc -vV
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "$HOST_TARGET"
+          cargo build --manifest-path host/Cargo.toml --locked --release --target "$HOST_TARGET" -j 2
+      - name: Test the native host
+        timeout-minutes: 10
+        shell: bash
+        run: cargo test --manifest-path host/Cargo.toml --locked --release --target "$HOST_TARGET" -j 2 -- --test-threads=1
+      - name: Save partial Cargo cache after a trusted run
+        if: ${{ always() && github.event_name != 'pull_request' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .cargo-home
+            host/target
+          key: unix-native-release-o1-${{ matrix.target }}-${{ hashFiles('host/Cargo.lock', 'vendor/reliquary/**/*.rs', 'vendor/reliquary/**/Cargo.toml', 'vendor/lodestone/**/*.rs', 'vendor/lodestone/**/Cargo.toml') }}
