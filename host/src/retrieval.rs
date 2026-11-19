@@ -54,6 +54,10 @@ impl RetrievalService {
         self.runtime = Some(runtime);
     }
 
+    pub(crate) fn invalidate_owner_bindings(&mut self) {
+        self.turns.clear();
+    }
+
     pub(crate) fn take_for_work(&mut self) -> Self {
         Self {
             runtime: self.runtime.clone(),

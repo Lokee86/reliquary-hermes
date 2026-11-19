@@ -27,8 +27,7 @@ from .validation import ContractError, MAX_WIRE_BYTES, canonical, decode, requir
 router = APIRouter()
 _SETUP_BODY_BYTES = 65536
 _DIALOG_BODY_BYTES = 128
-_SETUP_REQUIRED_FIELDS = frozenset({"main_rel", "active_phy"})
-_SETUP_FIELDS = _SETUP_REQUIRED_FIELDS | {"projects"}
+_SETUP_FIELDS = frozenset({"main_rel", "active_phy", "projects"})
 _SETUP_ERRORS = {
     "runtime_unavailable": (503, "runtime_unavailable"),
     "preflight_unavailable": (503, "preflight_unavailable"),
@@ -42,6 +41,18 @@ _SETUP_ERRORS = {
     "owner_already_exists": (409, "owner_already_exists"),
     "owner_creation_failed": (422, "owner_creation_failed"),
     "owner_created_unverified": (422, "owner_created_unverified"),
+    "owner_switch_busy": (409, "owner_switch_busy"),
+    "owner_switch_stale": (409, "owner_switch_stale"),
+    "owner_switch_review_required": (409, "owner_switch_review_required"),
+    "owner_switch_unconfirmed": (503, "owner_switch_unconfirmed"),
+    "owner_switch_recovery_required": (503, "owner_switch_recovery_required"),
+    "owner_writer_conflict": (409, "owner_writer_conflict"),
+    "duplicate_owner": (409, "duplicate_owner"),
+    "owner_path_changed": (409, "owner_path_changed"),
+    "mounted_owner_changed": (409, "mounted_owner_changed"),
+    "wrong_owner_kind": (422, "wrong_owner_kind"),
+    "owner_unavailable": (409, "owner_unavailable"),
+    "project_routing_unavailable": (409, "project_routing_unavailable"),
     "owner_creation_unavailable": (503, "owner_creation_unavailable"),
     "owner_creation_unconfirmed": (503, "owner_creation_unconfirmed"),
 }
@@ -246,7 +257,10 @@ def _service_owner_sessions(home: Path, browser_request: UIRequest) -> UIRespons
             "ui_denied", "active_phy_unavailable", "unbound_session"} else "unavailable"
         return _error(browser_request, status, status, retryable=status == "unavailable")
     except HostUnavailable as exc:
-        status = "denied" if str(exc) == "host_denied" else "unavailable"
+        code = str(exc)
+        if code in {"session_phy_inactive", "bound_owner_unavailable"}:
+            return _error(browser_request, "unavailable", code, retryable=True)
+        status = "denied" if code == "host_denied" else "unavailable"
         return _error(browser_request, status, status, retryable=status == "unavailable")
     except Exception:
         return _error(browser_request, "unavailable", "unavailable", retryable=True)
@@ -378,7 +392,8 @@ async def _setup_request(request: Request, operation: str, *read_args):
         try:
             candidate = decode(await _read_bounded_body(request, limit=_SETUP_BODY_BYTES, error="setup_request_too_large"))
             if operation != "create":
-                require(_SETUP_REQUIRED_FIELDS <= set(candidate) <= _SETUP_FIELDS, "invalid_setup_candidate")
+                fields = _SETUP_FIELDS | {"switch_review"} if operation == "apply" else _SETUP_FIELDS
+                require(set(candidate) <= fields, "invalid_setup_candidate")
         except ContractError:
             raise HTTPException(status_code=400, detail="invalid_setup_request") from None
         args = (home, candidate)

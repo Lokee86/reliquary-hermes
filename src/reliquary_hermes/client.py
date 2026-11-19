@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from .authority import Discovery
 from .protocol import Request, Response
+from .setup_wire import switch_review as parse_switch_review, switch_status as parse_switch_status
 from .validation import (ContractError, MAX_WIRE_BYTES, canonical, choice, decode, digest,
                          identifier, integer, obj, require, text)
 
@@ -274,17 +275,20 @@ class HostClient:
             raise HostUnavailable("invalid_host_response") from None
         if status != 200:
             code = {403: "host_denied", 409: "host_conflict", 503: "host_unavailable"}.get(status)
-            if path == "/v1/source" or path.startswith("/v1/runtime/"):
+            if (path == "/v1/source" or path.startswith("/v1/runtime/")
+                    or (path.startswith("/v1/setup/") and status != 403)):
                 try:
                     error = obj(decode(reply), {"code", "retryable"})
-                    require(type(error["retryable"]) is bool, "invalid_source_response")
+                    require(type(error["retryable"]) is bool, "invalid_host_error")
                     code = identifier(error["code"])
                 except ContractError:
                     code = None
-            if path == "/v1/dashboard/topology" and status == 409:
+            if path in {"/v1/attach", "/v1/dashboard/topology"} and status in {409, 503}:
                 try:
-                    if decode(reply).get("code") == "service_restart_required":
-                        code = "service_restart_required"
+                    detail = decode(reply).get("code")
+                    if detail in ("session_phy_inactive", "bound_owner_unavailable", "owner_switch_busy",
+                                  "owner_switch_recovery_required", "service_restart_required"):
+                        code = detail
                 except ContractError:
                     pass
             if path.startswith("/v1/graph-render/") and status in {404, 413}:
@@ -402,6 +406,38 @@ class HostClient:
             self._process.wait(timeout=3)
         # A child that exited before discovery can still have published topology.
         return True
+
+    def _switch_call(self, operation: str, body: dict, *, start: bool = False) -> dict:
+        envelope = canonical({"profile_id": self._profile_id, "principal_id": self._principal_id,
+                              "body": body})
+        if len(envelope) > MAX_WIRE_BYTES:
+            raise HostUnavailable("setup_request_too_large")
+
+        timeout = _DASHBOARD_STARTUP_SECONDS if operation != "status" else _REQUEST_SECONDS
+
+        def request(discovery, deadline):
+            try:
+                value = decode(self._exchange(discovery, "/v1/setup/" + operation, envelope, deadline,
+                                              response_seconds=timeout))
+                return parse_switch_review(value) if operation == "review" else parse_switch_status(value)
+            except ContractError:
+                raise HostUnavailable("invalid_setup_response") from None
+
+        if start:
+            return self._connect(request, startup_seconds=_DASHBOARD_STARTUP_SECONDS)
+        discovery = self._read_discovery()
+        if discovery is None:
+            raise HostUnavailable("host_unavailable")
+        return request(discovery, time.monotonic() + _CONNECT_SECONDS + timeout)
+
+    def switch_status(self, *, start: bool = False) -> dict:
+        return self._switch_call("status", {}, start=start)
+
+    def switch_review(self, changes: dict) -> dict:
+        return self._switch_call("review", changes)
+
+    def switch_apply(self, review: dict) -> dict:
+        return self._switch_call("apply", review)
 
     def read_dashboard_topology(self, session_id: str | None, *, owners_fingerprint: str | None = None) -> dict:
         """Read signed server-owned topology without attaching or starting the host."""
@@ -522,6 +558,8 @@ class HostClient:
                               "arguments": arguments}
         if job.manual_owner_id is not None:
             envelope_value["target_owner_id"] = job.manual_owner_id
+            if job.manual_phy_id is not None:
+                envelope_value["expected_phy_id"] = job.manual_phy_id
         runtime_lease = job.lease_id or (
             self._runtime_lease if job.manual_owner_id is None and job.kind == "snapshot"
             and job.session_id in self._runtime_scopes else None)

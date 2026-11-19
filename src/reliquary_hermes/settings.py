@@ -55,20 +55,25 @@ def _existing_file(value) -> Path:
     return path
 
 
-def _owner_config(config: dict) -> dict:
+def _owner_config(config: dict, *, verify_files: bool = True) -> dict:
     fields = set(config)
     require(OWNER_FIELDS <= fields <= OWNER_FIELDS | {"session_projects"}, "invalid_owner_config")
     identifier(config["profile_id"])
     identifier(config["principal_id"])
-    _existing_file(config["main_rel"])
-    _existing_file(config["active_phy"])
+    def path(value):
+        if verify_files:
+            return _existing_file(value)
+        require(Path(text(value)).is_absolute(), "invalid_local_file")
+
+    path(config["main_rel"])
+    path(config["active_phy"])
     projects = config["projects"]
     session_projects = config.get("session_projects", {})
     require(type(projects) is dict and len(projects) <= 128, "invalid_project_config")
     require(type(session_projects) is dict and len(session_projects) <= 4096, "invalid_project_config")
-    for project_id, path in projects.items():
+    for project_id, value in projects.items():
         identifier(project_id)
-        _existing_file(path)
+        path(value)
     for session_id, project_id in session_projects.items():
         identifier(session_id)
         require(identifier(project_id) in projects, "invalid_project_config")
@@ -77,7 +82,8 @@ def _owner_config(config: dict) -> dict:
 
 def read_settings(home: Path) -> Settings:
     state = _state_dir(home)
-    owners = _owner_config(_read_object(state / "owners.json"))
+    # Accepted owner paths and mounts are verified by the native registry.
+    owners = _owner_config(_read_object(state / "owners.json"), verify_files=False)
     provider = obj(_read_object(state / "provider.json"), {"binary"})
     return Settings(state, owners["profile_id"], owners["principal_id"], _existing_file(provider["binary"]))
 

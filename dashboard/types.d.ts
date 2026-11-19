@@ -218,9 +218,19 @@ export type ReadResults = {
 export type ReadErrorStatus = "denied" | "unavailable" | "stale_cursor" | "conflict" | "invalid" | "unsupported" | "error";
 
 export interface SetupCandidate {
-  main_rel: string;
-  active_phy: string;
+  main_rel?: string;
+  active_phy?: string;
   projects?: Record<string, string>;
+  switch_review?: SetupSwitchReview;
+}
+
+export interface SetupSwitchReview {
+  generation: number;
+  changes: {
+    main_rel?: { path: string; owner_id: string };
+    active_phy?: { path: string; owner_id: string };
+    projects: Record<string, { path: string; owner_id: string }>;
+  };
 }
 
 export interface SetupStatus {
@@ -229,6 +239,7 @@ export interface SetupStatus {
   capture_status?: "unavailable" | "enrolled" | "setup_required";
   desktop_native_mutations: boolean;
   local_dialogs_available: boolean;
+  owner_generation?: number;
   defaults: {
     main_rel: string | null;
     active_phy: string | null;
@@ -250,6 +261,7 @@ export interface SetupOwner extends SetupCheck {
 
 export interface SetupReport {
   valid: boolean;
+  switch_review?: SetupSwitchReview;
   main_rel: SetupOwner;
   active_phy: SetupOwner;
   projects: Record<string, SetupOwner>;

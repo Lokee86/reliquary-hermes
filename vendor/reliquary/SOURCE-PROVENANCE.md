@@ -3,13 +3,12 @@
 ## Purpose
 
 This directory is a source-only snapshot of Reliquary Core at
-`76c9e08540ce8972940d13fe49244ac67de07eba` (Create REL owners without a scope
-argument). The host depends on the public `reliquary-memory` API.
+`0cb1c37630f456b5f0cb2abd9b98c1ca4a36ad41` (Allow trusted hosts to detach a read-only PHY). The host depends on the public `reliquary-memory` API.
 
 ## Overview
 
-This revision includes the active-Memory Leiden recompute and durable REL
-dependency support. It carries forward the prior snapshot's partial Community
+This revision supplies trusted read-only PHY detach for live owner switching.
+It includes the active-Memory Leiden recompute and durable REL dependency support. It carries forward the prior snapshot's partial Community
 decode and exact-cut graph projection, plus the already integrated hosted
 inference and authorized active-vector changes.
 

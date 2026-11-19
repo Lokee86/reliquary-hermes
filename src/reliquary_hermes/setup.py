@@ -8,7 +8,8 @@ import subprocess
 from . import setup_paths
 from .capture_policy import ENROLLMENT_FILE, capture_cutoff, history_supported
 from .client import HostClient, HostUnavailable
-from .projects import active_projects, inventory
+from .projects import active_projects, inventory, routing_available
+from .setup_wire import switch_review as parse_switch_review, switch_status as parse_switch_status
 from .settings import (
     _read_object, _state_dir, ensure_setup_token, profile_home,
     profile_setup_lock, read_settings, read_token,
@@ -20,6 +21,9 @@ _OWNER_REPORT_FIELDS = {"accepted", "opened", "kind", "owner_id", "scope", "erro
 _CREATE_ROLES = {"general_rel": "main_rel", "project_rel": "project_rel", "phy": "active_phy"}
 _CREATE_ERRORS = {b"owner_already_exists", b"invalid_owner_path", b"owner_creation_failed",
                   b"owner_created_unverified"}
+_TOPOLOGY = "topology-v1.json"
+_UNCONFIRMED = {"host_timeout", "host_incomplete_response", "invalid_host_response",
+                "invalid_setup_response", "host_connection_refused"}
 
 
 def _read_optional(path):
@@ -76,8 +80,15 @@ def status(home):
         except ContractError:
             capture_status = "setup_required"
     _, binary, defaults = _defaults(home)
-    return {"configured": configured, "capture_status": capture_status, "runtime_detected": binary.is_absolute() and binary.is_file(),
-            "defaults": defaults}
+    detected = binary.is_absolute() and binary.is_file()
+    result = {"configured": configured, "capture_status": capture_status, "runtime_detected": detected,
+              "defaults": defaults}
+    if detected and (_state_dir(home) / _TOPOLOGY).is_file():
+        current = _disk_switch_status(home, binary)
+        if current is not None:
+            result["defaults"] = _assignment_paths(current["owners"])
+            result["owner_generation"] = current["generation"]
+    return result
 
 
 def _candidate(home, candidate, prior, defaults, *, project_aware=False):
@@ -203,42 +214,139 @@ def _owners_fingerprint(state, owners):
     return hashlib.sha256(raw).hexdigest()
 
 
-def _running_report(home, prior, request):
-    state = _state_dir(home)
-    if not (state / "discovery.json").is_file():
-        return None
-    try:
-        settings = read_settings(home)
-        client = HostClient(state, settings.profile_id, settings.principal_id, read_token(home))
-        client.read_dashboard_topology(None)
-    except (OSError, ValueError, HostUnavailable):
-        return None
+def _display_path(value):
+    if os.name == "nt" and value.startswith("\\\\?\\") and value[5:7] == ":\\":
+        return value[4:]
+    return value
 
-    require(request["owners"] == prior, "service_restart_required")
-    try:
-        fingerprint = _owners_fingerprint(state, request["owners"])
-        topology = client.read_dashboard_topology(None, owners_fingerprint=fingerprint)
-    except (OSError, ValueError, HostUnavailable):
-        raise ContractError("service_restart_required") from None
 
-    # Signed owner bindings are in registry order: General, projects sorted by
-    # stable ID, then active PHY. Scope was verified when this topology mounted.
-    projects = sorted(prior["projects"])
-    rows = topology["owners"]
-    require(len(rows) == len(projects) + 2 and rows[-1]["owner_id"] == topology["active_phy_id"],
-            "service_restart_required")
-    reports = [{"accepted": True, "opened": True, "kind": row["owner_kind"].lower(),
-                "owner_id": row["owner_id"], "scope": None, "error": None} for row in rows]
-    return {"valid": True, "main_rel": reports[0], "active_phy": reports[-1],
-            "projects": dict(zip(projects, reports[1:-1])),
-            "topology_error": None}
+def _assignment_paths(owners):
+    return {**{role: _display_path(owners[role]["path"]) for role in ("main_rel", "active_phy")},
+            "projects": {key: _display_path(row["path"]) for key, row in owners["projects"].items()}}
+
+
+def _disk_switch_status(home, binary):
+    try:
+        result = _host_setup(home, binary, "setup-status", {})
+        value = obj(decode(result.stdout), {"topology"})["topology"]
+        return parse_switch_status(value) if value is not None else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        raise ContractError("preflight_unavailable") from None
+
+
+def _switch_client(home, binary):
+    settings = read_settings(home)
+    return HostClient(settings.state_dir, settings.profile_id, settings.principal_id,
+                      read_token(home), binary=binary)
+
+
+def _same_path(left, right):
+    return os.path.normcase(str(Path(_display_path(left)).resolve())) == os.path.normcase(
+        str(Path(_display_path(right)).resolve()))
+
+
+def _switch_changes(home, candidate, current, *, applying=False):
+    roles = {"main_rel", "active_phy"}
+    fields = roles | {"projects"}
+    if applying:
+        fields.add("switch_review")
+    require(type(candidate) is dict and set(candidate) <= fields, "invalid_fields")
+    current_paths = _assignment_paths(current["owners"])
+    changes = {"projects": {}}
+    for role in roles & candidate.keys():
+        path = _local_path(candidate[role])
+        if not _same_path(path, current_paths[role]):
+            changes[role] = path
+    projects = candidate.get("projects", {})
+    require(type(projects) is dict and len(projects) <= 128, "invalid_project_config")
+    for key, value in projects.items():
+        project, path = identifier(key), _local_path(value)
+        previous = current_paths["projects"].get(project)
+        if previous is None or not _same_path(previous, path):
+            changes["projects"][project] = path
+    if changes["projects"]:
+        require(routing_available(), "project_routing_unavailable")
+        require(changes["projects"].keys() <= active_projects(home).keys(), "unknown_hermes_project")
+    return changes
+
+
+def _review_passes(changes, proposed):
+    return (changes.keys() == proposed.keys()
+            and all(_same_path(changes[role], proposed[role]["path"])
+                    for role in changes.keys() - {"projects"})
+            and changes["projects"].keys() == proposed["projects"].keys()
+            and all(_same_path(path, proposed["projects"][key]["path"])
+                    for key, path in changes["projects"].items()))
+
+
+def _committed_switch_matches(status, review):
+    if status["generation"] <= review["generation"]:
+        return False
+    owners, changes = status["owners"], review["changes"]
+    return (all(owners[role] == changes[role] for role in changes.keys() - {"projects"})
+            and all(owners["projects"].get(key) == row for key, row in changes["projects"].items()))
+
+
+def _review_report(current, review):
+    owners, changes = current["owners"], review["changes"]
+
+    def row(owner, kind):
+        return {"accepted": True, "opened": True, "kind": kind, "owner_id": owner["owner_id"],
+                "scope": None, "error": None}
+
+    return {"valid": True, "topology_error": None, "switch_review": review,
+            "main_rel": row(changes.get("main_rel", owners["main_rel"]), "rel"),
+            "active_phy": row(changes.get("active_phy", owners["active_phy"]), "phy"),
+            "projects": {key: row(owner, "rel") for key, owner in
+                         {**owners["projects"], **changes["projects"]}.items()}}
+
+
+def _apply_switch(home, binary, candidate):
+    client = _switch_client(home, binary)
+    try:
+        current = client.switch_status(start=True)
+        changes = _switch_changes(home, candidate, current, applying=True)
+        if "switch_review" not in candidate:
+            require(changes == {"projects": {}}, "owner_switch_review_required")
+        else:
+            review = parse_switch_review(candidate["switch_review"])
+            require(review["generation"] == current["generation"], "owner_switch_stale")
+            require(_review_passes(changes, review["changes"]), "owner_switch_review_required")
+            if changes != {"projects": {}}:
+                try:
+                    committed = client.switch_apply(review)
+                except HostUnavailable as exc:
+                    if str(exc) not in _UNCONFIRMED:
+                        raise
+                    try:
+                        committed = client.switch_status()
+                    except HostUnavailable:
+                        raise ContractError("owner_switch_unconfirmed") from None
+                require(_committed_switch_matches(committed, review), "owner_switch_unconfirmed")
+    except HostUnavailable as exc:
+        raise ContractError(str(exc)) from None
+    capture_cutoff(home, enroll=True)
+    _activate(home)
+    return {"valid": True, "configured": True}
 
 
 def validate(home, candidate, *, project_aware=False):
     home = profile_home(home)
     prior, binary, defaults = _defaults(home)
+    if (_state_dir(home) / _TOPOLOGY).is_file():
+        with profile_setup_lock(home):
+            client = _switch_client(home, binary)
+            try:
+                current = client.switch_status(start=True)
+                changes = _switch_changes(home, candidate, current)
+                review = client.switch_review(changes)
+                require(review["generation"] == current["generation"], "owner_switch_stale")
+                require(_review_passes(changes, review["changes"]), "owner_switch_review_required")
+                return _review_report(current, review)
+            except HostUnavailable as exc:
+                raise ContractError(str(exc)) from None
     request = _candidate(home, candidate, prior, defaults, project_aware=project_aware)
-    return _running_report(home, prior, request) or _preflight(home, binary, request)
+    return _preflight(home, binary, request)
 
 
 def _activate(home):
@@ -266,11 +374,9 @@ def apply(home, candidate, *, project_aware=False):
         require(not is_managed(), "managed_setup")
         with profile_setup_lock(home):
             prior, binary, defaults = _defaults(home)
+            if (state / _TOPOLOGY).is_file():
+                return _apply_switch(home, binary, candidate)
             request = _candidate(home, candidate, prior, defaults, project_aware=project_aware)
-            if _running_report(home, prior, request) is not None:
-                capture_cutoff(home, enroll=True)
-                _activate(home)
-                return {"valid": True, "configured": True}
             report = _preflight(home, binary, request)
             if not report["valid"]:
                 return {**report, "configured": False}
@@ -278,7 +384,7 @@ def apply(home, candidate, *, project_aware=False):
             paths = [state / "owners.json", state / "provider.json"]
             previous = {path: _read_optional(path) for path in paths}
             service_files = {path: _read_optional(path) for path in (
-                state / "discovery.json", state / "topology-v1.json",
+                state / "discovery.json", state / _TOPOLOGY,
             )}
             ensure_setup_token(home)
             client = None
@@ -336,6 +442,12 @@ def cli_setup(home):
             identifier(project)
             projects[project] = input(f"Absolute REL path for {project}: ").strip()
         candidate["projects"] = projects
+        if (_state_dir(home) / _TOPOLOGY).is_file():
+            review = validate(home, candidate)
+            if not review["valid"]:
+                print("Reliquary setup could not validate the selected owners.")
+                return
+            candidate["switch_review"] = review["switch_review"]
         if apply(home, candidate)["configured"]:
             print("Reliquary configured. Start a new Hermes session to attach.")
         else:

@@ -573,10 +573,10 @@ fn switches_all_roles_and_reopens_pinned_legacy_and_v2_sessions() {
         assert_eq!(binding.user_id, fixture.phy_id.to_string());
         assert_eq!(&std::fs::read(path).unwrap(), original);
     }
+    drop(registry);
     assert_eq!(std::fs::read(&fixture.phy).unwrap(), old_phy_file);
     assert_eq!(std::fs::read(&fixture.main).unwrap(), old_rel_file);
 
-    drop(registry);
     std::fs::remove_file(&fixture.main).unwrap();
     let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
     assert_eq!(

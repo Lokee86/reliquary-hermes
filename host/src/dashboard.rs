@@ -246,6 +246,9 @@ fn dispatch(
             let (source, recall) = if let Some(session) = session {
                 // Match the existing provider delivery lock order. A busy worker
                 // yields typed unavailability without delaying provider delivery.
+                let registry = registry
+                    .try_lock()
+                    .map_err(|_| DashboardError::unavailable("registry_busy"))?;
                 let retrieval = retrieval
                     .try_lock()
                     .map_err(|_| DashboardError::unavailable("recall_busy"))?;
@@ -256,7 +259,7 @@ fn dispatch(
                     .try_lock()
                     .map_err(|_| DashboardError::unavailable("runtime_busy"))?;
                 let source = sources
-                    .dashboard_status(session, &mut runtimes)
+                    .dashboard_status(session, &registry, &mut runtimes)
                     .map_err(|_| DashboardError::unavailable("source_status_unavailable"))?;
                 let recall = if matches!(source.state, "stale" | "tombstoned") {
                     no_dashboard_recall()

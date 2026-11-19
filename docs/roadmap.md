@@ -38,6 +38,10 @@ Core creation uses the neutral 2.1 header value. Hermes accepts any verified REL
 
 The [vendored Core revision](../vendor/reliquary/SOURCE-PROVENANCE.md) includes the durable REL dependency port. Those declarations belong to the owner files. Hermes project assignments belong to the profile configuration.
 
+## Live owner switching
+
+The [live switching specification and plan](hermes-live-owner-switching-spec-2026-11-18.md) covers General and dedicated project RELs and the active PHY. It proposes a live assignment change that preserves accepted session bindings.
+
 ## Active UI rebuild specification
 
 The current dashboard is scheduled for a **hard-cut replacement**, not incremental remediation. See [Warlock-parity Hermes UI hard-cut rebuild](warlock-ui-hard-cut-rebuild-spec-2026-11-10.md). Warlock's existing Knowledge experience and scalable graph renderer are the reference implementation; existing Hermes backend provider/setup/sources contracts are preserved. The outdated SVG and hand-concatenated frontend will be deleted at cutover. Authenticated binary transport is an explicit integration gate.

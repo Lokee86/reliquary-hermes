@@ -72,7 +72,9 @@ fn run() -> Result<(), &'static str> {
     let mut arguments = env::args_os().skip(1);
     let first = arguments.next();
     let (setup, state_dir_option) = match first.as_deref().and_then(OsStr::to_str) {
-        Some(mode @ ("setup-validate" | "setup-create")) => (Some(mode), arguments.next()),
+        Some(mode @ ("setup-validate" | "setup-create" | "setup-status")) => {
+            (Some(mode), arguments.next())
+        }
         _ => (None, first.clone()),
     };
     if state_dir_option.as_deref() != Some(OsStr::new("--state-dir")) {
@@ -85,6 +87,7 @@ fn run() -> Result<(), &'static str> {
     match setup {
         Some("setup-validate") => registry::setup_validation::run(&path),
         Some("setup-create") => registry::setup_validation::run_create(&path),
+        Some("setup-status") => service::setup_status(&path),
         _ => service::run(&path),
     }
 }

@@ -14,6 +14,18 @@ const errorMessages: Record<string, string> = {
   owner_created_unverified: "Reliquary created the file but could not verify it. Use Select to check it.",
   unknown_hermes_project: "Refresh the Hermes projects list and try again.",
   invalid_path: "Enter an absolute local path for each selected owner.",
+  owner_switch_busy: "Finish the current Reliquary operation and try again.",
+  owner_switch_stale: "Owners changed since review. Reopen Setup and review the selection again.",
+  owner_switch_review_required: "Review the selected owners before applying changes.",
+  owner_switch_unconfirmed: "Setup could not confirm the switch. Reopen Setup to check the saved assignments.",
+  owner_writer_conflict: "Another process is writing to that REL. Close it or choose another REL.",
+  owner_path_changed: "This owner is already registered at another path. Select its registered file.",
+  mounted_owner_changed: "The file identity changed since review. Select and review the file again.",
+  wrong_owner_kind: "Choose a file of the required owner kind.",
+  owner_switch_recovery_required: "Restart the Reliquary service to recover the saved owner assignments.",
+  duplicate_owner: "Choose a separate REL for each assignment.",
+  owner_unavailable: "Check that the selected owner file is available.",
+  project_routing_unavailable: "This Hermes connection does not support changing project routing.",
 };
 
 export function setupError(error: unknown): string {
@@ -79,6 +91,7 @@ export function Setup({ host, status, readOnly, onConnected }: {
 
   function change(update: (value: string) => void, value: string) {
     setReport(null);
+    setConfirm(null);
     setError("");
     update(value);
   }
@@ -129,18 +142,27 @@ export function Setup({ host, status, readOnly, onConnected }: {
 
   function validate(review: boolean) {
     return run(async signal => {
-      const candidate: SetupCandidate = { main_rel: main.trim(), active_phy: phy.trim() };
+      const switching = status.owner_generation !== undefined;
+      const candidate: SetupCandidate = {};
+      const mainPath = main.trim();
+      const phyPath = phy.trim();
+      if (!switching || mainPath !== status.defaults.main_rel) candidate.main_rel = mainPath;
+      if (!switching || phyPath !== status.defaults.active_phy) candidate.active_phy = phyPath;
       if (inventory?.routing_available) candidate.projects = Object.fromEntries(
-        Object.entries(projects).filter(([, path]) => path.trim()).map(([id, path]) => [id, path.trim()]));
+        Object.entries(projects).map(([id, path]) => [id, path.trim()] as const)
+          .filter(([id, path]) => path && (!switching || path !== status.defaults.projects[id])));
       const paths = [candidate.main_rel, candidate.active_phy, ...Object.values(candidate.projects ?? {})];
-      if (paths.some(path => !validLocalPath(path))) throw new Error("invalid_path");
+      if (paths.some(path => path !== undefined && !validLocalPath(path))) throw new Error("invalid_path");
       const result = await post("validate", candidate, signal) as SetupReport;
       signal.throwIfAborted();
       if (typeof result?.valid !== "boolean" || !result.main_rel || !result.active_phy || !result.projects) {
         throw new Error("invalid_setup_response");
       }
       setReport(result);
-      if (review && result.valid) setConfirm({ mode: "apply", candidate });
+      if (review && result.valid) {
+        if (result.switch_review) candidate.switch_review = result.switch_review;
+        setConfirm({ mode: "apply", candidate });
+      }
     });
   }
 
@@ -236,7 +258,9 @@ export function Setup({ host, status, readOnly, onConnected }: {
           </div>
           {canWrite && <div className="warlock-workflow-actions">
             <Button type="button" className="secondary" onClick={() => void validate(false)}>Validate</Button>
-            <Button type="submit" disabled={status.configured && !inventory && !inventoryError}>Review and connect</Button>
+            <Button type="submit" disabled={status.configured && !inventory && !inventoryError}>
+              {status.configured ? "Review changes" : "Review and connect"}
+            </Button>
           </div>}
         </fieldset>
       </form>
@@ -251,16 +275,25 @@ export function Setup({ host, status, readOnly, onConnected }: {
             ? "Keep the accepted General REL, PHY, and dedicated owners when adding project RELs."
             : "Validation failed. Check the rejected files."}</p>
       </section>}
-      {confirm && <section className="knowledge-inspector-section" aria-label={confirm.mode === "create" ? "Confirm owner creation" : "Review connection"}>
-        <h3>{confirm.mode === "create" ? "Confirm owner creation" : "Review connection"}</h3>
+      {confirm && <section className="knowledge-inspector-section" aria-label={confirm.mode === "create" ? "Confirm owner creation" : "Review owner assignments"}>
+        <h3>{confirm.mode === "create" ? "Confirm owner creation" : "Review owner assignments"}</h3>
         {confirm.mode === "create" ? <p className="knowledge-provenance warlock-workflow-path">Create a new owner at <span>{confirm.path}</span></p> : <>
-          <p className="knowledge-provenance warlock-workflow-path">{confirm.candidate.main_rel}</p><p className="knowledge-provenance warlock-workflow-path">{confirm.candidate.active_phy}</p>
+          {confirm.candidate.main_rel && <p className="knowledge-provenance warlock-workflow-path">
+            General REL <span>{confirm.candidate.main_rel}</span></p>}
+          {confirm.candidate.active_phy && <p className="knowledge-provenance warlock-workflow-path">
+            Active PHY <span>{confirm.candidate.active_phy}</span></p>}
+          {Object.entries(confirm.candidate.projects ?? {}).map(([id, path]) =>
+            <p key={id} className="knowledge-provenance warlock-workflow-path">
+              {inventory?.projects.find(project => project.id === id)?.name ?? id} <span>{path}</span></p>)}
           {inventoryError && <p role="note">Hermes project routes could not be checked.</p>}
-          {status.configured && <p>Existing sessions keep their accepted memory routes.</p>}
+          {status.configured && <p>New sessions use these assignments. Existing sessions keep their attached owners.</p>}
+          {confirm.candidate.switch_review?.changes.active_phy && <p>
+            Sessions bound to the previous PHY pause Reliquary access until that PHY is selected again.
+          </p>}
         </>}
         <div className="warlock-workflow-actions">
           <Button type="button" disabled={busy} onClick={() => void commit()}>
-            {confirm.mode === "create" ? "Create " + confirm.target.kind : "Connect Reliquary"}
+            {confirm.mode === "create" ? "Create " + confirm.target.kind : status.configured ? "Apply owner changes" : "Connect Reliquary"}
           </Button>
           <Button type="button" className="secondary" disabled={busy} onClick={() => setConfirm(null)}>Cancel</Button>
         </div>

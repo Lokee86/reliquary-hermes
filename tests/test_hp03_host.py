@@ -242,6 +242,142 @@ def test_stock_provider_preserves_accepted_project_route_after_downgrade(
     assert {path: path.read_bytes() for path in saved} == saved
 
 
+def test_reviewed_switch_keeps_the_process_and_pins_session_and_source_owners(
+        tmp_path, binaries, pinned_provider, monkeypatch):
+    from agent import memory_provider
+    from agent.secret_scope import reset_secret_scope, set_secret_scope
+    from hermes_cli.projects_db import connect_closing, create_project
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from reliquary_hermes import dashboard_api, setup
+    from reliquary_hermes.outbox import SourceOutbox
+    from reliquary_hermes.validation import ContractError
+    from test_hp04_outbox import snapshot
+
+    binary, cli = binaries
+    home = tmp_path / "profile"
+    home.mkdir()
+    general, project, next_general, next_project, phy, next_phy = (
+        tmp_path / name for name in ("main.rel", "project.rel", "new-main.rel", "new-project.rel",
+                                     "active.phy", "new-active.phy"))
+    owners = {path: owner(cli, "rel", path) for path in (general, project, next_general, next_project)}
+    owners.update({path: owner(cli, "phy", path) for path in (phy, next_phy)})
+    headers = {path: path.read_bytes()[:40] for path in owners}
+    with connect_closing(home / "projects.db") as database:
+        project_id = create_project(database, name="Lantern", folders=[str(tmp_path)])
+    monkeypatch.setattr(memory_provider, "SESSION_PROJECT_ATTRIBUTION_VERSION", 1, raising=False)
+    save_settings(home, {"profile_id": "profile-a", "principal_id": "principal-a", "binary": str(binary),
+                         "main_rel": str(general), "active_phy": str(phy),
+                         "projects": {project_id: str(project)}})
+    state = home / "reliquary"
+    (state / "topology-v1.json").write_bytes(canonical({
+        "version": 1, "profile_id": "profile-a", "principal_id": "principal-a",
+        "main_rel": owners[general], "active_phy": owners[phy],
+        "projects": {project_id: {"parent_id": owners[general], "rel_id": owners[project]}},
+    }))
+    routes = state / "sessions-v1"
+    routes.mkdir()
+    original_route = routes / (sha256(b"legacy-session").hexdigest() + ".json")
+    original_route.write_bytes(canonical({"session_id": "legacy-session", "project_id": None,
+                                          "rel_id": owners[general]}))
+    original_route_bytes = original_route.read_bytes()
+
+    profile_scope = set_hermes_home_override(home)
+    secret_scope = set_secret_scope({TOKEN_VAR: TOKEN}, profile_home=str(home))
+    try:
+        with ExitStack() as cleanup:
+            client = HostClient(state, "profile-a", "principal-a", TOKEN, binary=binary)
+            try:
+                legacy = client.attach("legacy-session")
+            finally:
+                if client._process is not None:
+                    cleanup.callback(stop, client._process)
+            dedicated = client.attach("existing-project", project_id=project_id)
+            assert (legacy.rel_id, legacy.user_id) == (owners[general], owners[phy])
+            assert (dedicated.rel_id, dedicated.user_id) == (owners[project], owners[phy])
+            running = client._read_discovery()
+            foreign = HostClient(state, "profile-a", "foreign-principal", TOKEN)
+            with pytest.raises(HostUnavailable, match="host_denied"):
+                foreign.switch_status()
+            queue = SourceOutbox(state, "profile-a", "principal-a")
+            key = queue.enqueue_manual(snapshot("prior-history"), owner_id=owners[general],
+                                       phy_id=owners[phy])
+            job = queue.next_job("prior-history", manual_only=True)
+            assert job.idempotency_key == key
+
+            def review(changes):
+                response = setup.validate(home, changes, project_aware=True)
+                assert response["valid"]
+                return {**changes, "switch_review": response["switch_review"]}
+
+            changes = {"main_rel": str(next_general), "projects": {project_id: str(next_project)}}
+            # Supply the profile scope of an admitted Hermes request. The
+            # dashboard still checks same origin and uses real Setup and native calls.
+            monkeypatch.setattr(dashboard_api, "_host_home", lambda _request: home)
+            monkeypatch.setattr(dashboard_api, "_require_hermes_auth", lambda *_: None)
+            app = FastAPI()
+            app.include_router(dashboard_api.router)
+            with TestClient(app) as dashboard:
+                origin = {"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"}
+                checked = dashboard.post("/setup-v1/validate", json=changes, headers=origin)
+                assert checked.status_code == 200, checked.text
+                rel_switch = {**changes, "switch_review": checked.json()["switch_review"]}
+                denied = dashboard.post("/setup-v1/apply", json=rel_switch)
+                assert denied.status_code == 403
+                applied = dashboard.post("/setup-v1/apply", json=rel_switch, headers=origin)
+                assert applied.status_code == 200 and applied.json()["configured"], applied.text
+            assert client._read_discovery() == running
+            assert client.attach("legacy-session") == legacy
+            assert client.attach("existing-project") == dedicated
+            assert client.read_dashboard_topology("legacy-session")["session_owner_id"] == legacy.rel_id
+            assert client.attach("new-general").rel_id == owners[next_general]
+            assert client.attach("new-project", project_id=project_id).rel_id == owners[next_project]
+            with pytest.raises(ContractError, match="^owner_switch_stale$"):
+                setup.apply(home, rel_switch, project_aware=True)
+
+            assert setup.apply(home, review({"active_phy": str(next_phy)}))["configured"]
+            assert client._read_discovery() == running
+            scoped = client.attach("new-phy-session")
+            assert (scoped.rel_id, scoped.user_id) == (owners[next_general], owners[next_phy])
+            with pytest.raises(HostUnavailable, match="session_phy_inactive"):
+                client.attach("legacy-session")
+            with pytest.raises(HostUnavailable, match="source_phy_inactive"):
+                client.deliver_source_job(job)
+            assert queue.next_job("prior-history", manual_only=True).idempotency_key == key
+            topology = client.read_dashboard_topology(None)
+            assert topology["active_phy_id"] == owners[next_phy]
+            assert owners[phy] not in {row["owner_id"] for row in topology["owners"]}
+
+            assert setup.apply(home, review({"active_phy": str(phy)}))["configured"]
+            assert client.attach("legacy-session") == legacy
+            assert client.deliver_source_job(job)
+            assert client.read_source_status("prior-history")["owner_id"] == owners[general]
+            assert original_route.read_bytes() == original_route_bytes
+
+            stop(client._process)
+            assert {path: path.read_bytes()[:40] for path in owners} == headers
+            configured = setup.status(home)
+            assert Path(configured["defaults"]["main_rel"]) == next_general
+            assert Path(configured["defaults"]["projects"][project_id]) == next_project
+            restarted = HostClient(state, "profile-a", "principal-a", TOKEN, binary=binary)
+            try:
+                assert restarted.attach("legacy-session") == legacy
+            finally:
+                if restarted._process is not None:
+                    cleanup.callback(stop, restarted._process)
+            assert restarted.attach("existing-project") == dedicated
+            assert restarted.attach("post-restart").rel_id == owners[next_general]
+            assert restarted.attach("post-restart-project", project_id=project_id).rel_id == owners[next_project]
+            with pytest.raises(HostUnavailable, match="session_phy_inactive"):
+                restarted.attach("new-phy-session")
+    finally:
+        reset_secret_scope(secret_scope)
+        reset_hermes_home_override(profile_scope)
+
+
 def test_two_profiles_can_explicitly_select_the_same_read_only_phy(tmp_path, binaries):
     binary, cli = binaries
     active_phy = tmp_path / "active.phy"

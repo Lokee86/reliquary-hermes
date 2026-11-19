@@ -65,6 +65,14 @@ On November 18, 2026, the locked offline native suite passed 124 tests, with the
 
 The matching Python suite passed 426 tests with five optional Desktop or live probes skipped. It used audited Hermes `2bd378ed1`, inference `168a9230` and a disposable history checkout with the HU08 patch. The paired process test received a neutral dedicated creation receipt and verified the same owner ID as a General candidate. The setup hook activated the legacy Project REL and recovered its General session binding. The signed process test restored the dedicated Connection-scoped route after restart and matched both legacy REL hashes. Local logs and the Python case report are in `.test-temp/homog/`.
 
+## Live owner switching
+
+Run the locked offline native suite and the pinned Python suite with matching host and CLI binaries. The signed HP03 Setup case starts from v1 accepted state, switches General and project RELs on one service, and round-trips the active PHY. It checks both historical and new session bindings, the original destination of a queued source import, stale Apply, header identity, and restart recovery. The registry fixture covers a contended writer and failed publication. Run the dashboard typecheck, tests and shared Web/Desktop build against the same source revision.
+
+On November 18, 2026, the signed Setup case kept the same process lease across all three assignment changes. It verified offline Setup status and recovered both the current assignments and original session bindings after restart. The legacy route and owner headers matched their original bytes. The source import kept its original REL and waited for the original PHY.
+
+The locked native suite passed 126 tests with one graph scale characterization ignored. The matching Python suite passed 429 tests with five optional installed Desktop and live acceptance checks skipped. Dashboard typechecking, 26 tests, and the Web and Desktop build passed. Core passed 689 workspace tests with one Windows symlink test filtered for lack of symlink creation privilege. The 673-file vendored inventory matches the Core pin with the documented Lodestone adaptations. The native binary used in the Python suite had SHA-256 `ffec4a0e8c9b7b08ee2a62b3cacd563ee9ba1d627c54f704353f3e4be35cc9ca`. Logs and the Python case report are in `.test-temp/live-owner/`.
+
 ## Evidence covered
 
 - Strict bounded request and response DTOs reject spoofed authority, extra fields, malformed wire data and mismatched IDs, cuts or provenance. Each selected Memory has one correlated source-provenance entry.

@@ -28,8 +28,13 @@ export function KnowledgeScope({ host, mutationBlocked }: { host: HostBoundary; 
     const controller = new AbortController();
     client.ownerSessions(session, cursor, controller.signal).then(value => {
       if (!controller.signal.aborted) setSnapshot({ key, value });
-    }, () => {
-      if (!controller.signal.aborted) setSnapshot({ key, error: "Could not load the authorized owner bindings." });
+    }, error => {
+      if (!controller.signal.aborted) setSnapshot({ key, error:
+        error instanceof Error && error.message === "session_phy_inactive"
+          ? "Reliquary is paused for this session. Select its original PHY in Setup to resume."
+          : error instanceof Error && error.message === "bound_owner_unavailable"
+            ? "This session’s original REL is unavailable."
+            : "Could not load the authorized owner bindings." });
     });
     return () => controller.abort();
   }, [client, session, cursor, key]);

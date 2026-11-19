@@ -326,6 +326,23 @@ impl Registry {
         }
     }
 
+    pub(crate) fn legacy_source_owner(&self, owner_id: &str) -> Result<OwnerId, RegistryError> {
+        let owner = self.retained_source_owner(owner_id)?;
+        if self.topology.current_rel(owner)
+            || self.topology.legacy.main_rel == owner
+            || self
+                .topology
+                .legacy
+                .projects
+                .values()
+                .any(|project| project.rel_id == owner)
+        {
+            Ok(owner)
+        } else {
+            Err(RegistryError::Denied("unconfigured_source_owner"))
+        }
+    }
+
     pub(crate) fn retained_source_owner(&self, owner_id: &str) -> Result<OwnerId, RegistryError> {
         self.require_current()?;
         let owner = parse_source_owner(owner_id)?;

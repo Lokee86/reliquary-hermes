@@ -3,7 +3,9 @@ use crate::{
     embedding_binding::EmbeddingBindingStore,
     graph_render_host::GraphRenderHost,
     hosted_inference::{Broker, IDENTITY, WORKER_ERROR},
-    registry::{OwnerConfig, Registry, RegistryError},
+    registry::{
+        OwnerConfig, Registry, RegistryError, SwitchChanges, SwitchReview, committed_switch_status,
+    },
     retrieval::RetrievalService,
     runtime::{HEARTBEAT_SECONDS, ReconciliationScope, RuntimeRegistry},
     service_http::{
@@ -12,18 +14,18 @@ use crate::{
         GRAPH_RENDER_NEIGHBORHOOD, GRAPH_RENDER_NODE_CHUNK, GRAPH_RENDER_PREPARE,
         GRAPH_RENDER_RESOLVE, HttpError, HttpRequest, HttpResponse, INVALID, MAX_WIRE_BYTES,
         RETRIEVAL_PREPARE, RETRIEVAL_TOOL, RUNTIME_ATTACH, RUNTIME_DETACH, RUNTIME_HEARTBEAT,
-        RUNTIME_SCOPE, SOURCE, SOURCE_STATUS, TransportKey, UNAVAILABLE, hex, read_request,
-        write_response,
+        RUNTIME_SCOPE, SETUP_APPLY, SETUP_REVIEW, SETUP_STATUS, SOURCE, SOURCE_STATUS,
+        TransportKey, UNAVAILABLE, hex, read_request, write_response,
     },
     service_protocol::{
         AttachRequest, Discovery, HERMES_REVISION, Operation, PROTOCOL_VERSION, ProviderRequest,
         RuntimeAttachRequest, RuntimeDetachRequest, RuntimeLeaseRequest, RuntimeScopeRequest,
         decode,
     },
-    source_ingest::SourceService,
+    source_ingest::{SourceBinding, SourceService},
     source_wire::{SourceAction, SourceRequest},
 };
-use reliquary_memory::Instance;
+use reliquary_memory::{Instance, OwnerId};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -32,9 +34,9 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
     net::{Ipv4Addr, TcpListener, TcpStream},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
-        Arc, Mutex, MutexGuard, TryLockError,
+        Arc, Mutex, MutexGuard, RwLock, TryLockError,
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{TrySendError, sync_channel},
     },
@@ -51,6 +53,7 @@ const PREFETCH_BUDGET: Duration = Duration::from_millis(6500);
 const RETRIEVAL_TOOL_BUDGET: Duration = Duration::from_secs(65);
 const RETRIEVAL_BUSY: HttpError = HttpError::new(503, "retrieval_busy", true);
 const INFERENCE_BUSY: HttpError = HttpError::new(503, "inference_backpressure", true);
+const OWNER_SWITCH_BUSY: HttpError = HttpError::new(409, "owner_switch_busy", true);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -62,7 +65,8 @@ struct Service {
     expected_host: String,
     discovery: Discovery,
     principal_id: String,
-    owners_fingerprint: String,
+    // Compatibility evidence for the first-run settings handshake only.
+    bootstrap_fingerprint: String,
     key: TransportKey,
     sources: Mutex<SourceService>,
     retrieval: Mutex<RetrievalService>,
@@ -77,25 +81,29 @@ struct Service {
     runtimes: Mutex<RuntimeRegistry>,
     closing: AtomicBool,
     inflight: AtomicUsize,
-    instance: Instance,
+    owner_requests: RwLock<()>,
     // Drop the source service (and join its jobs) before releasing owner leases.
     registry: Mutex<Registry>,
 }
 
 impl Service {
-    fn ensure_embedding_owner(&self, owner: reliquary_memory::OwnerId) -> Result<(), HttpError> {
+    fn ensure_embedding_owner(&self, instance: &Instance, owner: OwnerId) -> Result<(), HttpError> {
         let identity = self
             .inference
             .embedding_binding()
             .map_err(|code| HttpError::new(503, code, true))?;
         self.embedding_bindings
             .ensure_owner(owner, &identity, || {
-                self.instance.has_active_vectors(owner).map_err(|_| ())
+                instance.has_active_vectors(owner).map_err(|_| ())
             })
             .map_err(|code| HttpError::new(503, code, true))
     }
 
-    fn restore_retrieval(&self, work: RetrievalService) -> Result<(), HttpError> {
+    fn restore_retrieval(
+        &self,
+        instance: &Instance,
+        work: RetrievalService,
+    ) -> Result<(), HttpError> {
         let mut retrieval = self.retrieval.lock().map_err(|_| UNAVAILABLE)?;
         retrieval.restore_work(work);
         let invalidations = {
@@ -106,12 +114,12 @@ impl Service {
             std::mem::take(&mut *pending)
         };
         for session in invalidations {
-            retrieval.invalidate_session(&session, &self.instance);
+            retrieval.invalidate_session(&session, instance);
         }
         Ok(())
     }
 
-    fn invalidate_retrieval(&self, session: &str) {
+    fn invalidate_retrieval(&self, instance: &Instance, session: &str) {
         if self.retrieval_busy.load(Ordering::Acquire) {
             if let Ok(mut pending) = self.deferred_invalidations.lock() {
                 pending.insert(session.to_owned());
@@ -124,7 +132,7 @@ impl Service {
                     pending.insert(session.to_owned());
                 }
             } else {
-                retrieval.invalidate_session(session, &self.instance);
+                retrieval.invalidate_session(session, instance);
             }
         }
     }
@@ -134,23 +142,45 @@ impl Service {
             Ok(request) => {
                 let control = reserved_worker_path(request.path);
                 let admitted = admit_worker_request(request.path, &self.blocking_workers);
-                let response = if !admitted {
-                    INFERENCE_BUSY.into_response()
-                } else {
+                let signature = Some((&self.key, &request.nonce));
+                if !admitted {
+                    let _ = write_response(&mut socket, INFERENCE_BUSY.into_response(), signature);
+                    return;
+                }
+                let result = self.with_owner_admission(request.path, || {
                     let response = self
                         .dispatch(&request, accepted_at)
                         .unwrap_or_else(HttpError::into_response);
-                    if !control {
-                        self.blocking_workers.fetch_sub(1, Ordering::AcqRel);
-                    }
-                    response
-                };
-                let _ = write_response(&mut socket, response, Some((&self.key, &request.nonce)));
+                    let _ = write_response(&mut socket, response, signature);
+                });
+                if !control {
+                    self.blocking_workers.fetch_sub(1, Ordering::AcqRel);
+                }
+                if let Err(error) = result {
+                    let _ = write_response(&mut socket, error.into_response(), signature);
+                }
             }
             Err(error) => {
                 let _ = write_response(&mut socket, error.into_response(), None);
             }
         }
+    }
+
+    // Finish owner responses before publishing a different grant set. Model
+    // callbacks and heartbeats remain available while owner work drains.
+    fn with_owner_admission(&self, path: &str, run: impl FnOnce()) -> Result<(), HttpError> {
+        if path == SETUP_APPLY {
+            let _permit = self.owner_requests.try_write().map_err(owner_gate_error)?;
+            run();
+        } else if path == RUNTIME_HEARTBEAT
+            || (path.starts_with("/v1/inference/") && path != IDENTITY)
+        {
+            run();
+        } else {
+            let _permit = self.owner_requests.try_read().map_err(owner_gate_error)?;
+            run();
+        }
+        Ok(())
     }
 
     fn dispatch(
@@ -182,8 +212,9 @@ impl Service {
                         let registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
                         let mut sources = self.sources.lock().map_err(|_| UNAVAILABLE)?;
                         let mut runtimes = self.runtimes.lock().map_err(|_| UNAVAILABLE)?;
-                        sources.resume_all(&self.instance, &registry, &mut runtimes, |owner| {
-                            self.ensure_embedding_owner(owner).is_ok()
+                        let instance = registry.instance().map_err(attach_error)?;
+                        sources.resume_all(&instance, &registry, &mut runtimes, |owner| {
+                            self.ensure_embedding_owner(&instance, owner).is_ok()
                         })?;
                         Ok(())
                     },
@@ -205,18 +236,35 @@ impl Service {
             return Ok(response);
         }
         match request.path {
-            ATTACH => self.attach(&request.body),
-            SOURCE => self.source(&request.body),
-            SOURCE_STATUS => self.source_status(&request.body),
+            SETUP_STATUS | SETUP_REVIEW | SETUP_APPLY => {
+                return self.owner_setup(request.path, &request.body);
+            }
+            RUNTIME_ATTACH => return self.runtime_attach(&request.body),
+            RUNTIME_HEARTBEAT => return self.runtime_heartbeat(&request.body),
+            RUNTIME_DETACH => return self.runtime_detach(&request.body),
+            RUNTIME_SCOPE => return self.runtime_scope(&request.body),
+            _ => {}
+        }
+        let current = self
+            .registry
+            .lock()
+            .map_err(|_| UNAVAILABLE)?
+            .instance()
+            .map_err(attach_error)?;
+        let instance = &current;
+        match request.path {
+            ATTACH => self.attach(instance, &request.body),
+            SOURCE => self.source(instance, &request.body),
+            SOURCE_STATUS => self.source_status(instance, &request.body),
             DASHBOARD_READ => crate::dashboard::read(
-                &self.instance,
+                instance,
                 &self.registry,
                 &self.retrieval,
                 &self.sources,
                 &self.runtimes,
                 &request.body,
             ),
-            DASHBOARD_TOPOLOGY => self.dashboard_topology(&request.body),
+            DASHBOARD_TOPOLOGY => self.dashboard_topology(instance, &request.body),
             path @ (GRAPH_RENDER_PREPARE
             | GRAPH_RENDER_NODE_CHUNK
             | GRAPH_RENDER_EDGE_CHUNK
@@ -224,18 +272,75 @@ impl Service {
             | GRAPH_RENDER_INSPECT
             | GRAPH_RENDER_NEIGHBORHOOD
             | GRAPH_RENDER_LOCATE
-            | GRAPH_RENDER_ELIGIBLE) => self.graph_render(path, &request.body),
-            RETRIEVAL_PREPARE => self.prepare_retrieval(&request.body),
-            RUNTIME_ATTACH => self.runtime_attach(&request.body),
-            RUNTIME_HEARTBEAT => self.runtime_heartbeat(&request.body),
-            RUNTIME_DETACH => self.runtime_detach(&request.body),
-            RUNTIME_SCOPE => self.runtime_scope(&request.body),
-            RETRIEVAL_TOOL => self.request(&request.body, accepted_at, true),
-            _ => self.request(&request.body, accepted_at, false),
+            | GRAPH_RENDER_ELIGIBLE) => self.graph_render(instance, path, &request.body),
+            RETRIEVAL_PREPARE => self.prepare_retrieval(instance, &request.body),
+            RETRIEVAL_TOOL => self.request(instance, &request.body, accepted_at, true),
+            _ => self.request(instance, &request.body, accepted_at, false),
         }
     }
 
-    fn graph_render(&self, path: &str, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
+    fn owner_setup(&self, path: &str, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct SetupRequest<T> {
+            profile_id: String,
+            principal_id: String,
+            body: T,
+        }
+        let request: SetupRequest<serde_json::Value> = decode(bytes).map_err(|_| INVALID)?;
+        if request.profile_id != self.discovery.profile_id
+            || request.principal_id != self.principal_id
+        {
+            return Err(FORBIDDEN);
+        }
+        let mut registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
+        match path {
+            SETUP_STATUS => {
+                if request.body != json!({}) {
+                    return Err(INVALID);
+                }
+                Ok(HttpResponse::ok(json!(
+                    registry.switch_status().map_err(attach_error)?
+                )))
+            }
+            SETUP_REVIEW => {
+                let changes: SwitchChanges<PathBuf> =
+                    serde_json::from_value(request.body).map_err(|_| INVALID)?;
+                Ok(HttpResponse::ok(json!(
+                    registry.review_switch(changes).map_err(attach_error)?
+                )))
+            }
+            SETUP_APPLY => {
+                let review: SwitchReview =
+                    serde_json::from_value(request.body).map_err(|_| INVALID)?;
+                if self
+                    .sources
+                    .lock()
+                    .map_err(|_| UNAVAILABLE)?
+                    .has_active_jobs()
+                {
+                    return Err(OWNER_SWITCH_BUSY);
+                }
+                let mut recall = self.retrieval.lock().map_err(|_| UNAVAILABLE)?;
+                let mut graph = self.graph_render.lock().map_err(|_| UNAVAILABLE)?;
+                let before = registry.switch_status().map_err(attach_error)?.generation;
+                let applied = registry.apply_switch(review).map_err(attach_error)?;
+                if before != applied.generation {
+                    recall.invalidate_owner_bindings();
+                    *graph = GraphRenderHost::default();
+                }
+                Ok(HttpResponse::ok(json!(applied)))
+            }
+            _ => Err(INVALID),
+        }
+    }
+
+    fn graph_render(
+        &self,
+        instance: &Instance,
+        path: &str,
+        bytes: &[u8],
+    ) -> Result<HttpResponse, HttpError> {
         let operation = match path {
             GRAPH_RENDER_PREPARE => "prepare",
             GRAPH_RENDER_NODE_CHUNK => "node-chunk",
@@ -249,7 +354,7 @@ impl Service {
         };
         self.graph_render.lock().map_err(|_| UNAVAILABLE)?.handle(
             operation,
-            &self.instance,
+            instance,
             &self.registry,
             bytes,
         )
@@ -360,7 +465,11 @@ impl Service {
         ))
     }
 
-    fn dashboard_topology(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
+    fn dashboard_topology(
+        &self,
+        instance: &Instance,
+        bytes: &[u8],
+    ) -> Result<HttpResponse, HttpError> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Request {
@@ -390,18 +499,18 @@ impl Service {
             {
                 return Err(INVALID);
             }
-            if fingerprint != self.owners_fingerprint {
+            if fingerprint != self.bootstrap_fingerprint {
                 return Err(HttpError::new(409, "service_restart_required", false));
             }
         }
         let registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
         let body = registry
-            .dashboard_topology(&self.instance, request.session_id.as_deref())
+            .dashboard_topology(instance, request.session_id.as_deref())
             .map_err(attach_error)?;
         Ok(HttpResponse::ok(body))
     }
 
-    fn attach(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
+    fn attach(&self, instance: &Instance, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
         let request: AttachRequest = decode(bytes).map_err(|_| INVALID)?;
         if !request.valid() {
             return Err(INVALID);
@@ -412,20 +521,14 @@ impl Service {
         if request.principal_id != self.principal_id {
             return Err(FORBIDDEN);
         }
-        let (binding, owner) = {
-            let mut registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
-            let binding = registry
-                .bind_session(&request.session_id, request.project_id.as_deref())
-                .map_err(attach_error)?;
-            let owner = registry
-                .source_owner(&request.session_id, true)
-                .map_err(attach_error)?;
-            (binding, owner)
-        };
-        if self.ensure_embedding_owner(owner).is_ok() {
-            if let Ok(mut sources) = self.sources.try_lock() {
-                sources.resume(&self.instance, owner, &request.session_id, true);
-            }
+        let mut registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
+        let binding = registry
+            .bind_session(&request.session_id, request.project_id.as_deref())
+            .map_err(attach_error)?;
+        if let Ok(mut sources) = self.sources.try_lock() {
+            sources.resume(instance, &registry, &request.session_id, |owner| {
+                self.ensure_embedding_owner(instance, owner).is_ok()
+            });
         }
         Ok(HttpResponse::ok(json!({
             "discovery": self.discovery,
@@ -435,7 +538,7 @@ impl Service {
         })))
     }
 
-    fn source_status(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
+    fn source_status(&self, instance: &Instance, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Request {
@@ -455,12 +558,8 @@ impl Service {
         let registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
         let sources = self.sources.lock().map_err(|_| UNAVAILABLE)?;
         let mut runtimes = self.runtimes.lock().map_err(|_| UNAVAILABLE)?;
-        let mut status = sources.import_status(
-            &request.session_id,
-            &self.instance,
-            &registry,
-            &mut runtimes,
-        )?;
+        let mut status =
+            sources.import_status(&request.session_id, instance, &registry, &mut runtimes)?;
         let owner = status["owner_id"]
             .as_str()
             .and_then(|value| value.parse::<reliquary_memory::OwnerId>().ok());
@@ -471,7 +570,7 @@ impl Service {
                     Ok(identity) => self
                         .embedding_bindings
                         .status_owner(owner, &identity, || {
-                            self.instance.has_active_vectors(owner).map_err(|_| ())
+                            instance.has_active_vectors(owner).map_err(|_| ())
                         })
                         .unwrap_or(Some("embedding_identity_unavailable")),
                 }
@@ -482,7 +581,7 @@ impl Service {
         Ok(HttpResponse::ok(status))
     }
 
-    fn source(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
+    fn source(&self, instance: &Instance, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
         let request = SourceRequest::parse(bytes)?;
         if request.profile_id != self.discovery.profile_id
             || request.principal_id != self.principal_id
@@ -494,10 +593,37 @@ impl Service {
         let registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
         let mut sources = self.sources.lock().map_err(|_| UNAVAILABLE)?;
         let prior_source_owner = sources.source_owner(&request.session_id)?;
+        let expected_phy = request
+            .expected_phy_id
+            .as_deref()
+            .map(str::parse::<OwnerId>)
+            .transpose()
+            .map_err(|_| INVALID)?;
+        let phy = if prior_source_owner.is_some() {
+            sources
+                .source_phy(&request.session_id)?
+                .unwrap_or_else(|| registry.legacy_phy())
+        } else if request.operation.is_manual() {
+            expected_phy.unwrap_or_else(|| registry.legacy_phy())
+        } else {
+            registry.active_phy()
+        };
+        if expected_phy.is_some_and(|expected| expected != phy) {
+            return Err(HttpError::new(409, "source_phy_conflict", false));
+        }
+        if phy != registry.active_phy() {
+            return Err(HttpError::new(409, "source_phy_inactive", true));
+        }
         let owner = if request.operation.is_manual() {
-            let selected = registry
-                .configured_source_owner(request.target_owner_id.as_deref().ok_or(INVALID)?)
-                .map_err(attach_error)?;
+            // Manual work is pinned by the authenticated profile before enqueue.
+            // Its original REL can become retained before the first delivery.
+            let target = request.target_owner_id.as_deref().ok_or(INVALID)?;
+            let selected = if prior_source_owner.is_some() || expected_phy.is_some() {
+                registry.retained_source_owner(target)
+            } else {
+                registry.legacy_source_owner(target)
+            }
+            .map_err(attach_error)?;
             let accepted_source_owner = if prior_source_owner.is_some() {
                 prior_source_owner
             } else if sources.has_source_head(&request.session_id)? {
@@ -554,8 +680,9 @@ impl Service {
         let invalidate_retrieval = !request.operation.is_snapshot();
         let reconcile = request.fence_epoch.is_some();
         let session_id = request.session_id.clone();
-        let response = sources.handle(&self.instance, owner, request, fenced, || {
-            self.ensure_embedding_owner(owner)
+        let binding = SourceBinding { rel: owner, phy };
+        let response = sources.handle(instance, binding, request, fenced, || {
+            self.ensure_embedding_owner(instance, owner)
         });
         if reconcile && response.is_ok() && eligible_epoch.is_some() {
             runtimes
@@ -575,12 +702,16 @@ impl Service {
         drop(runtimes);
         drop(sources);
         if response.is_ok() && invalidate_retrieval {
-            self.invalidate_retrieval(&session_id);
+            self.invalidate_retrieval(instance, &session_id);
         }
         response
     }
 
-    fn prepare_retrieval(&self, bytes: &[u8]) -> Result<HttpResponse, HttpError> {
+    fn prepare_retrieval(
+        &self,
+        instance: &Instance,
+        bytes: &[u8],
+    ) -> Result<HttpResponse, HttpError> {
         let request: ProviderRequest = decode(bytes).map_err(|_| INVALID)?;
         if !request.valid() {
             return Err(INVALID);
@@ -598,13 +729,13 @@ impl Service {
             .source_owner(&request.session_id, true)
             .map_err(attach_error)?;
         drop(registry);
-        self.ensure_embedding_owner(owner)?;
+        self.ensure_embedding_owner(instance, owner)?;
         let permit = RetrievalPermit::acquire(&self.retrieval_busy).ok_or(RETRIEVAL_BUSY)?;
         let mut slot = self.retrieval.try_lock().map_err(|_| UNAVAILABLE)?;
         let mut work = slot.take_for_work();
         drop(slot);
-        let response = work.prepare(&request, bytes, &self.instance, owner);
-        self.restore_retrieval(work)?;
+        let response = work.prepare(&request, bytes, instance, owner);
+        self.restore_retrieval(instance, work)?;
         drop(permit);
         response
     }
@@ -641,6 +772,7 @@ impl Service {
 
     fn request(
         &self,
+        instance: &Instance,
         bytes: &[u8],
         accepted_at: Instant,
         explicit_recall: bool,
@@ -657,12 +789,14 @@ impl Service {
         let registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
         let response = match registry.is_bound(&request.session_id) {
             Ok(true) => match request.operation {
-                Operation::OwnerStatus => match registry
-                    .owner_status(&self.instance, &request.session_id)
-                {
-                    Ok(status) => request.response("ok", json!(status)),
-                    Err(error) => request.error(error.status(), error.code(), error.retryable()),
-                },
+                Operation::OwnerStatus => {
+                    match registry.owner_status(instance, &request.session_id) {
+                        Ok(status) => request.response("ok", json!(status)),
+                        Err(error) => {
+                            request.error(error.status(), error.code(), error.retryable())
+                        }
+                    }
+                }
                 Operation::EditMemory => request.error("denied", "user_channel_required", false),
                 Operation::SnapshotSubmit => {
                     request.error("unavailable", "source_ingest_unavailable", false)
@@ -682,7 +816,7 @@ impl Service {
                         }
                     };
                     drop(registry);
-                    if let Err(error) = self.ensure_embedding_owner(owner) {
+                    if let Err(error) = self.ensure_embedding_owner(instance, owner) {
                         return Ok(HttpResponse::ok(request.error(
                             "unavailable",
                             error.code(),
@@ -718,14 +852,14 @@ impl Service {
                     let result = work.request(
                         &request,
                         bytes,
-                        &self.instance,
+                        instance,
                         &self.registry,
                         owner,
                         &self.sources,
                         &self.runtimes,
                         retrieval_deadline,
                     );
-                    self.restore_retrieval(work)?;
+                    self.restore_retrieval(instance, work)?;
                     drop(permit);
                     return match result {
                         Ok(body) => Ok(HttpResponse::ok(body)),
@@ -751,6 +885,24 @@ impl Service {
         };
         Ok(HttpResponse::ok(response))
     }
+}
+
+fn owner_gate_error<T>(error: TryLockError<T>) -> HttpError {
+    match error {
+        TryLockError::WouldBlock => OWNER_SWITCH_BUSY,
+        TryLockError::Poisoned(_) => UNAVAILABLE,
+    }
+}
+
+pub(crate) fn setup_status(state_dir: &Path) -> Result<(), &'static str> {
+    if !state_dir.is_absolute() {
+        return Err("invalid_state_directory");
+    }
+    let topology = committed_switch_status(state_dir).map_err(|error| error.code())?;
+    let mut stdout = io::stdout().lock();
+    serde_json::to_writer(&mut stdout, &json!({"topology": topology}))
+        .map_err(|_| "state_unavailable")?;
+    stdout.write_all(b"\n").map_err(|_| "state_unavailable")
 }
 
 fn bind_identity_runtime<T>(
@@ -1034,14 +1186,10 @@ fn publish_discovery(state_dir: &Path, discovery: &Discovery) -> Result<(), &'st
 }
 
 pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
-    let (config, owners_fingerprint) = config(state_dir)?;
+    let (config, bootstrap_fingerprint) = config(state_dir)?;
     let bootstrap = bootstrap()?;
     // Opening the registry takes its service lease before mounting any REL.
-    let registry =
-        Registry::open(config, state_dir, &bootstrap.token).map_err(|error| error.code())?;
-    let instance = registry
-        .authenticate(&bootstrap.token)
-        .map_err(|error| error.code())?;
+    let registry = Registry::open(config, state_dir, &new_id()?).map_err(|error| error.code())?;
     let listener =
         TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|_| "loopback_unavailable")?;
     let expected_host = listener
@@ -1067,7 +1215,7 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
         expected_host,
         discovery,
         principal_id: registry.principal_id().to_owned(),
-        owners_fingerprint,
+        bootstrap_fingerprint,
         key,
         registry: Mutex::new(registry),
         sources: Mutex::new(sources),
@@ -1083,7 +1231,7 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
         runtimes: Mutex::new(runtimes),
         closing: AtomicBool::new(false),
         inflight: AtomicUsize::new(0),
-        instance,
+        owner_requests: RwLock::new(()),
     });
     drop(bootstrap);
 
@@ -1126,17 +1274,15 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
             graph_render.expire();
         }
         if Instant::now() >= next_source_resume {
-            if let Ok(registry) = service.registry.try_lock() {
-                if let Ok(mut sources) = service.sources.try_lock() {
-                    if let Ok(mut runtimes) = service.runtimes.try_lock() {
-                        let _ = sources.resume_all(
-                            &service.instance,
-                            &registry,
-                            &mut runtimes,
-                            |owner| service.ensure_embedding_owner(owner).is_ok(),
-                        );
-                    }
-                }
+            if let Ok(_permit) = service.owner_requests.try_read()
+                && let Ok(registry) = service.registry.try_lock()
+                && let Ok(instance) = registry.instance()
+                && let Ok(mut sources) = service.sources.try_lock()
+                && let Ok(mut runtimes) = service.runtimes.try_lock()
+            {
+                let _ = sources.resume_all(&instance, &registry, &mut runtimes, |owner| {
+                    service.ensure_embedding_owner(&instance, owner).is_ok()
+                });
             }
             next_source_resume = Instant::now() + Duration::from_secs(5);
         }
