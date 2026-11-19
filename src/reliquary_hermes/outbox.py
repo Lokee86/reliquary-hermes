@@ -26,9 +26,13 @@ _MAX_CANDIDATE_BYTES = _MAX_SNAPSHOT_BYTES
 _APPLICATION_ID = 0x52484F42
 _MAX_MANUAL_AUTO_ATTEMPTS = 5
 _MAX_MANUAL_ATTEMPTS = 8
+_MANUAL_WAITING = frozenset({
+    "source_import_pending", "source_phy_inactive", "session_phy_inactive",
+    "bound_owner_unavailable", "owner_switch_busy",
+})
 _MANUAL_TRANSIENT = frozenset({
     "host_unavailable", "host_timeout", "host_connection_refused", "runtime_lease_stale",
-    "source_import_pending", "source_reconciliation_required", "source_fence_epoch_stale",
+    "source_reconciliation_required", "source_fence_epoch_stale",
     "source_outbox_unavailable",
 })
 
@@ -50,6 +54,7 @@ class SourceJob:
     lease_id: str | None = None
     fence_epoch: int | None = None
     manual_owner_id: str | None = None
+    manual_phy_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -74,7 +79,7 @@ _SCHEMA = (
         profile TEXT NOT NULL, principal TEXT NOT NULL, session TEXT NOT NULL,
         generation INTEGER NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('snapshot', 'invalidate', 'terminal')),
         reason TEXT, payload BLOB, snapshot_digest TEXT, last_message_uid TEXT, receipt TEXT,
-        lease_id TEXT, fence_epoch INTEGER, manual_owner_id TEXT,
+        lease_id TEXT, fence_epoch INTEGER, manual_owner_id TEXT, manual_phy_id TEXT,
         manual_attempts INTEGER NOT NULL DEFAULT 0, manual_error TEXT, manual_retry_at REAL,
         FOREIGN KEY(profile, principal, session) REFERENCES source_state(profile, principal, session)
     )""",
@@ -116,28 +121,23 @@ class SourceOutbox:
                 for statement in _SCHEMA:
                     db.execute(statement)
                 db.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
-                db.execute("PRAGMA user_version = 4")
-            elif (application, version) == (_APPLICATION_ID, 1):
-                db.execute("ALTER TABLE source_jobs ADD COLUMN lease_id TEXT")
-                db.execute("ALTER TABLE source_jobs ADD COLUMN fence_epoch INTEGER")
-                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_owner_id TEXT")
-                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_attempts INTEGER NOT NULL DEFAULT 0")
-                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_error TEXT")
-                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_retry_at REAL")
-                db.execute("PRAGMA user_version = 4")
-            elif (application, version) == (_APPLICATION_ID, 2):
-                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_owner_id TEXT")
-                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_attempts INTEGER NOT NULL DEFAULT 0")
-                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_error TEXT")
-                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_retry_at REAL")
-                db.execute("PRAGMA user_version = 4")
-            elif (application, version) == (_APPLICATION_ID, 3):
-                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_attempts INTEGER NOT NULL DEFAULT 0")
-                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_error TEXT")
-                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_retry_at REAL")
-                db.execute("PRAGMA user_version = 4")
-            elif (application, version) != (_APPLICATION_ID, 4):
+                db.execute("PRAGMA user_version = 5")
+            elif application != _APPLICATION_ID or not 1 <= version <= 5:
                 raise SourceOutboxError(UNAVAILABLE)
+            elif version < 5:
+                if version == 1:
+                    db.execute("ALTER TABLE source_jobs ADD COLUMN lease_id TEXT")
+                    db.execute("ALTER TABLE source_jobs ADD COLUMN fence_epoch INTEGER")
+                if version <= 2:
+                    db.execute("ALTER TABLE source_jobs ADD COLUMN manual_owner_id TEXT")
+                if version <= 3:
+                    db.execute("ALTER TABLE source_jobs ADD COLUMN manual_attempts INTEGER NOT NULL DEFAULT 0")
+                    db.execute("ALTER TABLE source_jobs ADD COLUMN manual_error TEXT")
+                    db.execute("ALTER TABLE source_jobs ADD COLUMN manual_retry_at REAL")
+                # NULL preserves the original outbox key. The host resolves
+                # legacy jobs against the profile's pinned initial PHY.
+                db.execute("ALTER TABLE source_jobs ADD COLUMN manual_phy_id TEXT")
+                db.execute("PRAGMA user_version = 5")
 
     @contextmanager
     def _transaction(self, *, write=False):
@@ -169,12 +169,15 @@ class SourceOutbox:
             (*self._scope, session_id),
         )
 
-    def _key(self, kind, session_id, generation, snapshot_digest=None, lease_id=None, fence_epoch=None, manual_owner_id=None):
+    def _key(self, kind, session_id, generation, snapshot_digest=None, lease_id=None, fence_epoch=None,
+             manual_owner_id=None, manual_phy_id=None):
         parts = ["hermes-source-outbox-v1", *self._scope, session_id, kind, generation, snapshot_digest]
         if lease_id is not None:
             parts.extend(("reconcile", lease_id, fence_epoch))
         if manual_owner_id is not None:
             parts.extend(("manual", manual_owner_id))
+            if manual_phy_id is not None:
+                parts.append(manual_phy_id)
         return content_digest(parts)
 
     def generation(self, session_id: str) -> int:
@@ -237,11 +240,12 @@ class SourceOutbox:
             )
         return key
 
-    def enqueue_manual(self, snapshot: SourceSnapshot, *, owner_id: str) -> str:
-        """Queue one bounded snapshot; retained for existing single-snapshot callers."""
-        return self.enqueue_manual_series([snapshot], owner_id=owner_id)
+    def enqueue_manual(self, snapshot: SourceSnapshot, *, owner_id: str, phy_id: str | None = None) -> str:
+        """Queue one bounded snapshot for its selected owners."""
+        return self.enqueue_manual_series([snapshot], owner_id=owner_id, phy_id=phy_id)
 
-    def enqueue_manual_series(self, snapshots: list[SourceSnapshot], *, owner_id: str) -> str:
+    def enqueue_manual_series(self, snapshots: list[SourceSnapshot], *, owner_id: str,
+                              phy_id: str | None = None) -> str:
         """Atomically queue the complete ordered history as bounded, overlapping windows.
 
         Per-snapshot transport bounds remain; conversation length is not capped.
@@ -249,6 +253,7 @@ class SourceOutbox:
         """
         require(type(snapshots) is list and bool(snapshots), "invalid_source_snapshot")
         owner = identifier(owner_id)
+        phy = None if phy_id is None else identifier(phy_id)
         first = snapshots[0]
         require(type(first) is SourceSnapshot and first.profile_id == self._scope[0],
                 "source_scope_mismatch")
@@ -267,7 +272,7 @@ class SourceOutbox:
                 require(len(rows) > 1 and rows[0] == previous_tail, "manual_import_sequence_invalid")
             previous_tail = rows[-1]
             key = self._key("snapshot", session, generation, snapshot.snapshot_digest,
-                            manual_owner_id=owner)
+                            manual_owner_id=owner, manual_phy_id=phy)
             prepared.append((key, payload, snapshot.snapshot_digest, last_uid))
         with self._transaction(write=True) as db:
             current, terminal = self._state(db, session)
@@ -276,15 +281,15 @@ class SourceOutbox:
             if current != generation:
                 raise SourceOutboxError(STALE)
             prior = db.execute(
-                """SELECT key, generation, manual_owner_id, snapshot_digest, receipt, manual_error,
-                          manual_attempts, manual_retry_at FROM source_jobs
+                """SELECT key, generation, manual_owner_id, manual_phy_id, snapshot_digest, receipt,
+                          manual_error, manual_attempts, manual_retry_at FROM source_jobs
                    WHERE profile=? AND principal=? AND session=? AND manual_owner_id IS NOT NULL
                    ORDER BY sequence""", (*self._scope, session),
             ).fetchall()
             if prior:
                 if len(prior) != len(prepared) or any(
-                    row["manual_owner_id"] != owner or row["generation"] != generation
-                    or row["snapshot_digest"] != prepared[i][2]
+                    row["manual_owner_id"] != owner or row["manual_phy_id"] != phy
+                    or row["generation"] != generation or row["snapshot_digest"] != prepared[i][2]
                     for i, row in enumerate(prior)
                 ):
                     raise SourceOutboxError("manual_import_conflict")
@@ -298,9 +303,10 @@ class SourceOutbox:
             for key, payload, digest, last_uid in prepared:
                 db.execute(
                     """INSERT INTO source_jobs(key, profile, principal, session, generation, kind,
-                       payload, snapshot_digest, last_message_uid, lease_id, fence_epoch, manual_owner_id)
-                       VALUES (?, ?, ?, ?, ?, 'snapshot', ?, ?, ?, NULL, NULL, ?)""",
-                    (key, *self._scope, session, generation, payload, digest, last_uid, owner),
+                       payload, snapshot_digest, last_message_uid, lease_id, fence_epoch,
+                       manual_owner_id, manual_phy_id)
+                       VALUES (?, ?, ?, ?, ?, 'snapshot', ?, ?, ?, NULL, NULL, ?, ?)""",
+                    (key, *self._scope, session, generation, payload, digest, last_uid, owner, phy),
                 )
         return prepared[0][0]
 
@@ -309,7 +315,7 @@ class SourceOutbox:
         lease = identifier(lease_id)
         epoch = None if fence_epoch is None else integer(fence_epoch, 1, _MAX_GENERATION)
         key = self._key("snapshot", job.session_id, job.generation, job.snapshot.snapshot_digest,
-                        lease if epoch is not None else None, epoch, job.manual_owner_id)
+                        lease if epoch is not None else None, epoch, job.manual_owner_id, job.manual_phy_id)
         with self._transaction(write=True) as db:
             row = self._job_receipt(db, job)
             if row is None or row["receipt"] is not None:
@@ -339,7 +345,7 @@ class SourceOutbox:
         session = identifier(session_id)
         with self._transaction() as db:
             rows = db.execute(
-                """SELECT generation, key, snapshot_digest, receipt, manual_owner_id,
+                """SELECT generation, key, snapshot_digest, receipt, manual_owner_id, manual_phy_id,
                           manual_attempts, manual_error, manual_retry_at FROM source_jobs
                    WHERE profile=? AND principal=? AND session=? AND manual_owner_id IS NOT NULL
                    ORDER BY sequence""", (*self._scope, session),
@@ -353,7 +359,7 @@ class SourceOutbox:
         return {"session_id": session, "generation": last["generation"], "idempotency_key": last["key"],
                 "snapshot_digest": last["snapshot_digest"],
                 "receipt": last["receipt"] if complete else None,
-                "owner_id": last["manual_owner_id"],
+                "owner_id": last["manual_owner_id"], "phy_id": last["manual_phy_id"],
                 "reason": failed["manual_error"] if failed else None,
                 "retryable": _manual_retryable(failed) if failed else False,
                 "status": "failed" if failed else "staged" if complete else "queued"}
@@ -454,9 +460,11 @@ class SourceOutbox:
                         (self._scope[0], session, row["snapshot_digest"]), "source_scope_mismatch")
             lease_id, fence_epoch = row["lease_id"], row["fence_epoch"]
             require(fence_epoch is None or lease_id is not None, "invalid_source_job")
-            manual_owner = row["manual_owner_id"]
+            manual_owner, manual_phy = row["manual_owner_id"], row["manual_phy_id"]
             if manual_owner is None:
-                require((lease_id is None) == (fence_epoch is None), "invalid_source_job")
+                require(manual_phy is None and (lease_id is None) == (fence_epoch is None), "invalid_source_job")
+            if manual_phy is not None:
+                manual_phy = identifier(manual_phy)
             if lease_id is not None:
                 identifier(lease_id)
             if fence_epoch is not None:
@@ -466,11 +474,11 @@ class SourceOutbox:
                 require(kind == "snapshot", "invalid_source_job")
             require(row["key"] == self._key(kind, session, generation, row["snapshot_digest"],
                                             lease_id if fence_epoch is not None else None,
-                                            fence_epoch, manual_owner), "invalid_source_job")
+                                            fence_epoch, manual_owner, manual_phy), "invalid_source_job")
         except ValueError:
             raise SourceOutboxError(UNAVAILABLE) from None
         return SourceJob(kind, row["key"], session, generation, snapshot, payload, row["reason"], self._scope,
-                         lease_id, fence_epoch, manual_owner)
+                         lease_id, fence_epoch, manual_owner, manual_phy)
 
     def _job_receipt(self, db, job):
         if job._scope != self._scope:
@@ -523,9 +531,8 @@ class SourceOutbox:
                 return False
             current = db.execute("SELECT manual_attempts FROM source_jobs WHERE key=?",
                                  (job.idempotency_key,)).fetchone()
-            # Root must finish processing the preceding source window before accepting
-            # another. Waiting for that is normal progress, not a retry-budget failure.
-            waiting = reason == "source_import_pending"
+            # Keep the exact payload while its owner or preceding window is paused.
+            waiting = reason in _MANUAL_WAITING
             attempts = current[0] if waiting else current[0] + 1
             transient = reason in _MANUAL_TRANSIENT
             retry_at = (time.time() + 2 if waiting else

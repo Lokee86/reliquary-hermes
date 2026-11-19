@@ -71,7 +71,7 @@ def _remote_status(client, session_id, *, reconnect=False):
 
 def queue_imports(settings, client, owner_id: str,
                   snapshots: list[SourceSnapshot | list[SourceSnapshot]]) -> dict[str, dict]:
-    """Queue complete per-session window sequences under one signed REL destination."""
+    """Queue complete per-session windows for the reviewed REL and active PHY."""
     owner = identifier(owner_id)
     selected = sequence(snapshots, _MAX_IMPORTS, nonempty=True)
     batches = [item if type(item) is list else [item] for item in selected]
@@ -82,6 +82,7 @@ def queue_imports(settings, client, owner_id: str,
             "duplicate_manual_import")
     outbox = _outbox(settings)
     results = {}
+    current_phy = None
     for batch in batches:
         session = batch[0].session_id
         last = batch[-1]
@@ -114,12 +115,27 @@ def queue_imports(settings, client, owner_id: str,
                 results[session] = (_result(session, "already_imported") if same else
                                     _result(session, "unavailable", "source_receipt_mismatch"))
                 continue
-            outbox.enqueue_manual_series(batch, owner_id=owner)
+            if prior is None:
+                if current_phy is None:
+                    roles = client.switch_status()["owners"]
+                    rels = {roles["main_rel"]["owner_id"],
+                            *(project["owner_id"] for project in roles["projects"].values())}
+                    require(owner in rels, "unconfigured_source_owner")
+                    current_phy = identifier(roles["active_phy"]["owner_id"])
+                phy = current_phy
+            else:
+                # An exact repeat keeps the raw legacy or current pin, including its key.
+                phy = prior["phy_id"]
+            outbox.enqueue_manual_series(batch, owner_id=owner, phy_id=phy)
             results[session] = _result(session, "queued")
-        except (SourceOutboxError, ContractError) as error:
+        except (SourceOutboxError, ContractError, HostUnavailable) as error:
             code = str(error)
-            results[session] = _result(session, "unavailable", code,
-                                       retryable=code in {"source_outbox_unavailable", "source_outbox_full"})
+            results[session] = _result(
+                session, "unavailable", code,
+                retryable=code in _TRANSIENT_HOST_ERRORS or code in {
+                    "source_outbox_unavailable", "source_outbox_full", "owner_switch_busy",
+                },
+            )
     try:
         ensure_manual_worker(settings, client)
     except SourceOutboxError:

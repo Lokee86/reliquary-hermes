@@ -75,9 +75,14 @@ def test_extensions_wait_for_predecessor_and_do_not_exhaust_processing_retry_bud
 
 def test_manual_delivery_queue_accepts_more_than_one_window(tmp_path, monkeypatch):
     settings = SimpleNamespace(state_dir=tmp_path, profile_id="profile-a", principal_id="principal-a")
-    client = SimpleNamespace(read_source_status=lambda _sid: {
-        "state": "none", "owner_id": None, "snapshot_digest": None, "receipt": None
-    })
+    client = SimpleNamespace(
+        read_source_status=lambda _sid: {
+            "state": "none", "owner_id": None, "snapshot_digest": None, "receipt": None,
+        },
+        switch_status=lambda: {"owners": {
+            "main_rel": {"owner_id": "owner-a"}, "projects": {}, "active_phy": {"owner_id": "phy-a"},
+        }},
+    )
     monkeypatch.setattr(manual_delivery, "ensure_manual_worker", lambda *_: None)
     windows = history._snapshot_windows("profile-a", "history-long", _messages(300))
     result = manual_delivery.queue_imports(settings, client, "owner-a", [windows])

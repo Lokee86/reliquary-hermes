@@ -213,6 +213,74 @@ def test_manual_receipts_preserve_prior_automatic_work_and_skip_permanent_failur
         feed.enqueue_manual(selected, owner_id="rel-a")
 
 
+def test_manual_jobs_keep_the_reviewed_owners_while_the_prior_phy_is_inactive(tmp_path, monkeypatch):
+    settings = SimpleNamespace(state_dir=tmp_path, profile_id="profile-a", principal_id="principal-a")
+    monkeypatch.setattr(manual_delivery, "ensure_manual_worker", lambda *_: None)
+    now = [100.0]
+    monkeypatch.setattr(outbox, "time", SimpleNamespace(time=lambda: now[0]))
+
+    roles = {
+        "main_rel": {"owner_id": "rel-a"},
+        "active_phy": {"owner_id": "phy-a"},
+        "projects": {"demo": {"owner_id": "project-rel"}},
+    }
+    client = SimpleNamespace(
+        switch_status=lambda: {"owners": roles},
+        read_source_status=lambda _session_id: {
+            "state": "none", "owner_id": None, "snapshot_digest": None, "receipt": None,
+        },
+    )
+    earlier = snapshot("earlier")
+    result = manual_delivery.queue_imports(settings, client, "project-rel", [earlier])
+    assert result[earlier.session_id]["status"] == "queued"
+    feed = queue(tmp_path)
+    job = feed.next_job(manual_only=True)
+    assert (job.manual_owner_id, job.manual_phy_id) == ("project-rel", "phy-a")
+    assert feed.rebind_manual(job, lease_id="history-lease", fence_epoch=7)
+    job = feed.next_job(manual_only=True)
+    assert (job.manual_owner_id, job.manual_phy_id) == ("project-rel", "phy-a")
+
+    roles["projects"]["demo"] = {"owner_id": "new-project-rel"}
+    roles["active_phy"] = {"owner_id": "phy-b"}
+    later = snapshot("later")
+    refused = manual_delivery.queue_imports(settings, client, "project-rel", [later])
+    assert refused[later.session_id]["reason"] == "unconfigured_source_owner"
+    assert feed.manual_status(later.session_id) is None
+    result = manual_delivery.queue_imports(settings, client, "new-project-rel", [later])
+    assert result[later.session_id]["status"] == "queued"
+    for _ in range(9):
+        assert feed.next_job(manual_only=True) == job
+        assert feed.fail_manual(job, "source_phy_inactive")
+        now[0] += 2
+
+    with feed._transaction() as db:
+        attempts = db.execute("SELECT manual_attempts FROM source_jobs WHERE key=?", (job.idempotency_key,))
+        assert attempts.fetchone()[0] == 0
+    assert feed.fail_manual(job, "source_phy_inactive")
+    assert feed.next_job(manual_only=True).manual_phy_id == "phy-b"
+    now[0] += 2
+    reopened = queue(tmp_path)
+    assert reopened.next_job(manual_only=True) == job
+    assert reopened.acknowledge(job, RECEIPT)
+
+
+def test_v4_pending_manual_import_reopens_with_its_legacy_key(tmp_path):
+    selected = snapshot("legacy-pending")
+    feed = queue(tmp_path)
+    key = feed.enqueue_manual(selected, owner_id="rel-a")
+    with closing(sqlite3.connect(tmp_path / "source-outbox-v1.sqlite3")) as db:
+        db.execute("ALTER TABLE source_jobs DROP COLUMN manual_phy_id")
+        db.execute("PRAGMA user_version = 4")
+        db.commit()
+
+    migrated = queue(tmp_path)
+    job = migrated.next_job(manual_only=True)
+    assert job.idempotency_key == key
+    assert job.snapshot == selected
+    assert job.manual_phy_id is None
+    assert migrated.acknowledge(job, RECEIPT)
+
+
 def test_missing_native_history_is_unavailable_even_with_a_local_receipt(tmp_path):
     settings = SimpleNamespace(state_dir=tmp_path, profile_id="profile-a", principal_id="principal-a")
     selected = snapshot("history-selected")

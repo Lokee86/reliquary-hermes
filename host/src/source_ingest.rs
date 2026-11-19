@@ -25,6 +25,7 @@ const UNRECONCILED: HttpError = HttpError::new(409, "source_revision_unreconcile
 const TERMINAL: HttpError = HttpError::new(409, "source_terminal", false);
 const RECOVERY_REQUIRED: HttpError = HttpError::new(409, "source_reconciliation_required", true);
 const PENDING: HttpError = HttpError::new(503, "source_import_pending", true);
+const PHY_INACTIVE: HttpError = HttpError::new(409, "source_phy_inactive", true);
 
 const PROVENANCE_UNAVAILABLE: HttpError =
     HttpError::new(503, "source_provenance_unavailable", true);
@@ -40,6 +41,12 @@ pub(crate) struct DashboardSourceStatus {
     pub(crate) cursor: Option<String>,
     pub(crate) receipt: Option<String>,
     pub(crate) import_id: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct SourceBinding {
+    pub(crate) rel: OwnerId,
+    pub(crate) phy: OwnerId,
 }
 
 pub(crate) struct SourceService {
@@ -66,9 +73,13 @@ impl SourceService {
     pub(crate) fn dashboard_status(
         &self,
         session: &str,
+        registry: &Registry,
         runtimes: &mut RuntimeRegistry,
     ) -> Result<DashboardSourceStatus, HttpError> {
         let state = self.store.read(&self.store.path(session))?;
+        if !source_phy_is_active(&state, registry) {
+            return Err(PHY_INACTIVE);
+        }
         let fenced = runtimes
             .has_fence("hermes", session)
             .map_err(|_| UNAVAILABLE)?;
@@ -112,6 +123,12 @@ impl SourceService {
         runtimes: &mut RuntimeRegistry,
     ) -> Result<serde_json::Value, HttpError> {
         let state = self.store.read(&self.store.path(session))?;
+        if !source_phy_is_active(&state, registry) {
+            return Ok(
+                json!({"session_id": session, "state": "unavailable", "receipt": null,
+                             "import_id": null, "owner_id": null, "snapshot_digest": null}),
+            );
+        }
         let head = state.pending.as_ref().or(state.accepted.as_ref());
         let owner_id = if head.is_some() {
             match state.owner_id.as_deref() {
@@ -199,19 +216,14 @@ impl SourceService {
         }
         let store = self.store.clone();
         let mut resumed = 0;
-        store.visit_resumable_imports(|session, owner_id, import_id, manual| {
-            let Ok(owner) = owner_id.parse::<OwnerId>() else {
+        store.visit_resumable_imports(|session, owner_id, import_id, manual, phy| {
+            if phy.unwrap_or_else(|| registry.legacy_phy()) != registry.active_phy() {
+                return true;
+            }
+            let Some(owner) = resumable_owner(registry, &session, Some(&owner_id), manual) else {
                 return true;
             };
-            let authorized_owner = if manual {
-                registry.configured_source_owner(&owner_id).ok()
-            } else {
-                registry.source_owner(&session, true).ok()
-            };
-            if authorized_owner != Some(owner)
-                || runtimes.has_fence("hermes", &session).unwrap_or(true)
-                || !embedding_allowed(owner)
-            {
+            if runtimes.has_fence("hermes", &session).unwrap_or(true) || !embedding_allowed(owner) {
                 return true;
             }
             let status = instance
@@ -236,7 +248,7 @@ impl SourceService {
     pub(crate) fn handle(
         &mut self,
         instance: &Instance,
-        owner: OwnerId,
+        binding: SourceBinding,
         request: SourceRequest,
         reconciliation_required: bool,
         bind_embedding_identity: impl FnOnce() -> Result<(), HttpError>,
@@ -254,6 +266,7 @@ impl SourceService {
         let path = self.store.path(&request.session_id);
         let mut state = self.store.read(&path)?;
         state.session_id = Some(request.session_id.clone());
+        let owner = binding.rel;
         let selected_owner = owner.to_string();
         if state
             .owner_id
@@ -261,6 +274,12 @@ impl SourceService {
             .is_some_and(|value| value != selected_owner)
         {
             return Err(HttpError::new(409, "source_owner_conflict", false));
+        }
+        if state.phy_id.is_some_and(|phy| phy != binding.phy) {
+            return Err(PHY_INACTIVE);
+        }
+        if state.owner_id.is_some() {
+            state.phy_id = Some(binding.phy);
         }
         // Manual extensions follow the same verified source-head overlap as live snapshots.
         // Reusing a source ID with changed history fails in submit()'s continuity check.
@@ -312,7 +331,7 @@ impl SourceService {
         }
         self.submit(
             instance,
-            owner,
+            binding,
             &request,
             snapshot.ok_or(INVALID)?,
             &path,
@@ -324,13 +343,14 @@ impl SourceService {
     fn submit(
         &mut self,
         instance: &Instance,
-        owner: OwnerId,
+        binding: SourceBinding,
         request: &SourceRequest,
         snapshot: Snapshot,
         path: &Path,
         mut state: SourceState,
         mut bind_embedding_identity: Option<impl FnOnce() -> Result<(), HttpError>>,
     ) -> Result<HttpResponse, HttpError> {
+        let owner = binding.rel;
         let reconciling = request.fence_epoch.is_some();
         if state.pending.is_some() {
             self.recover_pending(instance, owner, &mut state, path)?;
@@ -427,6 +447,7 @@ impl SourceService {
             return Err(UNAVAILABLE);
         }
         state.owner_id = Some(owner.to_string());
+        state.phy_id = Some(binding.phy);
         state.pending = Some(candidate.clone());
         self.store.write(path, &state)?;
         let staged = instance
@@ -682,6 +703,14 @@ impl SourceService {
         }
     }
 
+    pub(crate) fn source_phy(&self, session: &str) -> Result<Option<OwnerId>, HttpError> {
+        Ok(self.store.read(&self.store.path(session))?.phy_id)
+    }
+
+    pub(crate) fn has_active_jobs(&self) -> bool {
+        self.jobs.values().any(|job| !job.is_finished())
+    }
+
     pub(crate) fn is_terminal(&self, session: &str) -> Result<bool, HttpError> {
         Ok(self.store.read(&self.store.path(session))?.terminal)
     }
@@ -689,25 +718,22 @@ impl SourceService {
     pub(crate) fn resume(
         &mut self,
         instance: &Instance,
-        owner: OwnerId,
+        registry: &Registry,
         session: &str,
-        embedding_allowed: bool,
+        embedding_allowed: impl FnOnce(OwnerId) -> bool,
     ) {
-        if !embedding_allowed {
+        let Ok(state) = self.store.read(&self.store.path(session)) else {
+            return;
+        };
+        if state.terminal || !source_phy_is_active(&state, registry) {
             return;
         }
-        let path = self.store.path(session);
-        if let Ok(state) = self.store.read(&path) {
-            if !state.terminal {
-                if let Some(head) = state.accepted {
-                    let source_owner = state
-                        .owner_id
-                        .as_deref()
-                        .and_then(|value| value.parse::<OwnerId>().ok())
-                        .unwrap_or(owner);
-                    self.schedule(instance, source_owner, &head.import_id);
-                }
-            }
+        if let Some(head) = state.accepted
+            && let Some(owner) =
+                resumable_owner(registry, session, state.owner_id.as_deref(), state.manual)
+            && embedding_allowed(owner)
+        {
+            self.schedule(instance, owner, &head.import_id);
         }
     }
 
@@ -750,6 +776,30 @@ impl SourceService {
         }
         false
     }
+}
+
+fn source_phy_is_active(state: &SourceState, registry: &Registry) -> bool {
+    // Control-only records can exist before the first admitted snapshot.
+    let bound = state.owner_id.is_some() || state.accepted.is_some() || state.pending.is_some();
+    !bound || state.phy_id.unwrap_or_else(|| registry.legacy_phy()) == registry.active_phy()
+}
+
+fn resumable_owner(
+    registry: &Registry,
+    session: &str,
+    owner_id: Option<&str>,
+    manual: bool,
+) -> Option<OwnerId> {
+    if manual {
+        return registry.retained_source_owner(owner_id?).ok();
+    }
+    let owner = registry.source_owner(session, true).ok()?;
+    if let Some(expected) = owner_id
+        && expected.parse::<OwnerId>().ok() != Some(owner)
+    {
+        return None;
+    }
+    Some(owner)
 }
 
 fn has_source(memory: &RetrievalMemory) -> bool {
@@ -809,6 +859,9 @@ fn verify_key(request: &SourceRequest, digest: Option<&str>) -> Result<(), HttpE
     }
     if request.operation.is_manual() {
         parts.extend([json!("manual"), json!(request.target_owner_id)]);
+        if let Some(phy) = &request.expected_phy_id {
+            parts.push(json!(phy));
+        }
     }
     let raw = serde_json::to_vec(&parts).map_err(|_| INVALID)?;
     if request.idempotency_key != hex(&Sha256::digest(raw)) {

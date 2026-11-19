@@ -3,7 +3,7 @@ use crate::{
     service_http::{HttpError, INVALID, hex},
     service_protocol::{PROTOCOL_VERSION, decode, valid_id},
 };
-use reliquary_memory::{HermesCopiedAuthor, HermesCopiedMessage, HermesCopiedRole};
+use reliquary_memory::{HermesCopiedAuthor, HermesCopiedMessage, HermesCopiedRole, OwnerId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, value::RawValue};
 use sha2::{Digest, Sha256};
@@ -41,6 +41,8 @@ pub(crate) struct SourceRequest {
     pub(crate) arguments: Value,
     #[serde(default)]
     pub(crate) target_owner_id: Option<String>,
+    #[serde(default)]
+    pub(crate) expected_phy_id: Option<String>,
     // Transport authority is separate from the durable outbox identity.
     #[serde(default)]
     pub(crate) lease_id: Option<String>,
@@ -63,6 +65,10 @@ impl SourceRequest {
                 .as_ref()
                 .is_some_and(|id| !valid_id(id))
             || value.operation.is_manual() != value.target_owner_id.is_some()
+            || value
+                .expected_phy_id
+                .as_deref()
+                .is_some_and(|id| !value.operation.is_manual() || id.parse::<OwnerId>().is_err())
             || value.fence_epoch.is_some_and(|epoch| {
                 epoch == 0 || !value.operation.is_snapshot() || value.lease_id.is_none()
             })
@@ -265,29 +271,39 @@ mod tests {
 
     #[test]
     fn manual_snapshot_requires_a_configured_owner_request_field_and_accepts_a_scoped_lease() {
-        let request = |target_owner: Option<&str>, fence_epoch: Option<u64>| {
-            let mut value = serde_json::json!({
-                "protocol_version": 1,
-                "profile_id": "profile-one",
-                "principal_id": "principal-one",
-                "session_id": "history-session",
-                "generation": 0,
-                "idempotency_key": "a".repeat(64),
-                "operation": "manual_snapshot",
-                "arguments": {"snapshot_digest": "b".repeat(64), "source_json": "{}"},
-                "lease_id": "runtime-lease",
-            });
-            if let Some(owner) = target_owner {
-                value["target_owner_id"] = serde_json::json!(owner);
-            }
-            if let Some(epoch) = fence_epoch {
-                value["fence_epoch"] = serde_json::json!(epoch);
-            }
-            serde_json::to_vec(&value).unwrap()
-        };
-        assert!(SourceRequest::parse(&request(None, None)).is_err());
-        assert!(SourceRequest::parse(&request(Some("configured-rel"), None)).is_ok());
-        assert!(SourceRequest::parse(&request(Some("configured-rel"), Some(7))).is_ok());
+        let request =
+            |target_owner: Option<&str>, fence_epoch: Option<u64>, phy_id: Option<&str>| {
+                let mut value = serde_json::json!({
+                    "protocol_version": 1,
+                    "profile_id": "profile-one",
+                    "principal_id": "principal-one",
+                    "session_id": "history-session",
+                    "generation": 0,
+                    "idempotency_key": "a".repeat(64),
+                    "operation": "manual_snapshot",
+                    "arguments": {"snapshot_digest": "b".repeat(64), "source_json": "{}"},
+                    "lease_id": "runtime-lease",
+                });
+                if let Some(owner) = target_owner {
+                    value["target_owner_id"] = serde_json::json!(owner);
+                }
+                if let Some(epoch) = fence_epoch {
+                    value["fence_epoch"] = serde_json::json!(epoch);
+                }
+                if let Some(phy_id) = phy_id {
+                    value["expected_phy_id"] = serde_json::json!(phy_id);
+                }
+                serde_json::to_vec(&value).unwrap()
+            };
+        assert!(SourceRequest::parse(&request(None, None, None)).is_err());
+        assert!(SourceRequest::parse(&request(Some("configured-rel"), None, None)).is_ok());
+        let phy_id = "01".repeat(16);
+        let pinned =
+            SourceRequest::parse(&request(Some("configured-rel"), Some(7), Some(&phy_id))).unwrap();
+        assert_eq!(pinned.expected_phy_id.as_deref(), Some(phy_id.as_str()));
+        assert!(
+            SourceRequest::parse(&request(Some("configured-rel"), None, Some("invalid"))).is_err()
+        );
     }
 
     #[test]

@@ -3,6 +3,7 @@ use crate::{
     service_http::{HttpError, UNAVAILABLE, hex},
     source_wire::Evidence,
 };
+use reliquary_memory::OwnerId;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -34,6 +35,8 @@ pub(crate) struct SourceState {
     pub(crate) session_id: Option<String>,
     #[serde(default)]
     pub(crate) owner_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) phy_id: Option<OwnerId>,
     #[serde(default)]
     pub(crate) manual: bool,
     pub(crate) generation: u64,
@@ -76,7 +79,7 @@ impl SourceStore {
 
     pub(crate) fn visit_resumable_imports(
         &self,
-        mut visit: impl FnMut(String, String, String, bool) -> bool,
+        mut visit: impl FnMut(String, String, String, bool, Option<OwnerId>) -> bool,
     ) {
         let Ok(mut entries) = self.resume_entries.lock() else {
             return;
@@ -121,6 +124,7 @@ impl SourceStore {
                 owner.to_owned(),
                 head.import_id.clone(),
                 state.manual,
+                state.phy_id,
             ) {
                 return;
             }
@@ -145,6 +149,7 @@ impl SourceStore {
             .session_id
             .as_deref()
             .is_some_and(|session| self.path(session) != path)
+            || (state.phy_id.is_some() && state.owner_id.is_none())
             || (state.stale && state.available)
             || state
                 .accepted
@@ -232,12 +237,14 @@ mod resumable_import_tests {
         fs::create_dir_all(&scratch).unwrap();
         let directory = tempfile::tempdir_in(&scratch).unwrap();
         let store = SourceStore::open(directory.path()).unwrap();
+        let phy = OwnerId::from_bytes([2; 16]);
         for (session, manual) in [("normal", false), ("selected-manual", true)] {
             let path = store.path(session);
             let mut state = SourceState::default();
             state.session_id = Some(session.to_owned());
             state.owner_id = Some("configured-rel".to_owned());
             state.manual = manual;
+            state.phy_id = manual.then_some(phy);
             state.accepted = Some(SourceHead {
                 wire_digest: "a".repeat(64),
                 request_key: "b".repeat(64),
@@ -251,8 +258,8 @@ mod resumable_import_tests {
             store.write(&path, &state).unwrap();
         }
         let mut seen = Vec::new();
-        store.visit_resumable_imports(|session, owner, import_id, manual| {
-            seen.push((session, owner, import_id, manual));
+        store.visit_resumable_imports(|session, owner, import_id, manual, phy| {
+            seen.push((session, owner, import_id, manual, phy));
             seen.len() < 130
         });
         seen.sort();
@@ -264,12 +271,14 @@ mod resumable_import_tests {
                     "configured-rel".to_owned(),
                     "import-normal".to_owned(),
                     false,
+                    None,
                 ),
                 (
                     "selected-manual".to_owned(),
                     "configured-rel".to_owned(),
                     "import-selected-manual".to_owned(),
                     true,
+                    Some(phy),
                 ),
             ]
         );
@@ -301,14 +310,14 @@ mod resumable_import_tests {
         }
 
         let mut first = Vec::new();
-        store.visit_resumable_imports(|session, _, _, _| {
+        store.visit_resumable_imports(|session, _, _, _, _| {
             first.push(session);
             true
         });
         assert_eq!(first.len(), MAX_RESUME_SCAN_ENTRIES);
 
         let mut second = Vec::new();
-        store.visit_resumable_imports(|session, _, _, _| {
+        store.visit_resumable_imports(|session, _, _, _, _| {
             second.push(session);
             true
         });
