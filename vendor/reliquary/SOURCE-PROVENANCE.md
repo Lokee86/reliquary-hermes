@@ -3,11 +3,11 @@
 ## Purpose
 
 This directory is a source-only snapshot of Reliquary Core at
-`184857a58bb283fc3bbfca4f6073a1e7af701acb` (Read Memory summaries by ID at an exact owner cut). The host depends on the public `reliquary-memory` API.
+`537de0205e65f719c64b7d5687935087b7c9ccf9` (Port offline REL and PHY owner history to 2.1). The host depends on the public `reliquary-memory` API.
 
 ## Overview
 
-This revision supplies direct Memory summary lookup for the Inspector and includes trusted read-only PHY detach for live owner switching.
+This revision includes native 2.1 replay for converted Archive, Memory, and other retained owner history. It also supplies direct Memory summary lookup for the Inspector and trusted read-only PHY detach for live owner switching.
 It includes the active-Memory Leiden recompute and durable REL dependency support. It carries forward the prior snapshot's partial Community
 decode and exact-cut graph projection, plus the already integrated hosted
 inference and authorized active-vector changes.

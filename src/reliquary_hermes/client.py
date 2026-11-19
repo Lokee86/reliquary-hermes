@@ -26,10 +26,8 @@ _REQUEST_SECONDS = 1.5
 # Leave room for the signed host response before the caller's own deadline.
 _PREFETCH_SECONDS = 7.0
 _RETRIEVAL_SECONDS = 67.0
-_STARTUP_SECONDS = 3.0
-# Interactive setup may cold-mount an existing processed corpus. The provider
-# attach budget above is unchanged.
-_DASHBOARD_STARTUP_SECONDS = 15.0
+# Opening an existing owner can replay its full retained history.
+OWNER_OPEN_SECONDS = 180.0
 
 
 class HostUnavailable(RuntimeError):
@@ -373,7 +371,7 @@ class HostClient:
             self._attached = None
             raise
 
-    def _connect(self, exchange, *, startup_seconds=_STARTUP_SECONDS):
+    def _connect(self, exchange):
         previous = self._read_discovery()
         if previous is not None:
             try:
@@ -383,7 +381,7 @@ class HostClient:
         if self._binary is None:
             raise HostUnavailable("host_unavailable")
         self._launch()
-        deadline = time.monotonic() + startup_seconds
+        deadline = time.monotonic() + OWNER_OPEN_SECONDS
         while True:
             remaining = _remaining(deadline)
             current = self._read_discovery()
@@ -395,7 +393,7 @@ class HostClient:
         """Start or reuse the profile host, then verify its signed owner topology."""
         return self._connect(lambda discovery, deadline: self._dashboard_topology(
             discovery, session_id, deadline, owners_fingerprint,
-        ), startup_seconds=_DASHBOARD_STARTUP_SECONDS)
+        ))
 
     def cancel_startup(self) -> bool:
         """Stop only a process this client launched while applying setup."""
@@ -413,7 +411,7 @@ class HostClient:
         if len(envelope) > MAX_WIRE_BYTES:
             raise HostUnavailable("setup_request_too_large")
 
-        timeout = _DASHBOARD_STARTUP_SECONDS if operation != "status" else _REQUEST_SECONDS
+        timeout = OWNER_OPEN_SECONDS if operation != "status" else _REQUEST_SECONDS
 
         def request(discovery, deadline):
             try:
@@ -424,7 +422,7 @@ class HostClient:
                 raise HostUnavailable("invalid_setup_response") from None
 
         if start:
-            return self._connect(request, startup_seconds=_DASHBOARD_STARTUP_SECONDS)
+            return self._connect(request)
         discovery = self._read_discovery()
         if discovery is None:
             raise HostUnavailable("host_unavailable")

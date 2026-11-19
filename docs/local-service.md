@@ -12,9 +12,13 @@ Each configured profile has a separate local service and credential. Multiple se
 
 ## Configuration and setup
 
-### Catalog package (0.1.0)
+### Catalog package (0.2.0)
 
 The catalog directory package is named `reliquary` on every surface. Its root entry registers the memory provider and lifecycle observer; the web router resolves the provider's dashboard module through Hermes. Build the native host from the vendored source with `scripts/build-native.ps1`. No executable, downloader, or self-updater is committed. The public Native host workflow builds, tests, and attests an optional Windows artifact at the source commit.
+
+Version 0.2.0 opens REL and PHY files with the retained history produced by Reliquary's offline 2.1 migration. Select the migrated REL and its paired PHY in Setup using the native host from this package. The host opens the REL for normal writes and mounts the PHY read-only. [Bundled Core revision](../vendor/reliquary/SOURCE-PROVENANCE.md)
+
+Setup and host startup may take over a minute on a large retained history. An owner open has a three-minute deadline. Setup can validate the files and start the service in one request.
 
 Hosted processing uses only the profile-bound Hermes `ctx.llm` worker. The native process receives no model credentials and does not open a model route file. See the current [installation and disclosures](../README.md).
 

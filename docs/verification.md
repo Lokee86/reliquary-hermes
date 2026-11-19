@@ -79,6 +79,16 @@ The native regression creates 513 Memories in a disposable REL and opens the las
 
 On November 18, 2026, the regression returned `memory_metadata_unavailable` with the old host and opened the selected Memory with the fix. All four focused Root inspection tests passed. The locked native host suite passed 127 tests with one graph scale characterization ignored. The pinned HU03 and dashboard contract tests passed all 128 cases. The run logs are in `.test-temp/inspector-lookup/`.
 
+## Migrated owner files
+
+Start with disposable copies of each verified 2.1 REL and PHY pair. Run the plugin's Setup preflight, attach a session through the native host, and read one Memory page from each owner. Create a synthetic user Memory through the signed dashboard operation. After stopping the host, start a fresh process and read the same Memory ID, revision, and body. Compare the source files and the mounted PHY against their starting hashes.
+
+The client regression exercises delayed discovery while the host replays a large history.
+
+On November 19, 2026, all three independently verified migration pairs passed the local 0.2.0 check on disposable copies. Each pair opened through Setup and normal host attach. Each REL's new Memory reopened with its original ID, revision, and body in a fresh host process. The six migration outputs and the three test PHYs matched their starting hashes. The largest first mount took 104 seconds during the concurrent copy checks. The tested Windows host SHA-256 is `1217f7f4e3d67b5f8ae8bf4bac56498629b62c35aba720a9a077a2d224bb6249`.
+
+The locked native suite passed 127 tests with one existing scale characterization ignored. Dashboard typechecking, 26 tests, and the Web and Desktop build passed. The signed Setup and dashboard process checks passed all six cases. The focused Python rerun passed the delayed discovery and crash reconciliation checks.
+
 ## Evidence covered
 
 - Strict bounded request and response DTOs reject spoofed authority, extra fields, malformed wire data and mismatched IDs, cuts or provenance. Each selected Memory has one correlated source-provenance entry.

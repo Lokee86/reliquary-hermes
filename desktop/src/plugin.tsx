@@ -14,6 +14,12 @@ const pickers = {
   REL: { title: "Choose a Reliquary REL", filters: [{ name: "Reliquary REL", extensions: ["rel"] }] },
   PHY: { title: "Choose a Reliquary PHY", filters: [{ name: "Reliquary PHY", extensions: ["phy"] }] },
 };
+// Setup can verify owner history and start or switch the host in one request.
+const requestTimeouts: Readonly<Record<string, number>> = {
+  "/setup-v1/validate": 365_000,
+  "/setup-v1/apply": 365_000,
+  "/dashboard-v1": 25_000,
+};
 
 const controls: HostControls = {
   Button(props) {
@@ -66,7 +72,7 @@ function desktopBoundary(ctx: PluginContext, current: () => boolean, preferenceP
   return {
     surface: "Desktop", controls, preferenceProfileKey,
     json(path, { method = "GET", body, signal }: RequestOptions = {}) {
-      const timeoutMs = path.endsWith("/prepare") ? 45000 : path === "/setup-v1/apply" || path === "/dashboard-v1" ? 25000 : undefined;
+      const timeoutMs = path.endsWith("/prepare") ? 45_000 : requestTimeouts[path];
       return request(() => ctx.rest(path, { method, body, timeoutMs }), signal);
     },
     bytes: typeof ctx.restBytes === "function" ? async (path, { method = "GET", body, signal }) => {

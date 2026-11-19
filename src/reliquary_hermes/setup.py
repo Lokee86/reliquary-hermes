@@ -7,7 +7,7 @@ import subprocess
 
 from . import setup_paths
 from .capture_policy import ENROLLMENT_FILE, capture_cutoff, history_supported
-from .client import HostClient, HostUnavailable
+from .client import OWNER_OPEN_SECONDS, HostClient, HostUnavailable
 from .projects import active_projects, inventory, routing_available
 from .setup_wire import switch_review as parse_switch_review, switch_status as parse_switch_status
 from .settings import (
@@ -138,7 +138,7 @@ def _host_setup(home, binary, operation, request):
     flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     return subprocess.run([str(binary), operation, "--state-dir", str(_state_dir(home))],
                           input=wire, capture_output=True, cwd=home, env=environment,
-                          creationflags=flags, timeout=15, check=True)
+                          creationflags=flags, timeout=OWNER_OPEN_SECONDS, check=True)
 
 
 def _preflight(home, binary, request):

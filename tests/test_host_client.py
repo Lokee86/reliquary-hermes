@@ -3,10 +3,12 @@ from dataclasses import asdict
 import hmac
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
+from types import SimpleNamespace
 
 import pytest
 
 from reliquary_hermes import HERMES_REVISION
+from reliquary_hermes import client as client_module
 from reliquary_hermes.authority import Discovery
 from reliquary_hermes.client import HostClient, HostUnavailable
 from reliquary_hermes.validation import canonical, decode
@@ -99,6 +101,24 @@ def test_client_rejects_forged_service_without_starting_another(tmp_path, monkey
         with pytest.raises(HostUnavailable, match="host_authentication"):
             client.attach("session-a")
         assert len(captured) == 1 and TOKEN not in repr(captured)
+
+
+def test_cold_attach_waits_for_owner_history_replay(tmp_path, monkeypatch):
+    client = HostClient(tmp_path, "profile-a", "principal-a", TOKEN, binary=tmp_path / "host")
+    elapsed = 0.0
+
+    def sleep(seconds):
+        nonlocal elapsed
+        elapsed += seconds
+
+    monkeypatch.setattr(client_module, "time", SimpleNamespace(monotonic=lambda: elapsed, sleep=sleep))
+    monkeypatch.setattr(client, "_launch", lambda: None)
+    discovery = object()
+    monkeypatch.setattr(client, "_read_discovery", lambda: discovery if elapsed >= 100 else None)
+    attached = []
+    monkeypatch.setattr(client, "_attach", lambda source, session, project, deadline: attached.append(source))
+    client.attach("session-a")
+    assert attached == [discovery]
 
 
 def test_client_rejects_wrong_token_and_signed_uncorrelated_reply(tmp_path):
