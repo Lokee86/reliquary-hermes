@@ -13,9 +13,10 @@ use std::{
 };
 
 pub(super) const MAX_SESSION_BYTES: usize = 1024;
-pub(super) const MAX_TOPOLOGY_BYTES: usize = 65_536;
+// Verified canonical paths and retained role history are part of v2.
+pub(super) const MAX_TOPOLOGY_BYTES: usize = 1024 * 1024;
 pub(super) const UNAVAILABLE: RegistryError = RegistryError::Unavailable("state_unavailable");
-const CORRUPT: RegistryError = RegistryError::Unavailable("state_corrupt");
+pub(super) const CORRUPT: RegistryError = RegistryError::Unavailable("state_corrupt");
 
 pub(crate) fn read<T: DeserializeOwned>(
     path: &Path,

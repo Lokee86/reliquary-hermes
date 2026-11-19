@@ -1,5 +1,8 @@
 //! One-shot setup preflight over Root's read-only owner verification.
-use super::{OwnerConfig, RegistryError, TOPOLOGY_FILE, owner_error, owner_file};
+use super::{
+    OwnerConfig, RegistryError, TOPOLOGY_FILE, owner_error, owner_file,
+    topology::check_setup_topology,
+};
 use crate::{service_http::MAX_WIRE_BYTES, service_protocol::decode};
 use reliquary_memory::{
     OwnerId, OwnerInfo, OwnerKind, OwnerScope, Phylactery, ProductErrorKind, Rel,
@@ -133,11 +136,15 @@ fn report(request: Request, state_dir: &Path) -> Result<Report, RegistryError> {
         project_ids,
     );
     let topology_error = match owner_ids {
-        (Some(main_id), Some(phy_id), Some(project_ids)) => owners
-            .topology(main_id, phy_id, project_ids)
-            .and_then(|topology| topology.acceptance(&state_dir.join(TOPOLOGY_FILE)))
-            .err()
-            .map(|error| error.code()),
+        (Some(main_id), Some(phy_id), Some(project_ids)) => check_setup_topology(
+            &owners,
+            main_id,
+            phy_id,
+            project_ids,
+            &state_dir.join(TOPOLOGY_FILE),
+        )
+        .err()
+        .map(|error| error.code()),
         _ => None,
     };
     Ok(Report {

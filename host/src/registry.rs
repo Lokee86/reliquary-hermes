@@ -1,8 +1,8 @@
 //! Service-owned owner topology and durable Hermes session binding.
 use reliquary_memory::{
-    Gateway, HostAdmissionAdapter, HostCredentialBinding, InspectionQuery, Instance,
-    MemoryListFilters, OwnerGrant, OwnerId, OwnerKind, Phylactery, ProductError, ProductErrorKind,
-    Rel, TrustedHostAdmission,
+    Gateway, HostAdmissionAdapter, HostAdmissionControl, HostCredentialBinding, InspectionQuery,
+    Instance, MemoryListFilters, OwnerGrant, OwnerId, OwnerKind, Phylactery, ProductError,
+    ProductErrorKind, Rel, TrustedHostAdmission,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -17,6 +17,13 @@ use std::{
 #[path = "registry_store.rs"]
 pub(crate) mod registry_store;
 use registry_store as store;
+
+#[path = "registry_topology.rs"]
+mod topology;
+pub(crate) use topology::{SwitchChanges, SwitchReview, SwitchStatus, committed_switch_status};
+
+#[path = "registry_switch.rs"]
+mod switch;
 
 #[path = "setup_validation.rs"]
 pub(crate) mod setup_validation;
@@ -83,16 +90,16 @@ impl fmt::Display for RegistryError {
 
 impl std::error::Error for RegistryError {}
 
-#[derive(Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct ProjectOwner {
     parent_id: OwnerId,
     rel_id: OwnerId,
 }
 
-#[derive(Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct Topology {
+struct LegacyTopology {
     version: u8,
     profile_id: String,
     principal_id: String,
@@ -102,12 +109,39 @@ struct Topology {
     projects: BTreeMap<String, ProjectOwner>,
 }
 
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct Topology {
+    version: u8,
+    generation: u64,
+    profile_id: String,
+    principal_id: String,
+    main_rel: OwnerId,
+    active_phy: OwnerId,
+    #[serde(deserialize_with = "store::unique_map")]
+    projects: BTreeMap<String, ProjectOwner>,
+    #[serde(deserialize_with = "store::unique_map")]
+    owners: BTreeMap<OwnerId, RegisteredOwner>,
+    legacy: LegacyTopology,
+}
+
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct RegisteredOwner {
+    path: PathBuf,
+    kind: OwnerKind,
+    general: bool,
+    projects: BTreeSet<String>,
+}
+
 #[derive(Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct SessionRoute {
     session_id: String,
     project_id: Option<String>,
     rel_id: OwnerId,
+    #[serde(default)]
+    phy_id: Option<OwnerId>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -124,13 +158,25 @@ pub(crate) struct OwnerStatus {
 }
 
 pub(crate) struct Registry {
-    admission: HostAdmissionAdapter,
-    dashboard_actor: Instance,
+    gateway: Gateway,
+    admissions: Admissions,
+    credential: String,
     dashboard_intents: PathBuf,
     topology: Topology,
+    topology_path: PathBuf,
+    mounted_rels: BTreeSet<OwnerId>,
     sessions_dir: PathBuf,
+    fenced: bool,
     // Release the process lease after the admission's owner mounts drop.
     _lease: File,
+}
+
+struct Admissions {
+    provider: HostAdmissionAdapter,
+    provider_instance: Instance,
+    provider_control: HostAdmissionControl,
+    dashboard_actor: Instance,
+    dashboard_control: HostAdmissionControl,
 }
 
 impl Registry {
@@ -142,73 +188,30 @@ impl Registry {
         config.validate()?;
         let state_dir = state_dir.canonicalize().map_err(|_| store::UNAVAILABLE)?;
         let lease = acquire_service_lease(&state_dir)?;
-        let gateway = Gateway::new();
-        let main = open_rel(&config.main_rel)?;
-        let main_rel = main.owner_id();
-        let mut rels = vec![main];
-        let mut projects = BTreeMap::new();
-        for (project_id, path) in &config.projects {
-            let rel = open_rel(path)?;
-            projects.insert(project_id.clone(), rel.owner_id());
-            rels.push(rel);
-        }
-        let phy = Phylactery::open(owner_file(&config.active_phy)?).map_err(owner_error)?;
-        let active_phy = phy.owner_id();
-        let topology = config.topology(main_rel, active_phy, projects)?;
         let topology_path = state_dir.join(TOPOLOGY_FILE);
-        let acceptance = topology.acceptance(&topology_path)?;
-        let rel_ids = rels.iter().map(Rel::owner_id).collect::<Vec<_>>();
-        for rel in rels {
-            if gateway.mount_rel(&rel, true).map_err(owner_error)? != rel.owner_id() {
-                return Err(RegistryError::Conflict("mounted_owner_changed"));
-            }
-        }
-        if gateway.mount_phylactery(&phy, false).map_err(owner_error)? != active_phy {
-            return Err(RegistryError::Conflict("mounted_owner_changed"));
-        }
-        // Derive a private Root actor using the existing bootstrap credential.
-        // This separate in-process admission has no route or retained adapter.
-        // Provider calls continue to use their original OperateRel instance.
-        let (dashboard_admission, _) = TrustedHostAdmission::new([HostCredentialBinding::new(
-            active_phy.to_string(),
-            token,
-            rel_ids.iter().copied().map(OwnerGrant::ManageRel),
-        )])
-        .install(&gateway)
-        .map_err(owner_error)?;
-        let dashboard_actor = dashboard_admission
-            .authenticate(token)
-            .map_err(owner_error)?;
-        let grants = rel_ids
-            .into_iter()
-            .map(OwnerGrant::OperateRel)
-            .chain([OwnerGrant::ViewPhylactery(active_phy)]);
-        let (admission, _) = TrustedHostAdmission::new([HostCredentialBinding::new(
-            &topology.principal_id,
-            token,
-            grants,
-        )])
-        .install(&gateway)
-        .map_err(owner_error)?;
+        let (topology, write) = topology::load_for_startup(&config, &topology_path)?;
         let sessions_dir = state_dir.join("sessions-v1");
-        store::sessions_dir(&sessions_dir, acceptance != TopologyAcceptance::New)?;
-        match acceptance {
-            TopologyAcceptance::New => store::publish(&topology_path, &topology)?,
-            TopologyAcceptance::Current => store::sync_parent(&topology_path)?,
-            TopologyAcceptance::Extension => store::replace(&topology_path, &topology)?,
-        }
+        store::sessions_dir(&sessions_dir, write != topology::StartupWrite::Create)?;
+        let gateway = Gateway::new();
+        let mounted_rels = switch::mount_on_startup(&gateway, &topology, token)?;
+        let admissions = Admissions::new(&gateway, &topology, &mounted_rels, token)?;
+        topology::publish_startup(&topology_path, &topology, write)?;
         Ok(Self {
-            admission,
-            dashboard_actor,
+            gateway,
+            admissions,
+            credential: token.to_owned(),
             dashboard_intents: state_dir.join("dashboard-mutations-v1"),
             topology,
+            topology_path,
+            mounted_rels,
             sessions_dir,
+            fenced: false,
             _lease: lease,
         })
     }
 
     pub(crate) fn dashboard_actor(&self) -> &Instance {
-        &self.dashboard_actor
+        &self.admissions.dashboard_actor
     }
 
     pub(crate) fn dashboard_intents(&self) -> &Path {
@@ -224,13 +227,39 @@ impl Registry {
     }
 
     pub(crate) fn admission(&self) -> &HostAdmissionAdapter {
-        &self.admission
+        &self.admissions.provider
     }
 
     pub(crate) fn authenticate(&self, token: &str) -> Result<Instance, RegistryError> {
-        self.admission
+        self.require_current()?;
+        self.admission()
             .authenticate(token)
             .map_err(|_| RegistryError::Denied("denied"))
+    }
+
+    pub(crate) fn instance(&self) -> Result<Instance, RegistryError> {
+        self.require_current()?;
+        Ok(self.admissions.provider_instance.clone())
+    }
+
+    pub(crate) fn active_phy(&self) -> OwnerId {
+        self.topology.active_phy
+    }
+
+    pub(crate) fn legacy_phy(&self) -> OwnerId {
+        self.topology.legacy.active_phy
+    }
+
+    fn require_current(&self) -> Result<(), RegistryError> {
+        if self.fenced {
+            return Err(RegistryError::Unavailable("owner_switch_recovery_required"));
+        }
+        Ok(())
+    }
+
+    fn fence(&mut self) {
+        self.fenced = true;
+        let _ = self.admissions.revoke(&self.credential);
     }
 
     pub(crate) fn bind_session(
@@ -240,6 +269,7 @@ impl Registry {
     ) -> Result<SessionBinding, RegistryError> {
         let path = self.session_path(session_id);
         let route = if let Some(route) = self.accepted_route(session_id)? {
+            self.require_route_available(&route)?;
             store::sync_parent(&path)?;
             route
         } else {
@@ -253,14 +283,17 @@ impl Registry {
                 session_id: session_id.to_owned(),
                 project_id: project_id.map(str::to_owned),
                 rel_id,
+                phy_id: Some(self.active_phy()),
             };
+            self.require_route_available(&route)?;
             store::publish(&path, &route)?;
             route
         };
+        let user_id = route.phy_id.unwrap_or(self.legacy_phy()).to_string();
         Ok(SessionBinding {
             session_id: route.session_id,
             rel_id: route.rel_id.to_string(),
-            user_id: self.topology.active_phy.to_string(),
+            user_id,
         })
     }
 
@@ -274,24 +307,32 @@ impl Registry {
         require_bound: bool,
     ) -> Result<OwnerId, RegistryError> {
         match self.accepted_route(session_id)? {
-            Some(route) => Ok(route.rel_id),
+            Some(route) => {
+                self.require_route_available(&route)?;
+                Ok(route.rel_id)
+            }
             None if !require_bound => Ok(self.topology.main_rel),
             None => Err(RegistryError::Denied("unbound_session")),
         }
     }
 
     pub(crate) fn configured_source_owner(&self, owner_id: &str) -> Result<OwnerId, RegistryError> {
-        let owner = owner_id
-            .parse::<OwnerId>()
-            .map_err(|_| RegistryError::Invalid("invalid_owner"))?;
-        if owner == self.topology.main_rel
-            || self
-                .topology
-                .projects
-                .values()
-                .any(|project| project.rel_id == owner)
-        {
+        self.require_current()?;
+        let owner = parse_source_owner(owner_id)?;
+        if self.topology.current_rel(owner) {
             Ok(owner)
+        } else {
+            Err(RegistryError::Denied("unconfigured_source_owner"))
+        }
+    }
+
+    pub(crate) fn retained_source_owner(&self, owner_id: &str) -> Result<OwnerId, RegistryError> {
+        self.require_current()?;
+        let owner = parse_source_owner(owner_id)?;
+        if self.mounted_rels.contains(&owner) {
+            Ok(owner)
+        } else if self.topology.has_rel(owner) {
+            Err(RegistryError::Unavailable("bound_owner_unavailable"))
         } else {
             Err(RegistryError::Denied("unconfigured_source_owner"))
         }
@@ -326,13 +367,15 @@ impl Registry {
         })
     }
 
-    /// Build a read-only, private dashboard topology response from configured owners.
+    /// Build a read-only topology response for this profile and optional session.
     pub(crate) fn dashboard_topology(
         &self,
         instance: &Instance,
         session_id: Option<&str>,
     ) -> Result<Value, RegistryError> {
-        let mut owners = Vec::with_capacity(self.topology.projects.len() + 2);
+        self.require_current()?;
+        let session_owner = self.dashboard_session_owner(session_id)?;
+        let mut owners = Vec::with_capacity(self.topology.projects.len() + 3);
         owners.push(owner_binding(
             instance,
             self.topology.main_rel,
@@ -347,25 +390,28 @@ impl Registry {
                 &format!("Project {}", index + 1),
             )?);
         }
+        if let Some(owner) = session_owner
+            && !self.topology.current_rel(owner)
+        {
+            owners.push(owner_binding(
+                instance,
+                owner,
+                OwnerKind::Rel,
+                "Session REL",
+            )?);
+        }
         owners.push(owner_binding(
             instance,
-            self.topology.active_phy,
+            self.active_phy(),
             OwnerKind::Phylactery,
             "Active user",
         )?);
-        let (bound_session, session_owner_id) = match session_id {
-            None => (None, None),
-            Some(session) => {
-                let route = self
-                    .accepted_route(session)?
-                    .ok_or(RegistryError::Denied("unknown_session"))?;
-                (Some(session.to_owned()), Some(route.rel_id.to_string()))
-            }
-        };
-        Ok(
-            json!({"owners": owners, "active_phy_id": self.topology.active_phy.to_string(),
-            "session_id": bound_session, "session_owner_id": session_owner_id}),
-        )
+        Ok(json!({
+            "owners": owners,
+            "active_phy_id": self.active_phy(),
+            "session_id": session_id,
+            "session_owner_id": session_owner,
+        }))
     }
 
     pub(crate) fn dashboard_scope(
@@ -375,17 +421,16 @@ impl Registry {
         owner_id: &str,
         session_id: Option<&str>,
     ) -> Result<(OwnerId, OwnerKind, String), RegistryError> {
-        if profile_id != self.topology.profile_id
-            || principal_id != self.topology.active_phy.to_string()
-        {
-            return Err(RegistryError::Denied("owner_denied"));
+        self.require_current()?;
+        let denied = RegistryError::Denied("owner_denied");
+        if profile_id != self.topology.profile_id || principal_id != self.active_phy().to_string() {
+            return Err(denied);
         }
-        let owner: OwnerId = owner_id
-            .parse()
-            .map_err(|_| RegistryError::Denied("owner_denied"))?;
+        let owner = owner_id.parse::<OwnerId>().map_err(|_| denied.clone())?;
+        let session_owner = self.dashboard_session_owner(session_id)?;
         let (kind, label) = if owner == self.topology.main_rel {
             (OwnerKind::Rel, "Main REL".to_owned())
-        } else if owner == self.topology.active_phy {
+        } else if owner == self.active_phy() {
             (OwnerKind::Phylactery, "Active user".to_owned())
         } else if let Some(index) = self
             .topology
@@ -394,19 +439,41 @@ impl Registry {
             .position(|project| project.rel_id == owner)
         {
             (OwnerKind::Rel, format!("Project {}", index + 1))
+        } else if session_owner == Some(owner) {
+            (OwnerKind::Rel, "Session REL".to_owned())
         } else {
-            return Err(RegistryError::Denied("owner_denied"));
+            return Err(denied);
         };
-        if let Some(session) = session_id {
-            if kind != OwnerKind::Rel
-                || !self
-                    .accepted_route(session)?
-                    .is_some_and(|route| route.rel_id == owner)
-            {
-                return Err(RegistryError::Denied("unknown_session"));
-            }
+        if let Some(bound_owner) = session_owner
+            && (kind != OwnerKind::Rel || bound_owner != owner)
+        {
+            return Err(RegistryError::Denied("unknown_session"));
         }
         Ok((owner, kind, label))
+    }
+
+    fn dashboard_session_owner(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<Option<OwnerId>, RegistryError> {
+        let Some(session_id) = session_id else {
+            return Ok(None);
+        };
+        let route = self
+            .accepted_route(session_id)?
+            .ok_or(RegistryError::Denied("unknown_session"))?;
+        self.require_route_available(&route)?;
+        Ok(Some(route.rel_id))
+    }
+
+    fn require_route_available(&self, route: &SessionRoute) -> Result<(), RegistryError> {
+        if route.phy_id.unwrap_or(self.legacy_phy()) != self.active_phy() {
+            return Err(RegistryError::Unavailable("session_phy_inactive"));
+        }
+        if !self.mounted_rels.contains(&route.rel_id) {
+            return Err(RegistryError::Unavailable("bound_owner_unavailable"));
+        }
+        Ok(())
     }
 
     fn session_path(&self, session_id: &str) -> PathBuf {
@@ -415,25 +482,30 @@ impl Registry {
     }
 
     fn accepted_route(&self, session_id: &str) -> Result<Option<SessionRoute>, RegistryError> {
+        self.require_current()?;
         if !valid_id(session_id) {
             return Err(RegistryError::Invalid("invalid_session"));
         }
-        let path = self.session_path(session_id);
-        let accepted: Option<SessionRoute> = store::read(&path, store::MAX_SESSION_BYTES)?;
-        if let Some(route) = &accepted {
-            let project = route.project_id.as_deref();
-            let dedicated = project
-                .and_then(|project| self.topology.projects.get(project))
-                .is_some_and(|owner| owner.rel_id == route.rel_id);
-            if route.session_id != session_id
-                || project.is_some_and(|project| !valid_id(project))
-                || (!dedicated && route.rel_id != self.topology.main_rel)
-            {
-                return Err(RegistryError::Unavailable("state_corrupt"));
-            }
+        let accepted: Option<SessionRoute> =
+            store::read(&self.session_path(session_id), store::MAX_SESSION_BYTES)?;
+        if let Some(route) = &accepted
+            && (route.session_id != session_id
+                || route
+                    .project_id
+                    .as_ref()
+                    .is_some_and(|project| !valid_id(project))
+                || !self.topology.accepts_route(route))
+        {
+            return Err(store::CORRUPT);
         }
         Ok(accepted)
     }
+}
+
+fn parse_source_owner(owner_id: &str) -> Result<OwnerId, RegistryError> {
+    owner_id
+        .parse()
+        .map_err(|_| RegistryError::Invalid("invalid_owner"))
 }
 
 #[derive(Serialize)]
@@ -519,87 +591,6 @@ pub(crate) fn dashboard_binding_at_cut(
     }
 }
 
-impl OwnerConfig {
-    fn validate(&self) -> Result<(), RegistryError> {
-        if !valid_id(&self.profile_id)
-            || !valid_id(&self.principal_id)
-            || self.projects.len() > 128
-            || self.session_projects.len() > 4096
-            || !self.projects.keys().all(|project| valid_id(project))
-            || !self
-                .session_projects
-                .iter()
-                .all(|(session, project)| valid_id(session) && self.projects.contains_key(project))
-        {
-            return Err(RegistryError::Invalid("invalid_owner_config"));
-        }
-        Ok(())
-    }
-
-    fn topology(
-        &self,
-        main_rel: OwnerId,
-        active_phy: OwnerId,
-        projects: BTreeMap<String, OwnerId>,
-    ) -> Result<Topology, RegistryError> {
-        let mut ids = BTreeSet::from([main_rel]);
-        if !ids.insert(active_phy) || !projects.values().all(|id| ids.insert(*id)) {
-            return Err(RegistryError::Invalid("duplicate_owner"));
-        }
-        let projects = projects
-            .into_iter()
-            .map(|(project, rel_id)| {
-                (
-                    project,
-                    ProjectOwner {
-                        parent_id: main_rel,
-                        rel_id,
-                    },
-                )
-            })
-            .collect();
-        Ok(Topology {
-            version: 1,
-            profile_id: self.profile_id.clone(),
-            principal_id: self.principal_id.clone(),
-            main_rel,
-            active_phy,
-            projects,
-        })
-    }
-}
-
-#[derive(PartialEq, Eq)]
-enum TopologyAcceptance {
-    New,
-    Current,
-    Extension,
-}
-
-impl Topology {
-    fn acceptance(&self, path: &Path) -> Result<TopologyAcceptance, RegistryError> {
-        let Some(accepted) = store::read::<Self>(path, store::MAX_TOPOLOGY_BYTES)? else {
-            return Ok(TopologyAcceptance::New);
-        };
-        if accepted == *self {
-            return Ok(TopologyAcceptance::Current);
-        }
-        if accepted.version == self.version
-            && accepted.profile_id == self.profile_id
-            && accepted.principal_id == self.principal_id
-            && accepted.main_rel == self.main_rel
-            && accepted.active_phy == self.active_phy
-            && accepted
-                .projects
-                .iter()
-                .all(|(id, owner)| self.projects.get(id) == Some(owner))
-        {
-            return Ok(TopologyAcceptance::Extension);
-        }
-        Err(RegistryError::Conflict("owner_topology_changed"))
-    }
-}
-
 fn valid_id(value: &str) -> bool {
     let mut bytes = value.bytes();
     value.len() <= 128
@@ -620,10 +611,6 @@ fn owner_file(path: &Path) -> Result<PathBuf, RegistryError> {
         return Err(RegistryError::Invalid("invalid_owner_path"));
     }
     Ok(path)
-}
-
-fn open_rel(path: &Path) -> Result<Rel, RegistryError> {
-    Rel::open(owner_file(path)?).map_err(owner_error)
 }
 
 fn acquire_service_lease(state_dir: &Path) -> Result<File, RegistryError> {

@@ -315,11 +315,11 @@ fn invalid_owner_is_rejected_and_accepted_route_wins_over_new_attribution() {
 }
 
 #[test]
-fn extending_topology_preserves_accepted_fallback_and_project_routes() {
+fn review_adds_project_without_retargeting_existing_fallback() {
     let fixture = Fixture::new();
     let second_path = fixture.project.with_file_name("second.rel");
     let second_id = Rel::create(&second_path).unwrap().owner_id();
-    let (fallback, dedicated, old_route) = {
+    let (fallback, dedicated, new_session) = {
         let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
         let fallback = registry
             .bind_session("existing-fallback", Some("second"))
@@ -328,65 +328,375 @@ fn extending_topology_preserves_accepted_fallback_and_project_routes() {
             .bind_session("existing-dedicated", Some("demo"))
             .unwrap();
         let old_route = std::fs::read(registry.session_path("existing-fallback")).unwrap();
-        assert_eq!(fallback.rel_id, fixture.main_id.to_string());
-        assert_eq!(dedicated.rel_id, fixture.project_id.to_string());
-        (fallback, dedicated, old_route)
+        let review = registry
+            .review_switch(SwitchChanges {
+                main_rel: None,
+                active_phy: None,
+                projects: BTreeMap::from([("second".into(), second_path.clone())]),
+            })
+            .unwrap();
+        assert_eq!(registry.apply_switch(review).unwrap().generation, 1);
+        assert_eq!(
+            registry
+                .bind_session("existing-fallback", Some("second"))
+                .unwrap(),
+            fallback
+        );
+        assert_eq!(
+            registry
+                .bind_session("existing-dedicated", Some("second"))
+                .unwrap(),
+            dedicated
+        );
+        let new_session = registry
+            .bind_session("new-project-session", Some("second"))
+            .unwrap();
+        assert_eq!(new_session.rel_id, second_id.to_string());
+        assert_eq!(
+            registry.source_owner("new-project-session", true).unwrap(),
+            second_id
+        );
+        assert_eq!(
+            std::fs::read(registry.session_path("existing-fallback")).unwrap(),
+            old_route
+        );
+        (fallback, dedicated, new_session)
     };
-
+    let substitute_path = fixture.project.with_file_name("different-bootstrap.rel");
+    Rel::create(&substitute_path).unwrap();
     let mut config = fixture.config();
-    config.projects.insert("second".into(), second_path.clone());
-    let mut registry = Registry::open(config, &fixture.state, TOKEN).unwrap();
+    config.main_rel = substitute_path.clone();
+    config.projects.insert("second".into(), substitute_path);
+    let mut restarted = Registry::open(config, &fixture.state, TOKEN).unwrap();
     assert_eq!(
-        registry
-            .bind_session("existing-fallback", Some("second"))
-            .unwrap(),
+        restarted.bind_session("existing-fallback", None).unwrap(),
         fallback
     );
     assert_eq!(
-        registry
-            .bind_session("existing-dedicated", Some("second"))
-            .unwrap(),
+        restarted.bind_session("existing-dedicated", None).unwrap(),
         dedicated
     );
-    let new_session = registry
-        .bind_session("new-project-session", Some("second"))
-        .unwrap();
-    assert_eq!(new_session.rel_id, second_id.to_string());
     assert_eq!(
-        registry.source_owner("new-project-session", true).unwrap(),
-        second_id
-    );
-    assert_eq!(
-        std::fs::read(registry.session_path("existing-fallback")).unwrap(),
-        old_route
-    );
-    drop(registry);
-
-    assert_eq!(
-        Registry::open(fixture.config(), &fixture.state, TOKEN)
-            .err()
-            .unwrap()
-            .code(),
-        "owner_topology_changed"
-    );
-    let third_path = fixture.project.with_file_name("third.rel");
-    Rel::create(&third_path).unwrap();
-    let mut config = fixture.config();
-    config.projects.insert("second".into(), third_path);
-    assert_eq!(
-        Registry::open(config, &fixture.state, TOKEN)
-            .err()
-            .unwrap()
-            .code(),
-        "owner_topology_changed"
-    );
-    let mut config = fixture.config();
-    config.projects.insert("second".into(), second_path);
-    let mut registry = Registry::open(config, &fixture.state, TOKEN).unwrap();
-    assert_eq!(
-        registry.bind_session("new-project-session", None).unwrap(),
+        restarted.bind_session("new-project-session", None).unwrap(),
         new_session
     );
+    assert_eq!(
+        restarted.bind_session("fresh", None).unwrap().rel_id,
+        fixture.main_id.to_string()
+    );
+}
+
+#[test]
+fn switches_all_roles_and_reopens_pinned_legacy_and_v2_sessions() {
+    let fixture = Fixture::new();
+    let topology_path = fixture.state.join(TOPOLOGY_FILE);
+    let old = LegacyTopology {
+        version: 1,
+        profile_id: "profile-one".into(),
+        principal_id: "principal-one".into(),
+        main_rel: fixture.main_id,
+        active_phy: fixture.phy_id,
+        projects: BTreeMap::from([(
+            "demo".into(),
+            ProjectOwner {
+                parent_id: fixture.main_id,
+                rel_id: fixture.project_id,
+            },
+        )]),
+    };
+    store::publish(&topology_path, &old).unwrap();
+    assert!(committed_switch_status(&fixture.state).unwrap().is_none());
+    let routes = fixture.state.join("sessions-v1");
+    std::fs::create_dir(&routes).unwrap();
+    let legacy = [
+        ("legacy-general", None, fixture.main_id),
+        ("legacy-dedicated", Some("demo"), fixture.project_id),
+    ]
+    .map(|(session, project, rel)| {
+        let file = routes.join(format!("{:x}.json", Sha256::digest(session.as_bytes())));
+        store::publish(
+            &file,
+            &json!({"session_id": session, "project_id": project, "rel_id": rel}),
+        )
+        .unwrap();
+        (session, file.clone(), std::fs::read(file).unwrap(), rel)
+    });
+
+    let next_main = fixture.main.with_file_name("next-main.rel");
+    let next_project = fixture.project.with_file_name("next-project.rel");
+    let next_phy = fixture.phy.with_file_name("next-person.phy");
+    let main_id = Rel::create(&next_main).unwrap().owner_id();
+    let project_id = Rel::create(&next_project).unwrap().owner_id();
+    let phy_id = Phylactery::create(&next_phy).unwrap().owner_id();
+
+    let old_phy_file = std::fs::read(&fixture.phy).unwrap();
+    let old_rel_file = std::fs::read(&fixture.main).unwrap();
+    {
+        let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
+        let first_instance = registry.instance().unwrap();
+        assert_eq!(registry.switch_status().unwrap().generation, 0);
+        let review = registry
+            .review_switch(SwitchChanges {
+                main_rel: Some(next_main.clone()),
+                active_phy: None,
+                projects: BTreeMap::from([("demo".into(), next_project.clone())]),
+            })
+            .unwrap();
+        assert_eq!(registry.apply_switch(review).unwrap().generation, 1);
+        assert_eq!(
+            registry.bind_session("fresh-general", None).unwrap().rel_id,
+            main_id.to_string()
+        );
+        assert_eq!(
+            registry
+                .bind_session("fresh-project", Some("demo"))
+                .unwrap()
+                .rel_id,
+            project_id.to_string()
+        );
+        for (session, path, original, rel) in &legacy {
+            let binding = registry.bind_session(session, None).unwrap();
+            assert_eq!(binding.rel_id, rel.to_string());
+            assert_eq!(binding.user_id, fixture.phy_id.to_string());
+            assert_eq!(&std::fs::read(path).unwrap(), original);
+            let provider = registry.instance().unwrap();
+            let topology = registry
+                .dashboard_topology(&provider, Some(session))
+                .unwrap();
+            assert_eq!(topology["session_owner_id"], rel.to_string());
+            assert_eq!(topology["owners"][2]["display_label"], "Session REL");
+            assert_eq!(
+                registry
+                    .dashboard_scope(
+                        "profile-one",
+                        &fixture.phy_id.to_string(),
+                        &rel.to_string(),
+                        Some(session)
+                    )
+                    .unwrap()
+                    .0,
+                *rel,
+            );
+            assert!(
+                registry
+                    .dashboard_scope(
+                        "profile-one",
+                        &fixture.phy_id.to_string(),
+                        &rel.to_string(),
+                        None
+                    )
+                    .is_err()
+            );
+        }
+        assert!(
+            registry
+                .configured_source_owner(&fixture.main_id.to_string())
+                .is_err()
+        );
+        assert_eq!(
+            registry
+                .retained_source_owner(&fixture.main_id.to_string())
+                .unwrap(),
+            fixture.main_id
+        );
+        assert!(inspect_dashboard_cut(&first_instance, fixture.main_id, OwnerKind::Rel).is_err());
+
+        let review = registry
+            .review_switch(SwitchChanges {
+                main_rel: None,
+                active_phy: Some(next_phy),
+                projects: BTreeMap::new(),
+            })
+            .unwrap();
+        assert_eq!(registry.apply_switch(review).unwrap().generation, 2);
+        assert_eq!(registry.active_phy(), phy_id);
+        assert_eq!(registry.legacy_phy(), fixture.phy_id);
+        assert_eq!(
+            registry.bind_session("other-person", None).unwrap().user_id,
+            phy_id.to_string()
+        );
+        for (session, _, _, _) in &legacy {
+            assert!(registry.is_bound(session).unwrap());
+            assert_eq!(
+                registry.bind_session(session, None).unwrap_err().code(),
+                "session_phy_inactive"
+            );
+            assert_eq!(
+                registry.source_owner(session, false).unwrap_err().code(),
+                "session_phy_inactive"
+            );
+            assert_eq!(
+                registry
+                    .dashboard_topology(&registry.instance().unwrap(), Some(session))
+                    .unwrap_err()
+                    .code(),
+                "session_phy_inactive"
+            );
+        }
+        let current = registry.instance().unwrap();
+        assert!(inspect_dashboard_cut(&current, fixture.phy_id, OwnerKind::Phylactery).is_err());
+        assert!(inspect_dashboard_cut(&current, phy_id, OwnerKind::Phylactery).is_ok());
+    }
+    let offline = committed_switch_status(&fixture.state).unwrap().unwrap();
+    assert_eq!(offline.generation, 2);
+    let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
+    assert_eq!(registry.active_phy(), phy_id);
+    assert_eq!(
+        registry
+            .bind_session("fresh-general", None)
+            .unwrap_err()
+            .code(),
+        "session_phy_inactive"
+    );
+    let review = registry
+        .review_switch(SwitchChanges {
+            main_rel: None,
+            active_phy: Some(fixture.phy.clone()),
+            projects: BTreeMap::new(),
+        })
+        .unwrap();
+    assert_eq!(registry.apply_switch(review).unwrap().generation, 3);
+    assert_eq!(
+        registry.bind_session("fresh-general", None).unwrap().rel_id,
+        main_id.to_string()
+    );
+    assert_eq!(
+        registry
+            .bind_session("other-person", None)
+            .unwrap_err()
+            .code(),
+        "session_phy_inactive"
+    );
+    for (session, path, original, rel) in &legacy {
+        let binding = registry.bind_session(session, Some("demo")).unwrap();
+        assert_eq!(binding.rel_id, rel.to_string());
+        assert_eq!(binding.user_id, fixture.phy_id.to_string());
+        assert_eq!(&std::fs::read(path).unwrap(), original);
+    }
+    assert_eq!(std::fs::read(&fixture.phy).unwrap(), old_phy_file);
+    assert_eq!(std::fs::read(&fixture.main).unwrap(), old_rel_file);
+
+    drop(registry);
+    std::fs::remove_file(&fixture.main).unwrap();
+    let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
+    assert_eq!(
+        registry
+            .bind_session("legacy-general", None)
+            .unwrap_err()
+            .code(),
+        "bound_owner_unavailable"
+    );
+    assert_eq!(
+        registry
+            .bind_session("legacy-dedicated", None)
+            .unwrap()
+            .rel_id,
+        fixture.project_id.to_string()
+    );
+    assert_eq!(
+        registry.bind_session("after-restart", None).unwrap().rel_id,
+        main_id.to_string()
+    );
+}
+
+#[test]
+fn failed_switch_releases_staging_and_stale_review_cannot_overwrite() {
+    let fixture = Fixture::new();
+    let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
+    let held = registry.instance().unwrap();
+    let backup = std::fs::read(&registry.topology_path).unwrap();
+    let next = fixture.main.with_file_name("next-main.rel");
+    let blocked = fixture.project.with_file_name("blocked.rel");
+    let next_owner = Rel::create(&next).unwrap();
+    let blocked_owner = Rel::create(&blocked).unwrap();
+    let reviewed_all = registry
+        .review_switch(SwitchChanges {
+            main_rel: Some(next.clone()),
+            active_phy: None,
+            projects: BTreeMap::from([("demo".into(), blocked)]),
+        })
+        .unwrap();
+    let other = Gateway::new();
+    other.mount_rel(&blocked_owner, true).unwrap();
+    assert_eq!(
+        registry.apply_switch(reviewed_all).unwrap_err().code(),
+        "owner_writer_conflict"
+    );
+    assert_eq!(registry.switch_status().unwrap().generation, 0);
+    assert_eq!(std::fs::read(&registry.topology_path).unwrap(), backup);
+    assert!(inspect_dashboard_cut(&held, fixture.main_id, OwnerKind::Rel).is_ok());
+    // The first writer was staged before the second mount failed.
+    assert_eq!(
+        other.mount_rel(&next_owner, true).unwrap(),
+        next_owner.owner_id()
+    );
+    drop(other);
+
+    let no_change = || SwitchChanges {
+        main_rel: Some(fixture.main.clone()),
+        active_phy: None,
+        projects: BTreeMap::new(),
+    };
+    let stale = registry.review_switch(no_change()).unwrap();
+    let no_op = registry.review_switch(no_change()).unwrap();
+    assert_eq!(registry.apply_switch(no_op).unwrap().generation, 0);
+    assert_eq!(std::fs::read(&registry.topology_path).unwrap(), backup);
+
+    let review = registry
+        .review_switch(SwitchChanges {
+            main_rel: Some(next),
+            active_phy: None,
+            projects: BTreeMap::new(),
+        })
+        .unwrap();
+    assert_eq!(registry.apply_switch(review).unwrap().generation, 1);
+    assert_eq!(
+        registry.apply_switch(stale).unwrap_err().code(),
+        "owner_switch_stale"
+    );
+
+    let uncommitted = fixture.phy.with_file_name("uncommitted.phy");
+    let uncommitted_owner = Phylactery::create(&uncommitted).unwrap();
+    let review = registry
+        .review_switch(SwitchChanges {
+            main_rel: None,
+            active_phy: Some(uncommitted),
+            projects: BTreeMap::new(),
+        })
+        .unwrap();
+    let committed = std::fs::read(&registry.topology_path).unwrap();
+    // Simulate interruption of accepted-state evidence before publication.
+    // The staged PHY must not be exposed or a missing record repaired from RAM.
+    std::fs::write(&registry.topology_path, b"interrupted").unwrap();
+    assert_eq!(
+        registry.apply_switch(review).unwrap_err().code(),
+        "owner_switch_recovery_required"
+    );
+    assert_eq!(
+        registry.bind_session("fenced", None).unwrap_err().code(),
+        "owner_switch_recovery_required"
+    );
+    assert_eq!(
+        std::fs::read(&registry.topology_path).unwrap(),
+        b"interrupted"
+    );
+    assert_eq!(
+        registry
+            .gateway
+            .mount_phylactery(&uncommitted_owner, false)
+            .unwrap(),
+        uncommitted_owner.owner_id(),
+    );
+
+    std::fs::write(&registry.topology_path, committed).unwrap();
+    drop(held);
+    drop(registry);
+    let mut restarted = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
+    assert_eq!(
+        restarted.bind_session("recovered", None).unwrap().rel_id,
+        next_owner.owner_id().to_string()
+    );
+    assert_eq!(restarted.active_phy(), fixture.phy_id);
 }
 
 #[test]
