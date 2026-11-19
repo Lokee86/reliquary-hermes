@@ -35,10 +35,12 @@ impl EmbeddingBindingStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let builder = fs::DirBuilder::new();
                 #[cfg(unix)]
-                {
+                let builder = {
                     use std::os::unix::fs::DirBuilderExt;
+                    let mut builder = builder;
                     builder.mode(0o700);
-                }
+                    builder
+                };
                 builder
                     .create(&directory)
                     .map_err(|_| "embedding_identity_unavailable")?;
