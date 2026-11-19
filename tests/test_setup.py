@@ -20,7 +20,7 @@ def setup_profile(pinned_provider, monkeypatch, tmp_path):
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
     home = tmp_path / "setup-profile"
-    host = home / "plugins/reliquary/host/reliquary-hermes-host.exe"
+    host = setup.packaged_host_path(home)
     host.parent.mkdir(parents=True)
     host.touch()
     candidate = {}
@@ -50,6 +50,24 @@ def setup_profile(pinned_provider, monkeypatch, tmp_path):
     finally:
         reset_secret_scope(secret_scope)
         reset_hermes_home_override(profile_scope)
+
+
+def test_setup_prefers_the_platform_host_and_accepts_a_saved_binary(tmp_path):
+    home = tmp_path.resolve()
+    packaged = setup.packaged_host_path(home)
+    assert packaged.name == ("reliquary-hermes-host.exe" if os.name == "nt" else "reliquary-hermes-host")
+    assert setup._defaults(home)[1] == packaged
+
+    saved = home / "existing-host"
+    saved.touch()
+    state = home / "reliquary"
+    state.mkdir()
+    (state / "provider.json").write_text(json.dumps({"binary": str(saved)}), encoding="utf-8")
+    assert setup._defaults(home)[1] == saved
+
+    packaged.parent.mkdir(parents=True)
+    packaged.touch()
+    assert setup._defaults(home)[1] == packaged
 
 
 def test_fresh_setup_derives_private_values_and_preserves_existing_processing(setup_profile):

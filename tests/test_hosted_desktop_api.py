@@ -13,6 +13,7 @@ import pytest
 
 from reliquary_hermes.client import HostClient
 from reliquary_hermes.settings import TOKEN_VAR, read_settings
+from reliquary_hermes.setup import packaged_host_path
 from test_hp03_host import binaries, install_setup_host, owner
 from test_hu03_dashboard import _request, _stage_plugin
 
@@ -75,7 +76,7 @@ def test_hosted_desktop_compatibility(tmp_path, hosted_checkout, binaries, plugi
             install_setup_host(home, binary)
         else:
             copytree(plugin_artifact, home / "plugins/reliquary")
-            installed = home / "plugins/reliquary/host/reliquary-hermes-host.exe"
+            installed = packaged_host_path(home)
             with installed.open("rb") as actual, binary.open("rb") as expected:
                 assert file_digest(actual, "sha256").digest() == file_digest(expected, "sha256").digest()
             (home / "config.yaml").write_text("plugins:\n  enabled: [reliquary]\n", encoding="utf-8")

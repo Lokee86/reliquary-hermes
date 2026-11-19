@@ -3,13 +3,14 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path
-from shutil import copyfile
+from shutil import copy
 import subprocess
 
 import pytest
 
 from reliquary_hermes.client import HostClient, HostUnavailable
 from reliquary_hermes.settings import TOKEN_VAR, save_settings
+from reliquary_hermes.setup import packaged_host_path
 from reliquary_hermes.validation import canonical, decode
 from test_host_client import TOKEN, status_request
 from test_hp03_provider import _settled, pinned_provider
@@ -60,9 +61,9 @@ def stop(process):
 
 
 def install_setup_host(home, binary):
-    installed = home / "plugins/reliquary/host/reliquary-hermes-host.exe"
+    installed = packaged_host_path(home)
     installed.parent.mkdir(parents=True, exist_ok=True)
-    copyfile(binary, installed)
+    copy(binary, installed)
     return installed
 
 

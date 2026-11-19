@@ -89,6 +89,14 @@ On November 19, 2026, all three independently verified migration pairs passed th
 
 The locked native suite passed 127 tests with one existing scale characterization ignored. Dashboard typechecking, 26 tests, and the Web and Desktop build passed. The signed Setup and dashboard process checks passed all six cases. The focused Python rerun passed the delayed discovery and crash reconciliation checks.
 
+## Native release packages
+
+The Native host workflow builds the Linux x86-64 and ARM64 bundles on Ubuntu 22.04 and the Intel and Apple Silicon bundles on macOS 15. It runs the locked release host tests on each native runner. The package check verifies the binary architecture, minimum OS or glibc requirement, and launch permission from the extracted archive.
+
+The packaged-host smoke runs one isolated profile per archive. Its synthetic 2.1 fixtures contain clocked Archive publications and two retained PHY Memory revisions. Setup resolves the packaged binary and verifies the copied owners. The normal signed client reads an earlier PHY revision, creates a REL Memory through the dashboard, and reads its exact ID, revision, and body after a fresh host start. It also checks that the PHY hash matches. The probe runs without provider credentials or a separate Core CLI checkout.
+
+Public macOS signing runs on a version tag and produces a notarized ZIP. The signing step uses `MACOS_CERTIFICATE_P12_BASE64` and `MACOS_CERTIFICATE_PASSWORD` for the Developer ID Application identity, plus `APPLE_NOTARY_KEY_P8_BASE64`, `APPLE_NOTARY_KEY_ID`, and `APPLE_NOTARY_ISSUER_ID` for Apple's notary service. Store these values as GitHub Actions secrets. Run the same extracted-package check after signing. Record the exact successful workflow and archive checksums when attaching assets to the matching GitHub release.
+
 ## Evidence covered
 
 - Strict bounded request and response DTOs reject spoofed authority, extra fields, malformed wire data and mismatched IDs, cuts or provenance. Each selected Memory has one correlated source-provenance entry.

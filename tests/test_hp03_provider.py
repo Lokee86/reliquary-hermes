@@ -107,7 +107,7 @@ def test_pinned_setup_activates_and_keeps_token_in_profile_secret_scope(
 
     home = tmp_path / "setup"
     values = _profile(home, "setup-profile")
-    installed = home / "plugins/reliquary/host/reliquary-hermes-host.exe"
+    installed = setup.packaged_host_path(home)
     installed.parent.mkdir(parents=True)
     installed.touch()
 

@@ -12,9 +12,9 @@ Each configured profile has a separate local service and credential. Multiple se
 
 ## Configuration and setup
 
-### Catalog package (0.2.0)
+### Native release package (0.3.0)
 
-The catalog directory package is named `reliquary` on every surface. Its root entry registers the memory provider and lifecycle observer; the web router resolves the provider's dashboard module through Hermes. Build the native host from the vendored source with `scripts/build-native.ps1`. No executable, downloader, or self-updater is committed. The public Native host workflow builds, tests, and attests an optional Windows artifact at the source commit.
+The directory package is named `reliquary` on every surface. Its root entry registers the memory provider and lifecycle observer. The web router resolves the provider's dashboard module through Hermes. Use the native executable built for the same source revision as the plugin. [Native host workflow](../.github/workflows/native.yml)
 
 Version 0.2.0 opens REL and PHY files with the retained history produced by Reliquary's offline 2.1 migration. Select the migrated REL and its paired PHY in Setup using the native host from this package. The host opens the REL for normal writes and mounts the PHY read-only. [Bundled Core revision](../vendor/reliquary/SOURCE-PROVENANCE.md)
 
@@ -22,7 +22,7 @@ Setup and host startup may take over a minute on a large retained history. An ow
 
 Hosted processing uses only the profile-bound Hermes `ctx.llm` worker. The native process receives no model credentials and does not open a model route file. See the current [installation and disclosures](../README.md).
 
-1. Install the Reliquary plugin and its native host from the same plugin revision so both agree on new owner receipts. Build the executable with `scripts/build-native.ps1` using the [vendored Root source](../vendor/reliquary/SOURCE-PROVENANCE.md). The default executable is `plugins/reliquary/host/reliquary-hermes-host.exe` under the profile.
+1. Install the Reliquary plugin and its native host from the same plugin revision so both agree on new owner receipts. Setup looks for `plugins/reliquary/host/reliquary-hermes-host` on Linux and macOS and the `.exe` pathname on Windows. It accepts the existing saved binary path if the packaged file is absent. [Platform installation](#platform-installation)
 2. Select or create a General REL and active PHY. Either REL role accepts a verified REL 2.1 with any stored scope. Selecting an existing file keeps its original header and owner ID. New RELs for both roles report `unspecified`. A Hermes host with trusted session project attribution can select or create a dedicated REL for an active project. Stock Hermes shows saved project REL paths read-only and uses General memory for new conversations. Create Hermes projects through Projects or `hermes project create`, then refresh the list.
 3. Review the setup and connect. Hosts with project attribution show a confirmation when projects will use General memory. Setup derives profile and service identity, validates owners through the Rust host, provisions a random credential in Hermes secret storage, and checks the signed host topology before selecting the provider. Run `hermes memory setup reliquary` for headless setup.
 4. Start a Hermes session to attach the provider. Already attached sessions keep their accepted REL.
@@ -50,6 +50,17 @@ Paths are absolute. Configuration is scoped to the `hermes_home` that the pinned
 `provider.json` stores the absolute `binary` path. Hermes stores `RELIQUARY_HERMES_TOKEN` in the active profile's private secret scope. Both JSON configuration files contain only nonsecret settings. The client starts the binary as `reliquary-hermes-host --state-dir <absolute-directory>` with a bounded JSON token bootstrap over standard input. The child inherits only the OS variables needed for startup and uses the state directory for its temporary files.
 
 The graph uses the authenticated Web SDK byte transport. For Desktop graph support, build Hermes Desktop with the [bounded plugin REST byte bridge](../patches/hermes-45882968-plugin-rest-bytes.patch) on an isolated checkout at `458829681db8761e50b8242aa034d23ae9bcdcd5`. The SDK forwards bounded `application/octet-stream` bytes over its existing profile-aware REST and Electron IPC path. On a stock Desktop build, List and the inspector remain available and Graph explains the required host capability.
+
+### Platform installation
+
+| Native bundle | Supported baseline | Archive |
+| --- | --- | --- |
+| Linux x86-64 | Ubuntu 22.04, glibc 2.35 | `reliquary-hermes-v<version>-linux-x86_64.tar.gz` |
+| Linux ARM64 | Ubuntu 22.04, glibc 2.35 | `reliquary-hermes-v<version>-linux-arm64.tar.gz` |
+| macOS Intel | macOS 15 | `reliquary-hermes-v<version>-macos-x86_64.zip` |
+| macOS Apple Silicon | macOS 15 | `reliquary-hermes-v<version>-macos-arm64.zip` |
+
+Other 64-bit GNU/Linux distributions can run the appropriate bundle with glibc 2.35 or later and the shared libraries listed in the release. Alpine/musl requires its own build. Public macOS archives use a Developer ID signature and Apple notarization. Keep the executable permission when extracting these archives. Unpack the `reliquary/` directory into the active Hermes profile's `plugins/` directory. On Windows, use the matching source package with `scripts/build-native.ps1` or the native artifact from the same revision. [Release downloads](https://github.com/Lokee86/reliquary-hermes/releases)
 
 ## Lifecycle and recovery
 

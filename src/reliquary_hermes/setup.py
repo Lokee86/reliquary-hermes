@@ -40,10 +40,15 @@ def _local_path(value):
     return value
 
 
+def packaged_host_path(home: Path) -> Path:
+    binary = "reliquary-hermes-host.exe" if os.name == "nt" else "reliquary-hermes-host"
+    return home / "plugins" / "reliquary" / "host" / binary
+
+
 def _defaults(home):
     state = _state_dir(home)
     prior = _read_optional(state / "owners.json")
-    installed = home / "plugins" / "reliquary" / "host" / "reliquary-hermes-host.exe"
+    installed = packaged_host_path(home)
     # Existing installations may already refer to a separately provisioned host.
     saved = _read_optional(state / "provider.json").get("binary")
     binary = installed if installed.is_file() or not saved else Path(saved)

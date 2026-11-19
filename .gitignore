@@ -8,6 +8,7 @@ __pycache__/
 host/target/
 host/.test-tmp/
 host/reliquary-hermes-host.exe
+host/reliquary-hermes-host
 .cargo-home/
 dashboard/node_modules/
 dashboard/.npm-cache/
