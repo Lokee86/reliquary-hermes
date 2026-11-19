@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -86,7 +88,12 @@ jobs:
   unix:
     name: Native host (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -108,6 +115,7 @@ jobs:
       CARGO_TARGET_DIR: ${{ github.workspace }}/host/target
       CARGO_PROFILE_RELEASE_OPT_LEVEL: '1'
       MACOSX_DEPLOYMENT_TARGET: '15.0'
+      HOST_PLATFORM: ${{ matrix.platform }}
       HOST_TARGET: ${{ matrix.target }}
     steps:
       - name: Check out the pinned source
@@ -147,3 +155,102 @@ jobs:
             .cargo-home
             host/target
           key: unix-native-release-o1-${{ matrix.target }}-${{ hashFiles('host/Cargo.lock', 'vendor/reliquary/**/*.rs', 'vendor/reliquary/**/Cargo.toml', 'vendor/lodestone/**/*.rs', 'vendor/lodestone/**/Cargo.toml') }}
+      - name: Prepare the platform package
+        shell: bash
+        run: |
+          root="$TMPDIR/package"
+          plugin="$root/reliquary"
+          mkdir -p "$plugin"
+          git archive HEAD | tar -xf - -C "$plugin"
+          host="$plugin/host/reliquary-hermes-host"
+          install -m 0755 "$CARGO_TARGET_DIR/$HOST_TARGET/release/reliquary-hermes-host" "$host"
+          version="$(sed -n 's/^version: "\([^"]*\)"$/\1/p' "$plugin/plugin.yaml")"
+          test -n "$version"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            test "$GITHUB_REF_NAME" = "v$version"
+          fi
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            extension=tar.gz
+            readelf -d "$host" | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p' > "$plugin/NATIVE-REQUIREMENTS.txt"
+          else
+            extension=zip
+          fi
+          printf 'PACKAGE_ROOT=%s\nPACKAGE_ARCHIVE=%s\n' "$root" \
+            "$TMPDIR/reliquary-hermes-v$version-$HOST_PLATFORM.$extension" >> "$GITHUB_ENV"
+      - name: Package Linux and macOS preview archives
+        if: runner.os == 'Linux' || github.ref_type != 'tag'
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            tar -czf "$PACKAGE_ARCHIVE" -C "$PACKAGE_ROOT" reliquary
+          else
+            ditto -c -k --keepParent "$PACKAGE_ROOT/reliquary" "$PACKAGE_ARCHIVE"
+          fi
+      - name: Sign and notarize the macOS release archive
+        if: runner.os == 'macOS' && github.ref_type == 'tag' && github.event_name != 'pull_request'
+        timeout-minutes: 20
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: bash scripts/sign-macos-package.sh "$PACKAGE_ROOT/reliquary" "$PACKAGE_ARCHIVE"
+      - name: Set up Python for the packaged-host test
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+      - name: Test the extracted platform package
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          profile="$(mktemp -d "$TMPDIR/reliquary-profile.XXXXXX")"
+          mkdir -p "$profile/plugins"
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            tar -xzf "$PACKAGE_ARCHIVE" -C "$profile/plugins"
+          else
+            ditto -x -k "$PACKAGE_ARCHIVE" "$profile/plugins"
+          fi
+          plugin="$profile/plugins/reliquary"
+          host="$plugin/host/reliquary-hermes-host"
+          test -x "$host"
+          arch="${HOST_TARGET%%-*}"
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            case "$arch" in
+              x86_64) machine='Advanced Micro Devices X86-64' ;;
+              aarch64) machine='AArch64' ;;
+            esac
+            readelf -h "$host" | grep -F "$machine"
+            glibc="$(readelf --version-info "$host" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -V | tail -1)"
+            printf 'Required glibc: %s\n' "$glibc"
+            test "$(printf '%s\n' GLIBC_2.35 "$glibc" | sort -V | tail -1)" = GLIBC_2.35
+            libraries="$(ldd "$host")"
+            printf '%s\n' "$libraries"
+            [[ "$libraries" != *'not found'* ]]
+          else
+            if [[ "$arch" == aarch64 ]]; then arch=arm64; fi
+            test "$(lipo -archs "$host")" = "$arch"
+            test "$(xcrun vtool -show-build "$host" | awk '$1 == "minos" { print $2 }')" = "$MACOSX_DEPLOYMENT_TARGET"
+            if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+              codesign --verify --strict "$host"
+            fi
+          fi
+          python -B -S "$plugin/tests/smoke_packaged_host.py" "$profile"
+          cd "$(dirname "$PACKAGE_ARCHIVE")"
+          archive="$(basename "$PACKAGE_ARCHIVE")"
+          shasum -a 256 "$archive" > "$archive.sha256"
+      - name: Upload the tested platform package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reliquary-hermes-${{ matrix.platform }}
+          path: |
+            ${{ env.PACKAGE_ARCHIVE }}
+            ${{ env.PACKAGE_ARCHIVE }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Attest the platform package
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: ${{ env.PACKAGE_ARCHIVE }}
