@@ -73,6 +73,12 @@ On November 18, 2026, the signed Setup case kept the same process lease across a
 
 The locked native suite passed 126 tests with one graph scale characterization ignored. The matching Python suite passed 429 tests with five optional installed Desktop and live acceptance checks skipped. Dashboard typechecking, 26 tests, and the Web and Desktop build passed. Core passed 689 workspace tests with one Windows symlink test filtered for lack of symlink creation privilege. The 673-file vendored inventory matches the Core pin with the documented Lodestone adaptations. The native binary used in the Python suite had SHA-256 `ffec4a0e8c9b7b08ee2a62b3cacd563ee9ba1d627c54f704353f3e4be35cc9ca`. Logs and the Python case report are in `.test-temp/live-owner/`.
 
+## Memory inspector lookup
+
+The native regression creates 513 Memories in a disposable REL and opens the last Memory in ID order through `ui.memory_detail`. It checks the selected body and lifecycle. The Root inspection fixture checks that lookup by ID returns the same summary as List, reports an absent ID, and rejects a stale cut. The pinned HU03 dashboard probe covers authenticated read, correction, and terminal detail.
+
+On November 18, 2026, the regression returned `memory_metadata_unavailable` with the old host and opened the selected Memory with the fix. All four focused Root inspection tests passed. The locked native host suite passed 127 tests with one graph scale characterization ignored. The pinned HU03 and dashboard contract tests passed all 128 cases. The run logs are in `.test-temp/inspector-lookup/`.
+
 ## Evidence covered
 
 - Strict bounded request and response DTOs reject spoofed authority, extra fields, malformed wire data and mismatched IDs, cuts or provenance. Each selected Memory has one correlated source-provenance entry.
@@ -689,7 +695,7 @@ A source-derived browser comparison renders the same 2,191 real nodes, 19,392 bo
 
 Installed Web display verification is complete for the overview capture. The read-only installed-browser receipt at `host/.test-tmp/global-graph/installed-web/installed-web-receipt.json` records host SHA-256 `9fb81761f029c13d0c7eb50d02d295b8bb90ebd193bb9fe1da71ba7c769e8720` and UI bundle SHA-256 `64f90ae7d9f7cc94893e59bc9fd491d926f1bde60e6db7a2b884eca1fdab83f7`. It records all 13 of 13 node chunks and edge chunks received with HTTP 200, 2,191 resident and GPU-submitted nodes, zero downsampling, and no page errors. The corresponding screenshot is `host/.test-tmp/global-graph/installed-web/installed-web-overview.png`. This is an installed Web display result; it does not complete every acceptance item in the remediation specification.
 
-This receipt does not establish that an already-open Desktop process reloaded the module or verify the deployed graph in Desktop. Full Memory inspector content acceptance is also outside this display check; a separate review found that the inspector metadata lookup scans at most four 128-entry pages (512 memories), which can leave later memories unavailable and remains open. The earlier installed baseline returned zero node chunk responses despite a 2,191-node manifest. Video capture and the remaining interaction and platform acceptance are tracked separately; no video or full-spec completion claim is made here.
+This receipt does not establish that an already-open Desktop process reloaded the module or verify the deployed graph in Desktop. Full Memory inspector content acceptance is also outside this display check; a separate review found that the original inspector metadata lookup scanned at most four 128-entry pages (512 Memories). See [Memory inspector lookup](#memory-inspector-lookup) for the focused correction. The earlier installed baseline returned zero node chunk responses despite a 2,191-node manifest. Video capture and the remaining interaction and platform acceptance are tracked separately; no video or full-spec completion claim is made here.
 
 ## Related docs
 

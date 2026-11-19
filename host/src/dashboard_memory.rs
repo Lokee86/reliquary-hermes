@@ -121,7 +121,9 @@ fn memory_detail(
         .items
         .first()
         .ok_or_else(|| DashboardError::unavailable("memory_unavailable"))?;
-    let metadata = find_current_list_entry(instance, owner, kind, id, page.cut)?;
+    let metadata = instance
+        .inspect_memory_summary(owner, kind, page.cut, id)
+        .map_err(DashboardError::product)?;
     let result = match item {
         InspectionItem::Memory(memory) => {
             let current = metadata.revision == memory.revision;
@@ -344,40 +346,6 @@ fn exact_retained_revisions(
         .collect()
 }
 
-fn find_current_list_entry(
-    instance: &Instance,
-    owner: OwnerId,
-    kind: OwnerKind,
-    id: MemoryId,
-    cut: InspectionCut,
-) -> Result<reliquary_memory::MemoryListEntry, DashboardError> {
-    let query = InspectionQuery::MemorySummaries(MemoryListFilters::default());
-    let mut cursor: Option<InspectionCursor> = None;
-    for _ in 0..4 {
-        let page = instance
-            .inspect_owner(owner, kind, &query, cursor.as_ref(), PAGE_LIMIT)
-            .map_err(DashboardError::product)?;
-        if page.cut != cut {
-            return Err(DashboardError::unavailable("memory_cut_changed"));
-        }
-        for item in page.items {
-            let InspectionItem::MemoryListEntry(entry) = item else {
-                return Err(DashboardError::unavailable(
-                    "unexpected_memory_list_projection",
-                ));
-            };
-            if entry.id == hex_id(&id.0) {
-                return Ok(entry);
-            }
-        }
-        if page.next.is_none() {
-            break;
-        }
-        cursor = page.next;
-    }
-    Err(DashboardError::unavailable("memory_metadata_unavailable"))
-}
-
 fn provenance(
     instance: &Instance,
     owner: OwnerId,
@@ -550,4 +518,59 @@ fn hex_id(bytes: &[u8]) -> String {
 
 fn nonempty(value: &str) -> Option<&str> {
     (!value.is_empty()).then_some(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reliquary_memory::{Gateway, HostCredentialBinding, OwnerGrant, Rel, TrustedHostAdmission};
+
+    #[test]
+    fn opens_memory_beyond_the_first_four_summary_pages() {
+        let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".test-tmp");
+        std::fs::create_dir_all(&scratch).unwrap();
+        let dir = tempfile::tempdir_in(scratch).unwrap();
+        let rel = Rel::create(dir.path().join("inspector.rel")).unwrap();
+        let gateway = Gateway::new();
+        let owner = gateway.mount_rel(&rel, true).unwrap();
+        let token = "synthetic-inspector-regression-credential";
+        let (admission, _) = TrustedHostAdmission::new([HostCredentialBinding::new(
+            "inspector",
+            token,
+            [OwnerGrant::ManageRel(owner)],
+        )])
+        .install(&gateway)
+        .unwrap();
+        let instance = admission.authenticate(token).unwrap();
+        let management = instance.workspace_management(owner).unwrap();
+        let selected = (0..513)
+            .map(|index| {
+                management
+                    .create_memory(
+                        format!("Memory {index}"),
+                        format!("Body for Memory {index}."),
+                        "fact".into(),
+                        "note".into(),
+                        1,
+                    )
+                    .unwrap()
+            })
+            .max_by(|left, right| left.id.cmp(&right.id))
+            .unwrap();
+        assert_eq!(instance.rel_info(owner).unwrap().memory_count, 513);
+
+        let page = read(
+            &instance,
+            owner,
+            OwnerKind::Rel,
+            "ui.memory_detail",
+            &json!({"memory_id": selected.id, "revision": null}),
+            None,
+            &mut |_, _| Err("fixture_has_no_copied_source"),
+        )
+        .unwrap_or_else(|error| panic!("Memory detail failed with {}", error.code));
+        assert_eq!(page.result["memory"]["memory_id"], selected.id);
+        assert_eq!(page.result["memory"]["lifecycle"], "active");
+        assert_eq!(page.result["body"]["content"], selected.content);
+    }
 }

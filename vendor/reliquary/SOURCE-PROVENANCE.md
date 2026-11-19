@@ -3,11 +3,11 @@
 ## Purpose
 
 This directory is a source-only snapshot of Reliquary Core at
-`0cb1c37630f456b5f0cb2abd9b98c1ca4a36ad41` (Allow trusted hosts to detach a read-only PHY). The host depends on the public `reliquary-memory` API.
+`184857a58bb283fc3bbfca4f6073a1e7af701acb` (Read Memory summaries by ID at an exact owner cut). The host depends on the public `reliquary-memory` API.
 
 ## Overview
 
-This revision supplies trusted read-only PHY detach for live owner switching.
+This revision supplies direct Memory summary lookup for the Inspector and includes trusted read-only PHY detach for live owner switching.
 It includes the active-Memory Leiden recompute and durable REL dependency support. It carries forward the prior snapshot's partial Community
 decode and exact-cut graph projection, plus the already integrated hosted
 inference and authorized active-vector changes.
