@@ -1,245 +1,63 @@
 name: Native host
 
 on:
-  pull_request:
-  push:
-    branches:
-      - main
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  windows:
-    runs-on: windows-latest
-    timeout-minutes: 45
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-      attestations: write
-    steps:
-      - name: Check out the pinned source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Install the stable Rust toolchain
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - name: Restore locked Cargo dependencies and compiler output
-        id: cargo-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            .cargo-home
-            host/target
-          key: windows-native-v2-release-o1-${{ hashFiles('host/Cargo.lock', 'vendor/reliquary/**/*.rs', 'vendor/reliquary/**/Cargo.toml', 'vendor/lodestone/**/*.rs', 'vendor/lodestone/**/Cargo.toml') }}
-      - name: Build the Windows host (release)
-        timeout-minutes: 30
-        shell: pwsh
-        run: |
-          $env:CARGO_PROFILE_RELEASE_OPT_LEVEL = '1'
-          $repo = $env:GITHUB_WORKSPACE
-          $env:CARGO_HOME = Join-Path $repo '.cargo-home'
-          $env:CARGO_TARGET_DIR = Join-Path $repo 'host\target'
-          $scratch = Join-Path $repo 'host\.test-tmp\native-ci'
-          New-Item -ItemType Directory -Force -Path $env:CARGO_HOME, $scratch | Out-Null
-          $env:TEMP = $scratch
-          $env:TMP = $scratch
-          $env:TMPDIR = $scratch
-          cargo build --manifest-path host/Cargo.toml --locked --release -j 2
-          if ($LASTEXITCODE -ne 0) { throw "Cargo release build failed with exit code $LASTEXITCODE." }
-      - name: Test the Windows host (release)
-        timeout-minutes: 10
-        shell: pwsh
-        run: |
-          $env:CARGO_PROFILE_RELEASE_OPT_LEVEL = '1'
-          $repo = $env:GITHUB_WORKSPACE
-          $env:CARGO_HOME = Join-Path $repo '.cargo-home'
-          $env:CARGO_TARGET_DIR = Join-Path $repo 'host\target'
-          $scratch = Join-Path $repo 'host\.test-tmp\native-ci'
-          New-Item -ItemType Directory -Force -Path $env:CARGO_HOME, $scratch | Out-Null
-          $env:TEMP = $scratch
-          $env:TMP = $scratch
-          $env:TMPDIR = $scratch
-          cargo test --manifest-path host/Cargo.toml --locked --release -j 2 -- --test-threads=1
-          if ($LASTEXITCODE -ne 0) { throw "Cargo release tests failed with exit code $LASTEXITCODE." }
-      - name: Save partial Cargo cache after a trusted run
-        if: ${{ always() && github.event_name != 'pull_request' && steps.cargo-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            .cargo-home
-            host/target
-          key: windows-native-v2-release-o1-${{ hashFiles('host/Cargo.lock', 'vendor/reliquary/**/*.rs', 'vendor/reliquary/**/Cargo.toml', 'vendor/lodestone/**/*.rs', 'vendor/lodestone/**/Cargo.toml') }}
-      - name: Upload the Windows host
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: reliquary-hermes-host-windows-x86_64
-          path: host/target/release/reliquary-hermes-host.exe
-          if-no-files-found: error
-          retention-days: 14
-      - name: Attest the Windows host build
-        if: github.event_name != 'pull_request'
-        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
-        with:
-          subject-path: host/target/release/reliquary-hermes-host.exe
-
-  unix:
-    name: Native host (${{ matrix.platform }})
+  install:
+    name: Install (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-      attestations: write
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: linux-x86_64
+          - target: linux-amd64
             runner: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-          - platform: linux-arm64
+          - target: linux-arm64
             runner: ubuntu-22.04-arm
-            target: aarch64-unknown-linux-gnu
-          - platform: macos-x86_64
+          - target: macos-amd64
             runner: macos-15-intel
-            target: x86_64-apple-darwin
-          - platform: macos-arm64
+          - target: macos-arm64
             runner: macos-15
-            target: aarch64-apple-darwin
-    env:
-      CARGO_HOME: ${{ github.workspace }}/.cargo-home
-      CARGO_TARGET_DIR: ${{ github.workspace }}/host/target
-      CARGO_PROFILE_RELEASE_OPT_LEVEL: '1'
-      MACOSX_DEPLOYMENT_TARGET: '15.0'
-      HOST_PLATFORM: ${{ matrix.platform }}
-      HOST_TARGET: ${{ matrix.target }}
+            surface: --desktop
     steps:
-      - name: Check out the pinned source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Install the stable Rust toolchain
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - name: Restore locked Cargo dependencies and compiler output
-        id: cargo-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          path: |
-            .cargo-home
-            host/target
-          key: unix-native-release-o1-${{ matrix.target }}-${{ hashFiles('host/Cargo.lock', 'vendor/reliquary/**/*.rs', 'vendor/reliquary/**/Cargo.toml', 'vendor/lodestone/**/*.rs', 'vendor/lodestone/**/Cargo.toml') }}
-      - name: Set up the native test directory
+          repository: Lokee86/hermes-agent
+          ref: 2ae307e7a37ab12501d972e101b5d89a19c500e5
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - name: Resolve the Hermes release baseline
         shell: bash
         run: |
-          scratch="$(pwd -P)/host/.test-tmp/native-ci"
-          mkdir -p "$scratch"
-          printf 'TMPDIR=%s\n' "$scratch" >> "$GITHUB_ENV"
-      - name: Build the native host
-        # Cold Intel runner builds can spend over 30 minutes compiling Core.
-        timeout-minutes: 55
+          git fetch --no-tags https://github.com/NousResearch/hermes-agent.git refs/tags/v0.23.0:refs/tags/v0.23.0
+          test "$(git rev-parse 'v0.23.0^{}')" = 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19
+      - name: Prepare Hermes from this checkout
+        uses: ./.github/actions/setup-pm
+        with:
+          toolchain: python
+          extras: '[]'
+          test-environment: ${{ matrix.target == 'linux-amd64' && 'true' || 'false' }}
+      - name: Check catalog install and update transactions
+        if: matrix.target == 'linux-amd64'
         shell: bash
         run: |
-          rustc -vV
-          test "$(rustc -vV | sed -n 's/^host: //p')" = "$HOST_TARGET"
-          cargo build --manifest-path host/Cargo.toml --locked --release --target "$HOST_TARGET" -j 2
-      - name: Test the native host
-        timeout-minutes: 10
+          bash scripts/run_tests.sh tests/hermes_cli/test_plugins_cmd_catalog.py tests/hermes_cli/test_plugin_native_assets.py \
+            -k 'native_host_publishes or catalog_native_asset_selection' -q -j 2
+      - name: Install and run the published host
         shell: bash
-        run: cargo test --manifest-path host/Cargo.toml --locked --release --target "$HOST_TARGET" -j 2 -- --test-threads=1
-      - name: Save partial Cargo cache after a trusted run
-        if: ${{ always() && github.event_name != 'pull_request' && steps.cargo-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            .cargo-home
-            host/target
-          key: unix-native-release-o1-${{ matrix.target }}-${{ hashFiles('host/Cargo.lock', 'vendor/reliquary/**/*.rs', 'vendor/reliquary/**/Cargo.toml', 'vendor/lodestone/**/*.rs', 'vendor/lodestone/**/Cargo.toml') }}
-      - name: Prepare the platform package
-        shell: bash
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+          _TARGET: ${{ matrix.target }}
+          _SURFACE: ${{ matrix.surface }}
         run: |
-          root="$TMPDIR/package"
-          plugin="$root/reliquary"
-          mkdir -p "$plugin"
-          git archive HEAD | tar -xf - -C "$plugin"
-          host="$plugin/host/reliquary-hermes-host"
-          install -m 0755 "$CARGO_TARGET_DIR/$HOST_TARGET/release/reliquary-hermes-host" "$host"
-          version="$(sed -n 's/^version: "\([^"]*\)"$/\1/p' "$plugin/plugin.yaml")"
-          test -n "$version"
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            test "$GITHUB_REF_NAME" = "v$version"
-          fi
-          if [[ "$RUNNER_OS" == Linux ]]; then
-            extension=tar.gz
-            readelf -d "$host" | sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p' > "$plugin/NATIVE-REQUIREMENTS.txt"
-          else
-            extension=zip
-          fi
-          printf 'PACKAGE_ROOT=%s\nPACKAGE_ARCHIVE=%s\n' "$root" \
-            "$TMPDIR/reliquary-hermes-v$version-$HOST_PLATFORM.$extension" >> "$GITHUB_ENV"
-      - name: Package the native host
-        shell: bash
-        run: |
-          if [[ "$RUNNER_OS" == Linux ]]; then
-            tar -czf "$PACKAGE_ARCHIVE" -C "$PACKAGE_ROOT" reliquary
-          else
-            codesign --force --sign - "$PACKAGE_ROOT/reliquary/host/reliquary-hermes-host"
-            ditto -c -k --keepParent "$PACKAGE_ROOT/reliquary" "$PACKAGE_ARCHIVE"
-          fi
-      - name: Set up Python for the packaged-host test
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: '3.11'
-      - name: Test the extracted platform package
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          profile="$(mktemp -d "$TMPDIR/reliquary-profile.XXXXXX")"
-          mkdir -p "$profile/plugins"
-          if [[ "$RUNNER_OS" == Linux ]]; then
-            tar -xzf "$PACKAGE_ARCHIVE" -C "$profile/plugins"
-          else
-            ditto -x -k "$PACKAGE_ARCHIVE" "$profile/plugins"
-          fi
-          plugin="$profile/plugins/reliquary"
-          host="$plugin/host/reliquary-hermes-host"
-          test -x "$host"
-          arch="${HOST_TARGET%%-*}"
-          if [[ "$RUNNER_OS" == Linux ]]; then
-            case "$arch" in
-              x86_64) machine='Advanced Micro Devices X86-64' ;;
-              aarch64) machine='AArch64' ;;
-            esac
-            readelf -h "$host" | grep -F "$machine"
-            glibc="$(readelf --version-info "$host" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -V | tail -1)"
-            printf 'Required glibc: %s\n' "$glibc"
-            test "$(printf '%s\n' GLIBC_2.35 "$glibc" | sort -V | tail -1)" = GLIBC_2.35
-            libraries="$(ldd "$host")"
-            printf '%s\n' "$libraries"
-            [[ "$libraries" != *'not found'* ]]
-          else
-            if [[ "$arch" == aarch64 ]]; then arch=arm64; fi
-            test "$(lipo -archs "$host")" = "$arch"
-            test "$(xcrun vtool -show-build "$host" | awk '$1 == "minos" { print $2 }')" = "$MACOSX_DEPLOYMENT_TARGET"
-            codesign --verify --strict --verbose=2 "$host"
-            codesign --display --verbose=4 "$host" 2>&1 | grep -Fx 'Signature=adhoc'
-          fi
-          python -B -S "$plugin/tests/smoke_packaged_host.py" "$profile"
-          cd "$(dirname "$PACKAGE_ARCHIVE")"
-          archive="$(basename "$PACKAGE_ARCHIVE")"
-          shasum -a 256 "$archive" > "$archive.sha256"
-      - name: Upload the tested platform package
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: reliquary-hermes-${{ matrix.platform }}
-          path: |
-            ${{ env.PACKAGE_ARCHIVE }}
-            ${{ env.PACKAGE_ARCHIVE }}.sha256
-          if-no-files-found: error
-          retention-days: 14
-      - name: Attest the platform package
-        if: github.event_name != 'pull_request'
-        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
-        with:
-          subject-path: ${{ env.PACKAGE_ARCHIVE }}
+          set -euo pipefail
+          args=()
+          if [ -n "$_SURFACE" ]; then args+=("$_SURFACE"); fi
+          "$HERMES_PYTHON" -m scripts.ci.reliquary_catalog_native_smoke \
+            plugin-catalog/reliquary.yaml "$_TARGET" "${args[@]}"
