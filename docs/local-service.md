@@ -60,7 +60,9 @@ The graph uses the authenticated Web SDK byte transport. For Desktop graph suppo
 | macOS Intel | macOS 15 | `reliquary-hermes-v<version>-macos-x86_64.zip` |
 | macOS Apple Silicon | macOS 15 | `reliquary-hermes-v<version>-macos-arm64.zip` |
 
-Other 64-bit GNU/Linux distributions can run the appropriate bundle with glibc 2.35 or later and the shared libraries listed in the release. Alpine/musl requires its own build. Public macOS archives use a Developer ID signature and Apple notarization. Keep the executable permission when extracting these archives. Unpack the `reliquary/` directory into the active Hermes profile's `plugins/` directory. On Windows, use the matching source package with `scripts/build-native.ps1` or the native artifact from the same revision. [Release downloads](https://github.com/Lokee86/reliquary-hermes/releases)
+Other 64-bit GNU/Linux distributions can run the appropriate bundle with glibc 2.35 or later and the shared libraries listed in the release. Alpine/musl requires its own build. Keep the executable permission when extracting these archives. Unpack the `reliquary/` directory into the active Hermes profile's `plugins/` directory. On Windows, use the matching source package with `scripts/build-native.ps1` or the native artifact from the same revision. [Release downloads](https://github.com/Lokee86/reliquary-hermes/releases)
+
+The macOS host uses an ad-hoc signature and is distributed without Apple notarization. Use the Terminal installation steps on the release page to download and check the ZIP before extracting it with `ditto`. A browser download can require a Gatekeeper approval on first use. [Apple’s Gatekeeper guidance](https://support.apple.com/en-us/102445)
 
 ## Lifecycle and recovery
 

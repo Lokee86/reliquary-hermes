@@ -95,7 +95,7 @@ The Native host workflow builds the Linux x86-64 and ARM64 bundles on Ubuntu 22.
 
 The packaged-host smoke runs one isolated profile per archive. Its synthetic 2.1 fixtures contain clocked Archive publications and two retained PHY Memory revisions. Setup resolves the packaged binary and verifies the copied owners. The normal signed client reads an earlier PHY revision, creates a REL Memory through the dashboard, and reads its exact ID, revision, and body after a fresh host start. It also checks that the PHY hash matches. The probe runs without provider credentials or a separate Core CLI checkout.
 
-Public macOS signing runs on a version tag and produces a notarized ZIP. The signing step uses `MACOS_CERTIFICATE_P12_BASE64` and `MACOS_CERTIFICATE_PASSWORD` for the Developer ID Application identity, plus `APPLE_NOTARY_KEY_P8_BASE64`, `APPLE_NOTARY_KEY_ID`, and `APPLE_NOTARY_ISSUER_ID` for Apple's notary service. Store these values as GitHub Actions secrets. Run the same extracted-package check after signing. Record the exact successful workflow and archive checksums when attaching assets to the matching GitHub release.
+The workflow ad-hoc signs the macOS executable before creating the ZIP. The extracted-package check verifies that signature, then runs the same REL/PHY restart smoke as Linux. Record the successful workflow and the archive checksums when attaching assets to the matching GitHub release.
 
 ## Evidence covered
 
