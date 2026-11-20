@@ -99,7 +99,7 @@ try {
     if (message.type() === "error" && /reliquary|plugin failed|unsupported import|WebGL/i.test(message.text())) console.error(message.text());
   });
   await page.addInitScript(() => {
-    localStorage.setItem("hermes.desktop.pluginDecisions.v2", JSON.stringify({ "reliquary-hermes": true }));
+    localStorage.setItem("hermes.desktop.pluginDecisions.v2", JSON.stringify({ reliquary: true }));
     localStorage.setItem("hermes-onboarding-skipped-v1", "1");
   });
   await page.reload();
@@ -107,7 +107,7 @@ try {
     .or(page.getByRole("link", { name: "Reliquary", exact: true }));
   await nav.first().click({ timeout: 240000 });
   if (!fixture.preferencesOnly) {
-    await exerciseKnowledge(page, fixture, "desktop");
+    if (!fixture.fullGraph) await exerciseKnowledge(page, fixture, "desktop");
     await exerciseGraphSelection(page, fixture, "desktop");
   }
   if (fixture.verifyGraphPreferences) console.log(JSON.stringify(await exerciseGraphPreferences(page, fixture, "desktop", readGraphTraffic)));
@@ -133,10 +133,34 @@ async function exerciseGraphSelection(page, fixture, surface) {
   const app = page.getByRole("region", { name: "Reliquary", exact: true });
   const sections = app.getByRole("navigation", { name: "Reliquary sections" });
   await sections.getByRole("button", { name: "Knowledge", exact: true }).click();
+  if (fixture.fullGraph) {
+    const timeout = 205000;
+    await Promise.race([
+      app.locator(".knowledge-heading").getByText(/^REL · /).waitFor({ timeout }),
+      app.getByText("Could not load the authorized owner bindings.", { exact: true })
+        .waitFor({ timeout }).then(() => { throw new Error("Desktop could not load owner bindings."); }),
+    ]);
+  }
   await verifyOwnerScope(app, fixture.ownerIds.main, "REL");
   await app.getByRole("button", { name: "Graph", exact: true }).click();
   const graph = app.locator(".knowledge-graph-wrap");
   await graph.locator('[data-graph-ready="true"]').waitFor({ timeout: 40000 });
+  let initialOverview;
+  if (fixture.fullGraph) {
+    const scene = graph.locator(".graph-render-scene");
+    initialOverview = {
+      nodes: Number(await scene.getAttribute("data-expected-node-count")),
+      residentNodes: Number(await scene.getAttribute("data-resident-node-count")),
+      drawnNodes: Number(await scene.getAttribute("data-drawn-node-count")),
+      drawnChunks: Number(await scene.getAttribute("data-drawn-node-chunks")),
+      downsampled: await scene.getAttribute("data-downsampled"),
+    };
+    const { nodes, chunks } = fixture.fullGraph;
+    assert.deepEqual(initialOverview, {
+      nodes, residentNodes: nodes, drawnNodes: nodes, drawnChunks: chunks, downsampled: "false",
+    });
+    await graph.screenshot({ path: join(scratch, "initial-overview.png"), timeout: 30000 });
+  }
   if (fixture.community) {
     const nav = app.getByRole("complementary", { name: "Knowledge navigation" });
     if (fixture.community.onNextPage) await nav.getByRole("button", { name: "Next community page", exact: true }).click();
@@ -151,6 +175,11 @@ async function exerciseGraphSelection(page, fixture, surface) {
   const box = await canvas.boundingBox();
   assert(box, "Graph canvas has no visible bounds.");
   const inspector = app.getByRole("complementary", { name: "Memory inspector" });
+  if (initialOverview) {
+    await inspectOverviewPick(page, graph, box, inspector);
+    console.log(JSON.stringify({ initialOverview, graphClickOpenedInspector: true }));
+    return;
+  }
   let selected = false;
   const xSamples = fixture.community ? [0.40, 0.44, 0.48, 0.52, 0.56, 0.60] : [0.15, 0.325, 0.5, 0.675, 0.85];
   const ySamples = fixture.community ? [0.32, 0.36, 0.40, 0.44, 0.48, 0.52] : [0.15, 0.325, 0.5, 0.675, 0.85];
@@ -171,4 +200,31 @@ async function exerciseGraphSelection(page, fixture, surface) {
   await app.getByRole("button", { name: "Graph", exact: true }).click();
   await graph.locator('[data-graph-ready="true"]').waitFor({ timeout: 40000 });
   await inspector.getByText("State", { exact: true }).waitFor({ timeout: 30000 });
+}
+
+async function inspectOverviewPick(page, graph, box, inspector) {
+  await inspector.getByText("Select a memory.", { exact: true }).waitFor();
+  const tooltip = graph.locator(".graph-render-tooltip span");
+  const offsets = [0.5, 0.47, 0.53, 0.44, 0.56, 0.41, 0.59, 0.38, 0.62];
+  for (const fy of offsets) {
+    for (const fx of offsets) {
+      const x = box.x + box.width * fx;
+      const y = box.y + box.height * fy;
+      await page.mouse.move(x, y);
+      const visible = await tooltip.waitFor({ timeout: 500 }).then(() => true, () => false);
+      if (!visible) continue;
+      const shortId = (await tooltip.innerText()).slice(-8);
+      await page.mouse.click(x, y);
+      const memoryId = inspector.locator("dl div").filter({
+        has: page.getByText("Memory ID", { exact: true }),
+      }).locator("dd");
+      const selectedId = await memoryId.innerText({ timeout: 15000 });
+      assert.match(selectedId, /^[0-9a-f]{64}$/i);
+      assert(selectedId.endsWith(shortId), "The Inspector opened a different Memory from the hovered node.");
+      assert((await inspector.locator(".knowledge-memory-body").innerText()).trim(), "Selected Memory body is blank.");
+      await inspector.getByRole("heading", { name: "History", exact: true }).waitFor();
+      return;
+    }
+  }
+  assert.fail("The initial graph offered no pickable Memory at the sampled points.");
 }

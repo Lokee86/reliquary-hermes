@@ -124,7 +124,9 @@ The graph’s **Display** menu controls edge brightness, node glow and bloom (1�
 
 ### Graph rendering and bounds
 
-The graph client loads every node chunk at every camera LOD when the manifest has at most 32 chunks and their combined encoded size is at most 16 MiB. Node visibility is independent of edge LOD. Detail edge chunks are used when their own count and byte limits fit; otherwise the client uses the bounded overview/intermediate edge sets. Above the complete-node budget, overview uses a deterministic spatially distributed sample capped at 32 chunks and 16 MiB, reports “Showing X of Y memories,” and retains bounded point picking and direct locate-by-memory-ID. Viewport chunk requests share an eight-request concurrency limit, abandon queued stale work, abort stale in-flight work, and reuse same-chunk requests; decoded node and edge caches each cap at 32 MiB and 64 chunks. These are client-side bounds, not a claim that every graph at every size fits the initial frame.
+The graph client loads every node chunk at every camera LOD when the manifest has at most 32 chunks and their combined encoded size is at most 16 MiB. Node visibility is independent of edge LOD. Detail edge chunks are used when their own count and byte limits fit. Otherwise the client uses the bounded overview and intermediate edge sets. Above the complete-node budget, overview uses a deterministic spatially distributed sample capped at 32 chunks and 16 MiB, reports “Showing X of Y memories,” and retains bounded point picking and direct lookup by Memory ID.
+
+Each viewport schedules at most two chunk requests at a time to match native host admission. The client drops queued stale work, aborts stale in-flight work, and deduplicates matching chunk requests. A signed retryable overload response permits up to two retries within the original native request deadline. Decoded node and edge caches each cap at 32 MiB and 64 chunks.
 
 ## Limits
 

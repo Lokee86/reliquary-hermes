@@ -72,7 +72,12 @@ function desktopBoundary(ctx: PluginContext, current: () => boolean, preferenceP
   return {
     surface: "Desktop", controls, preferenceProfileKey,
     json(path, { method = "GET", body, signal }: RequestOptions = {}) {
-      const timeoutMs = path.endsWith("/prepare") ? 45_000 : requestTimeouts[path];
+      let timeoutMs = path.endsWith("/prepare") ? 45_000 : requestTimeouts[path];
+      if (path === "/dashboard-v1" && typeof body === "object" && body !== null
+          && "operation" in body && body.operation === "ui.owner_sessions") {
+        // This request can start the host after taking the setup lock. Allow its 180-second owner replay.
+        timeoutMs = 205_000;
+      }
       return request(() => ctx.rest(path, { method, body, timeoutMs }), signal);
     },
     bytes: typeof ctx.restBytes === "function" ? async (path, { method = "GET", body, signal }) => {

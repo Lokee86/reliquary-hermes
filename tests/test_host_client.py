@@ -27,7 +27,7 @@ def status_request(session_id="session-a"):
 
 
 @contextmanager
-def endpoint(state, *, signed=True, request_id="check-a"):
+def endpoint(state, *, signed=True, request_id="check-a", busy_graph_replies=0):
     captured = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -51,13 +51,19 @@ def endpoint(state, *, signed=True, request_id="check-a"):
             elif self.path == "/v1/attach":
                 status, result = 200, {"discovery": asdict(discovery), "session_id": body["session_id"],
                                        "rel_id": REL, "user_id": PHY}
+            elif self.path == "/v1/graph-render/node-chunk":
+                if len(captured) <= busy_graph_replies:
+                    status, result = 503, {"code": "inference_backpressure", "retryable": True}
+                else:
+                    status, result = 200, b"\x00\xff"
             else:
                 status, result = 200, {"protocol_version": 1, "request_id": request_id,
                                        "operation": "owner_status", "status": "ok", "revision": None,
                                        "cut": None, "result": {"worker_state": "complete", "pending_jobs": 0}}
-            reply = canonical(result)
+            is_binary = isinstance(result, bytes)
+            reply = result if is_binary else canonical(result)
             self.send_response(status)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "application/octet-stream" if is_binary else "application/json")
             self.send_header("Content-Length", str(len(reply)))
             self.send_header("Connection", "close")
             if signed and authenticated:
@@ -101,6 +107,25 @@ def test_client_rejects_forged_service_without_starting_another(tmp_path, monkey
         with pytest.raises(HostUnavailable, match="host_authentication"):
             client.attach("session-a")
         assert len(captured) == 1 and TOKEN not in repr(captured)
+
+
+@pytest.mark.parametrize(("signed", "busy_replies", "expected_error", "request_count"), [
+    (True, 1, None, 2),
+    (True, 3, "inference_backpressure", 3),
+    (False, 1, "host_authentication", 1),
+])
+def test_graph_read_retries_only_signed_backpressure(tmp_path, signed, busy_replies, expected_error, request_count):
+    with endpoint(tmp_path, signed=signed, busy_graph_replies=busy_replies) as captured:
+        client = HostClient(tmp_path, "profile-a", "principal-a", TOKEN)
+        selector = {"owner_id": REL, "generation": "1", "cut": "1", "session_id": None,
+                    "principal_id": PHY, "generation_id": "1", "chunk_id": 0}
+        if expected_error is None:
+            assert client.graph_render("node-chunk", selector) == b"\x00\xff"
+        else:
+            with pytest.raises(HostUnavailable, match=expected_error):
+                client.graph_render("node-chunk", selector)
+        assert len(captured) == request_count
+        assert all(decode(raw) == selector for _, raw in captured)
 
 
 def test_cold_attach_waits_for_owner_history_replay(tmp_path, monkeypatch):

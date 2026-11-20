@@ -1,4 +1,4 @@
-"""Hermes directory-plugin entry point for Reliquary."""
+"""Hermes directory-plugin entry point for the Reliquary MemoryProvider."""
 
 
 def register(context):

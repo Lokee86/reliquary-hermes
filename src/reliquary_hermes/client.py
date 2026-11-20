@@ -290,10 +290,14 @@ class HostClient:
                         code = detail
                 except ContractError:
                     pass
-            if path.startswith("/v1/graph-render/") and status in {404, 413}:
+            if path.startswith("/v1/graph-render/") and status in {404, 413, 503}:
                 try:
-                    graph_code = decode(reply).get("code")
-                    if isinstance(graph_code, str) and graph_code in {
+                    error = obj(decode(reply), {"code", "retryable"})
+                    graph_code = identifier(error["code"])
+                    if status == 503:
+                        if graph_code == "inference_backpressure" and error["retryable"] is True:
+                            code = graph_code
+                    elif graph_code in {
                         "graph_title_unavailable", "graph_node_limit", "graph_relation_limit",
                         "graph_community_limit", "graph_generation_limit", "graph_manifest_limit",
                         "graph_chunk_limit", "graph_source_scan_limit",
@@ -316,9 +320,18 @@ class HostClient:
             raise HostUnavailable("host_unavailable")
         seconds = 30.0 if operation == "prepare" else 5.0
         media = "application/octet-stream" if operation.endswith("-chunk") else "application/json"
-        return self._exchange(discovery, "/v1/graph-render/" + operation, canonical(selector),
-                              time.monotonic() + _CONNECT_SECONDS + seconds, response_seconds=seconds,
-                              media_type=media, response_limit=limits[operation])
+        deadline = time.monotonic() + _CONNECT_SECONDS + seconds
+        body = canonical(selector)
+        for delay in (0.1, 0.2):
+            try:
+                return self._exchange(discovery, "/v1/graph-render/" + operation, body, deadline,
+                                      response_seconds=seconds, media_type=media, response_limit=limits[operation])
+            except HostUnavailable as error:
+                if str(error) != "inference_backpressure" or time.monotonic() + delay >= deadline:
+                    raise
+                time.sleep(delay)
+        return self._exchange(discovery, "/v1/graph-render/" + operation, body, deadline,
+                              response_seconds=seconds, media_type=media, response_limit=limits[operation])
 
     def _launch(self) -> os.stat_result | None:
         if self._process is not None and self._process.poll() is None:

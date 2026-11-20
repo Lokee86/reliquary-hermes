@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { GraphRenderClient } from "../src/graph/render/client";
+import { GRAPH_RENDER_CHUNK_REQUEST_CONCURRENCY, GraphRenderClient } from "../src/graph/render/client";
 import { findFrameLabel } from "../src/graph/render/labels";
 import type { GraphRenderTransport } from "../src/graph/render/transport";
 import type { GraphRenderManifest } from "../src/graph/render/types";
@@ -319,25 +319,27 @@ const panClient = await GraphRenderClient.prepare("owner", {
   },
 });
 const stalePan = panClient.loadViewport({ center: [-80, 0, 0], radius: 5 });
-await waitUntil(() => panFetches === 8);
-assert.equal(panClient.activeChunkRequestCount, 8);
-assert.equal(panClient.queuedChunkRequestCount, 12);
+const chunkRequests = GRAPH_RENDER_CHUNK_REQUEST_CONCURRENCY;
+assert.equal(chunkRequests, 2, "the native host admits two ordinary requests");
+const panChunksPerView = panChunks.length / 2;
+await waitUntil(() => panFetches === chunkRequests);
+assert.equal(panClient.activeChunkRequestCount, chunkRequests);
+assert.equal(panClient.queuedChunkRequestCount, panChunksPerView - chunkRequests);
 const currentPan = panClient.loadViewport({ center: [80, 0, 0], radius: 5 });
 const stalePanResult = assert.rejects(stalePan, /superseded/);
-assert.equal(panClient.queuedChunkRequestCount, 20, "old queued chunks are replaced by the newest viewport plan");
-await waitUntil(() => panFetches === 16);
-assert.equal(panActive, 8, "the latest viewport starts as soon as stale active fetches abort");
-await releasePanBatch();
-await waitUntil(() => panFetches === 24);
-await releasePanBatch();
-await waitUntil(() => panFetches === 28);
-await releasePanBatch();
+assert.equal(panClient.queuedChunkRequestCount, panChunksPerView, "old queued chunks are replaced by the newest viewport plan");
+await waitUntil(() => panFetches === 2 * chunkRequests);
+assert.equal(panActive, chunkRequests, "the latest viewport starts as soon as stale active fetches abort");
+for (let produced = chunkRequests; produced <= panChunksPerView; produced += chunkRequests) {
+  await waitUntil(() => panFetches === produced + chunkRequests);
+  await releasePanBatch();
+}
 await stalePanResult;
 const currentPanFrame = await currentPan;
-assert.equal(currentPanFrame.nodeChunks.length, 20);
-assert.ok(currentPanFrame.nodeChunks.every(chunk => chunk.chunkId >= 20), "only the latest viewport frame survives");
-assert.ok(panPeakActive <= 8, "shared transport concurrency stays bounded during rapid pans");
-assert.equal(panFetches, 28, "stale queued requests are discarded before transport fetch");
+assert.equal(currentPanFrame.nodeChunks.length, panChunksPerView);
+assert.ok(currentPanFrame.nodeChunks.every(chunk => chunk.chunkId >= panChunksPerView), "only the latest viewport frame survives");
+assert.ok(panPeakActive <= chunkRequests, "shared transport concurrency stays bounded during rapid pans");
+assert.equal(panFetches, panChunksPerView + chunkRequests, "stale queued requests are discarded before transport fetch");
 
 const reuseChunks = Array.from({ length: 13 }, (_, chunkId) => ({
   chunkId, parentHierarchyId: 1, bounds, nodeCount: 2, byteLen: 80, labelCandidates: [],
@@ -355,12 +357,14 @@ const reuseClient = await GraphRenderClient.prepare("owner", {
   },
 });
 const firstReuseLoad = reuseClient.loadViewport({ center: [0, 0, 0], radius: 100 });
-await waitUntil(() => reuseFetches === 8);
+await waitUntil(() => reuseFetches === chunkRequests);
 const secondReuseLoad = reuseClient.loadViewport({ center: [0, 0, 0], radius: 100 });
-assert.equal(reuseClient.queuedChunkRequestCount, 5, "same chunks reuse active and queued requests across viewport versions");
-await releaseReuseBatch();
-await waitUntil(() => reuseFetches === 13);
-await releaseReuseBatch();
+assert.equal(reuseClient.queuedChunkRequestCount, reuseChunks.length - chunkRequests,
+  "same chunks reuse active and queued requests across viewport versions");
+for (let offset = 0; offset < reuseChunks.length; offset += chunkRequests) {
+  await waitUntil(() => reuseFetches === Math.min(offset + chunkRequests, reuseChunks.length));
+  await releaseReuseBatch();
+}
 assert.equal((await firstReuseLoad).nodeChunks.length, 13);
 assert.equal((await secondReuseLoad).nodeChunks.length, 13);
 assert.equal(reuseFetches, 13, "viewport refresh does not duplicate chunk fetches");

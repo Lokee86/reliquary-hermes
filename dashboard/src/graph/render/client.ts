@@ -40,7 +40,8 @@ const INCIDENT_EDGE_LIMIT = 128;
 const RESIDENT_CHUNK_LIMIT = 2 * GRAPH_RENDER_DETAIL_CHUNK_BUDGET;
 const RESIDENT_NODE_BYTE_LIMIT = 32 * 1024 * 1024;
 const RESIDENT_EDGE_BYTE_LIMIT = 32 * 1024 * 1024;
-export const GRAPH_RENDER_CHUNK_REQUEST_CONCURRENCY = 8;
+// The native host admits two ordinary requests and reserves its other workers for control traffic.
+export const GRAPH_RENDER_CHUNK_REQUEST_CONCURRENCY = 2;
 // Overview may eagerly admit modest complete point clouds, independently of edge LOD.
 // The cap bounds raw chunk residency even if a future host changes chunk sizing.
 export const GRAPH_RENDER_NODE_OVERVIEW_BYTE_BUDGET = 16 * 1024 * 1024;

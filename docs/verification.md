@@ -721,6 +721,12 @@ Installed Web display verification is complete for the overview capture. The rea
 
 This receipt does not establish that an already-open Desktop process reloaded the module or verify the deployed graph in Desktop. Full Memory inspector content acceptance is also outside this display check; a separate review found that the original inspector metadata lookup scanned at most four 128-entry pages (512 Memories). See [Memory inspector lookup](#memory-inspector-lookup) for the focused correction. The earlier installed baseline returned zero node chunk responses despite a 2,191-node manifest. Video capture and the remaining interaction and platform acceptance are tracked separately; no video or full-spec completion claim is made here.
 
+### Full 28-day graph in Hermes Desktop (2026-11-20)
+
+The installed directory plugin ran in an isolated, already configured Windows profile using Hermes `168a923023a7018be3dbf66530531dd20b1834b9` with the repository's Desktop byte bridge and Electron 44.9.3. On a fresh host start, it opened copies of the same 28-day graph snapshot used in the Web receipt above. The initial frame had 2,191 expected, resident and drawn nodes in all 13 node chunks, with zero downsampling. A pointer click on a hovered node opened the matching Memory ID with its body and History in the Inspector. Both owners and their copies retained their input checksums.
+
+The previous eight-request client could saturate the host's two ordinary request slots. The renderer now issues at most two chunk requests at once. The Python bridge retries signed, retryable backpressure responses within the original request deadline. Desktop gives the initial owner binding request time to finish a native open. The test installed the nested provider and generated Desktop bundle together. The opt-in `fullGraph` fixture in `desktop/tests/live-smoke.mjs` checks the initial draw counts and matches the clicked Memory to the hover tooltip. The pinned Python run passed 420 tests with 31 optional platform and process cases skipped. Dashboard typechecking, all 26 Node tests and the shared Web/Desktop build passed. Local evidence is under `C:/!bin/workspace-data/reliquary-verification-2026-11-20/desktop`.
+
 ## Related docs
 
 - [HU09 native file-dialog specification](hu09-native-file-dialogs-onboarding-spec-2026-11-09.md)
