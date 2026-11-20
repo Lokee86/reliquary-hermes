@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: Lokee86/hermes-agent
-          ref: 2ae307e7a37ab12501d972e101b5d89a19c500e5
+          ref: 262fead775ef523b10f5ecf9f3955f034432ca5d
           fetch-depth: 0
           filter: blob:none
           persist-credentials: false
