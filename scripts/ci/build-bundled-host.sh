@@ -39,6 +39,10 @@ fi
 
 export RUSTFLAGS="-C linker=$CC --remap-path-prefix=$source_root=/reliquary/source --remap-path-prefix=$scratch=/reliquary/build"
 export CFLAGS="-ffile-prefix-map=$source_root=/reliquary/source -ffile-prefix-map=$scratch=/reliquary/build"
+if [[ "$target" == aarch64-unknown-linux-gnu ]]; then
+    # Keep Lore's allocator compatible with ARMv8-A despite its Neoverse CPU tuning.
+    CFLAGS="$CFLAGS -march=armv8-a"
+fi
 export CXXFLAGS="$CFLAGS"
 cargo build --manifest-path host/Cargo.toml --locked --release --target "$target" -j 2
 host="$output/reliquary-hermes-host"
