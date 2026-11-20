@@ -19,7 +19,7 @@ HOST_PATHS = {f"host/bundled/{target}/{HOST}" for target in TARGETS}
 SMOKE = "tests/smoke_packaged_host.py"
 
 
-def seed_catalog(profile, repo, pin, *, bundled=True):
+def select_catalog_pin(profile, repo, pin, *, bundled=True):
     entry = {
         "name": "reliquary",
         "description": "Reliquary native catalog acceptance",
@@ -40,13 +40,20 @@ def seed_catalog(profile, repo, pin, *, bundled=True):
         "removed": [],
     }
     (cache / "plugin-catalog.json").write_text(json.dumps(snapshot), encoding="utf-8")
+    results = json.loads(hermes("search", "reliquary", "--json", capture_stdout=True))["results"]
+    selected = next((result for result in results if result["name"] == "reliquary"), {})
+    assert (selected.get("repo"), selected.get("sha"), selected.get("platforms")) == (
+        repo, pin, entry["platforms"],
+    ), f"stock CLI selected a different catalog entry: {selected.get('repo')} @ {selected.get('sha')}"
+    print(f"Stock Hermes resolved the fixture catalog pin {pin}.", flush=True)
 
 
-def hermes(command, *options):
-    subprocess.run(
-        [sys.executable, "-B", "-m", "hermes_cli.main", "plugins", command, "reliquary", *options],
-        stdin=subprocess.DEVNULL, check=True, timeout=360,
-    )
+def hermes(*arguments, capture_stdout=False):
+    return subprocess.run(
+        [sys.executable, "-B", "-m", "hermes_cli.main", "plugins", *arguments],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE if capture_stdout else None,
+        check=True, timeout=360,
+    ).stdout
 
 
 def git_paths(plugin, *args):
@@ -108,14 +115,14 @@ def smoke_repin(profile, plugin, repo, pin, expected_host):
 
     # Move off the pruned checkout and back using two real published pins. The
     # source-only v0.3.0 checkout is a transient fixture and is never activated.
-    seed_catalog(profile, repo, SOURCE_RELEASE, bundled=False)
-    hermes("update")
+    select_catalog_pin(profile, repo, SOURCE_RELEASE, bundled=False)
+    hermes("update", "reliquary")
     check_pin(plugin, SOURCE_RELEASE)
     check_hosts(plugin, set())
     assert {path: disk_digest(path) for path in digests} == digests, "the outgoing re-pin changed user data"
 
-    seed_catalog(profile, repo, pin)
-    hermes("update")
+    select_catalog_pin(profile, repo, pin)
+    hermes("update", "reliquary")
     check_pin(plugin, pin)
     check_hosts(plugin, HOST_PATHS)
     assert {path: disk_digest(path) for path in digests} == digests, "the returning re-pin changed user data"
@@ -136,8 +143,13 @@ def main():
     profile.mkdir()
     os.environ["HERMES_HOME"] = str(profile)
 
-    seed_catalog(profile, args.repo, args.pin)
-    hermes("install", "--no-enable", "--yes-deps")
+    # Keep the background default-plugin installer out of this explicit install.
+    os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
+    # Stock Hermes clears catalog caches during its first boot for a new
+    # installation revision. Let the disposable profile finish that boot first.
+    hermes("list", "--user", "--json", capture_stdout=True)
+    select_catalog_pin(profile, args.repo, args.pin)
+    hermes("install", "reliquary", "--no-enable", "--yes-deps")
     plugin = profile / "plugins" / "reliquary"
     expected_host = f"host/bundled/{args.target}/{HOST}"
     check_pin(plugin, args.pin)

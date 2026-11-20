@@ -4,9 +4,11 @@ set -euo pipefail
 
 target=${1:?usage: smoke-bundled-catalog.sh TARGET}
 project=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
-pin=$(git -C "$project" rev-parse HEAD)
+checkout=$(git -C "$project" rev-parse HEAD)
 : "${GITHUB_REPOSITORY:?the candidate must be reachable from its GitHub repository}"
-test "$pin" = "${GITHUB_SHA:-$pin}"
+test "$checkout" = "${GITHUB_SHA:-$checkout}"
+pin=${CATALOG_PIN:-$checkout}
+test "$pin" = "$(git -C "$project" rev-parse --verify "$pin^{commit}")"
 
 scratch=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/reliquary-stock-catalog.XXXXXX")
 trap 'rm -rf -- "$scratch"' EXIT
