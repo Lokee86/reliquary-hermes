@@ -25,7 +25,7 @@ def seed_catalog(profile, repo, pin, *, bundled=True):
         "description": "Reliquary native catalog acceptance",
         "repo": repo,
         "sha": pin,
-        "version": "0.3.0",
+        "version": "0.3.1" if bundled else "0.3.0",
         "tier": "community",
         "category": "memory",
         "platforms": ["linux", "macos"],
