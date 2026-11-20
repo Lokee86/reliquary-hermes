@@ -8,12 +8,22 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      catalog_bundle:
+        description: Catalog bundle workflow mode
+        type: choice
+        options:
+          - release
+          - seed
+          - verify
+        default: release
 
 permissions:
   contents: read
 
 jobs:
   windows:
+    if: ${{ !inputs.catalog_bundle || inputs.catalog_bundle == 'release' }}
     runs-on: windows-latest
     timeout-minutes: 45
     permissions:
@@ -111,6 +121,7 @@ jobs:
             runner: macos-15
             target: aarch64-apple-darwin
     env:
+      CATALOG_BUNDLE: ${{ inputs.catalog_bundle || 'release' }}
       CARGO_HOME: ${{ github.workspace }}/.cargo-home
       CARGO_TARGET_DIR: ${{ github.workspace }}/host/target
       CARGO_PROFILE_RELEASE_OPT_LEVEL: '1'
@@ -120,9 +131,55 @@ jobs:
     steps:
       - name: Check out the pinned source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Install the stable Rust toolchain
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable action
+        with:
+          toolchain: ${{ env.CATALOG_BUNDLE == 'release' && 'stable' || '1.100.0' }}
+      - name: Build a fresh catalog host
+        if: env.CATALOG_BUNDLE != 'release'
+        timeout-minutes: 65
+        shell: bash
+        run: bash scripts/ci/build-bundled-host.sh "$HOST_TARGET"
+      - name: Upload the seed host
+        if: env.CATALOG_BUNDLE == 'seed'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bundled-host-${{ matrix.platform }}
+          path: ${{ runner.temp }}/reliquary-bundled-host/reliquary-hermes-host
+          if-no-files-found: error
+          retention-days: 14
+      - name: Compare the fresh build with the tracked host
+        if: env.CATALOG_BUNDLE == 'verify'
+        shell: bash
+        run: |
+          tracked="host/bundled/$HOST_PLATFORM/reliquary-hermes-host"
+          fresh="$RUNNER_TEMP/reliquary-bundled-host/reliquary-hermes-host"
+          test "$(git ls-tree HEAD -- "$tracked" | awk '{print $1}')" = 100755
+          test -x "$tracked"
+          shasum -a 256 "$fresh" "$tracked"
+          cmp "$fresh" "$tracked"
+      - name: Attest the fresh native executable
+        if: env.CATALOG_BUNDLE == 'verify'
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: ${{ runner.temp }}/reliquary-bundled-host/reliquary-hermes-host
+      - name: Verify the tracked executable at the exact commit
+        if: env.CATALOG_BUNDLE == 'verify'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh attestation verify "host/bundled/$HOST_PLATFORM/reliquary-hermes-host" \
+            --repo "$GITHUB_REPOSITORY" --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA" \
+            --source-ref "$GITHUB_REF" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/native.yml" \
+            --deny-self-hosted-runners
+      - name: Test the bundled host through the stock catalog installer
+        if: env.CATALOG_BUNDLE == 'verify'
+        timeout-minutes: 15
+        shell: bash
+        run: bash scripts/ci/smoke-bundled-catalog.sh "$HOST_PLATFORM"
       - name: Restore locked Cargo dependencies and compiler output
+        if: env.CATALOG_BUNDLE == 'release'
         id: cargo-cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -131,12 +188,14 @@ jobs:
             host/target
           key: unix-native-release-o1-${{ matrix.target }}-${{ hashFiles('host/Cargo.lock', 'vendor/reliquary/**/*.rs', 'vendor/reliquary/**/Cargo.toml', 'vendor/lodestone/**/*.rs', 'vendor/lodestone/**/Cargo.toml') }}
       - name: Set up the native test directory
+        if: env.CATALOG_BUNDLE == 'release'
         shell: bash
         run: |
           scratch="$(pwd -P)/host/.test-tmp/native-ci"
           mkdir -p "$scratch"
           printf 'TMPDIR=%s\n' "$scratch" >> "$GITHUB_ENV"
       - name: Build the native host
+        if: env.CATALOG_BUNDLE == 'release'
         # Cold Intel runner builds can spend over 30 minutes compiling Core.
         timeout-minutes: 55
         shell: bash
@@ -145,11 +204,12 @@ jobs:
           test "$(rustc -vV | sed -n 's/^host: //p')" = "$HOST_TARGET"
           cargo build --manifest-path host/Cargo.toml --locked --release --target "$HOST_TARGET" -j 2
       - name: Test the native host
+        if: env.CATALOG_BUNDLE == 'release'
         timeout-minutes: 10
         shell: bash
         run: cargo test --manifest-path host/Cargo.toml --locked --release --target "$HOST_TARGET" -j 2 -- --test-threads=1
       - name: Save partial Cargo cache after a trusted run
-        if: ${{ always() && github.event_name != 'pull_request' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        if: ${{ always() && env.CATALOG_BUNDLE == 'release' && github.event_name != 'pull_request' && steps.cargo-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
@@ -157,6 +217,7 @@ jobs:
             host/target
           key: unix-native-release-o1-${{ matrix.target }}-${{ hashFiles('host/Cargo.lock', 'vendor/reliquary/**/*.rs', 'vendor/reliquary/**/Cargo.toml', 'vendor/lodestone/**/*.rs', 'vendor/lodestone/**/Cargo.toml') }}
       - name: Prepare the platform package
+        if: env.CATALOG_BUNDLE == 'release'
         shell: bash
         run: |
           root="$TMPDIR/package"
@@ -179,6 +240,7 @@ jobs:
           printf 'PACKAGE_ROOT=%s\nPACKAGE_ARCHIVE=%s\n' "$root" \
             "$TMPDIR/reliquary-hermes-v$version-$HOST_PLATFORM.$extension" >> "$GITHUB_ENV"
       - name: Package the native host
+        if: env.CATALOG_BUNDLE == 'release'
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == Linux ]]; then
@@ -188,10 +250,12 @@ jobs:
             ditto -c -k --keepParent "$PACKAGE_ROOT/reliquary" "$PACKAGE_ARCHIVE"
           fi
       - name: Set up Python for the packaged-host test
+        if: env.CATALOG_BUNDLE == 'release'
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.11'
       - name: Test the extracted platform package
+        if: env.CATALOG_BUNDLE == 'release'
         timeout-minutes: 10
         shell: bash
         run: |
@@ -230,6 +294,7 @@ jobs:
           archive="$(basename "$PACKAGE_ARCHIVE")"
           shasum -a 256 "$archive" > "$archive.sha256"
       - name: Upload the tested platform package
+        if: env.CATALOG_BUNDLE == 'release'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: reliquary-hermes-${{ matrix.platform }}
@@ -239,7 +304,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Attest the platform package
-        if: github.event_name != 'pull_request'
+        if: env.CATALOG_BUNDLE == 'release' && github.event_name != 'pull_request'
         uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: ${{ env.PACKAGE_ARCHIVE }}
