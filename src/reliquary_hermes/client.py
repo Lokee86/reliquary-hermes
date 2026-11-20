@@ -12,6 +12,7 @@ import time
 from urllib.parse import urlsplit
 
 from .authority import Discovery
+from .native_host import bundle_at_launch, prune_unused_hosts
 from .protocol import Request, Response
 from .setup_wire import switch_review as parse_switch_review, switch_status as parse_switch_status
 from .validation import (ContractError, MAX_WIRE_BYTES, canonical, choice, decode, digest,
@@ -319,11 +320,12 @@ class HostClient:
                               time.monotonic() + _CONNECT_SECONDS + seconds, response_seconds=seconds,
                               media_type=media, response_limit=limits[operation])
 
-    def _launch(self) -> None:
+    def _launch(self) -> os.stat_result | None:
         if self._process is not None and self._process.poll() is None:
-            return
+            return None
         if self._binary is None or not self._binary.is_absolute() or not self._binary.is_file():
             raise HostUnavailable("host_not_configured")
+        bundle = bundle_at_launch(self._state_dir, self._binary)
         environment = {name: os.environ[name] for name in ("SystemRoot", "WINDIR") if name in os.environ}
         environment.update({name: str(self._state_dir) for name in ("TEMP", "TMP", "TMPDIR")})
         platform = ({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt"
@@ -338,6 +340,7 @@ class HostClient:
                 stream.write(canonical({"token": self._token}))
         except OSError:
             raise HostUnavailable("host_start_failed") from None
+        return bundle
 
     def _attach(self, discovery: Discovery, session_id: str, project_id: str | None, deadline: float) -> SessionBinding:
         request = {"discovery": asdict(discovery), "principal_id": self._principal_id, "session_id": session_id}
@@ -380,13 +383,16 @@ class HostClient:
                 pass
         if self._binary is None:
             raise HostUnavailable("host_unavailable")
-        self._launch()
+        bundle = self._launch()
         deadline = time.monotonic() + OWNER_OPEN_SECONDS
         while True:
             remaining = _remaining(deadline)
             current = self._read_discovery()
             if current is not None and current != previous:
-                return exchange(current, deadline)
+                result = exchange(current, deadline)
+                if bundle is not None and self._process is not None and self._process.poll() is None:
+                    prune_unused_hosts(self._binary, bundle)
+                return result
             time.sleep(min(0.03, remaining))
 
     def connect_dashboard(self, session_id: str | None, *, owners_fingerprint: str | None = None) -> dict:

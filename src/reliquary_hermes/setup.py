@@ -8,6 +8,7 @@ import subprocess
 from . import setup_paths
 from .capture_policy import ENROLLMENT_FILE, capture_cutoff, history_supported
 from .client import OWNER_OPEN_SECONDS, HostClient, HostUnavailable
+from .native_host import BUNDLED_HOST_ERRORS, packaged_host_path
 from .projects import active_projects, inventory, routing_available
 from .setup_wire import switch_review as parse_switch_review, switch_status as parse_switch_status
 from .settings import (
@@ -40,18 +41,12 @@ def _local_path(value):
     return value
 
 
-def packaged_host_path(home: Path) -> Path:
-    binary = "reliquary-hermes-host.exe" if os.name == "nt" else "reliquary-hermes-host"
-    return home / "plugins" / "reliquary" / "host" / binary
-
-
 def _defaults(home):
     state = _state_dir(home)
     prior = _read_optional(state / "owners.json")
-    installed = packaged_host_path(home)
     # Existing installations may already refer to a separately provisioned host.
     saved = _read_optional(state / "provider.json").get("binary")
-    binary = installed if installed.is_file() or not saved else Path(saved)
+    binary = packaged_host_path(home, Path(saved) if saved else None, setup=True)
     defaults = {"main_rel": prior.get("main_rel"), "active_phy": prior.get("active_phy"),
                 "projects": prior.get("projects", {})}
     return prior, binary, defaults
@@ -459,5 +454,6 @@ def cli_setup(home):
             print("Reliquary setup could not validate the selected owners.")
     except (EOFError, KeyboardInterrupt):
         print("Reliquary setup cancelled.")
-    except (OSError, RuntimeError, ValueError):
-        print("Reliquary setup could not validate or save this profile's configuration.")
+    except (OSError, RuntimeError, ValueError) as exc:
+        message = BUNDLED_HOST_ERRORS.get(str(exc), "Reliquary setup could not validate or save this profile's configuration.")
+        print(message)

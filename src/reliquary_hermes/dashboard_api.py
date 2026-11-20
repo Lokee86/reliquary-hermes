@@ -30,6 +30,8 @@ _DIALOG_BODY_BYTES = 128
 _SETUP_FIELDS = frozenset({"main_rel", "active_phy", "projects"})
 _SETUP_ERRORS = {
     "runtime_unavailable": (503, "runtime_unavailable"),
+    "unsupported_bundled_host": (503, "runtime_unavailable"),
+    "missing_bundled_host": (503, "runtime_unavailable"),
     "preflight_unavailable": (503, "preflight_unavailable"),
     "service_restart_required": (409, "service_restart_required"),
     "source_capture_setup_required": (503, "source_capture_setup_required"),

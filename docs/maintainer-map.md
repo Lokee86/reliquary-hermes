@@ -11,6 +11,7 @@ Route integration changes to the owning contract, implementation boundary and ve
 | Change area | Canonical documentation | Implementation and verification |
 | --- | --- | --- |
 | Hermes setup, pinned hooks and profile isolation | [Host audit](host-audit.md) and [local service](local-service.md) | `setup.py`, `projects.py`, `setup_paths.py`, `setup_dialog.py`, `setup_dialog_locality.py`, `provider.py`, `settings.py`, `capture_policy.py`, standalone registration and pinned provider tests |
+| Native host selection and bundle cleanup | [Local service](local-service.md) and [verification](verification.md) | `native_host.py`, the authenticated startup in `client.py`, and the native CI matrix |
 | Owner creation, live assignments and retained session bindings | [Local service](local-service.md), [protocol](protocol.md) | `setup.py`, `setup_wire.py`, `registry.rs` and `service.rs`. Native registry and signed Setup probes verify the same live service and restart recovery. |
 | Authenticated transport and response correlation | [Protocol](protocol.md) | `client.py`, Rust service protocol and HTTP modules, local transport and process tests |
 | Hermes-owned inference, identity and worker lifecycle | [Protocol](protocol.md) and [local service](local-service.md) | `inference_worker.py`, native inference broker, hosted Root construction, worker and isolated model/process tests |

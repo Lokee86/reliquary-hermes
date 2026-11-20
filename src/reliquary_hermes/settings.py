@@ -5,6 +5,7 @@ from pathlib import Path
 from stat import S_ISREG
 from threading import local
 
+from .native_host import packaged_host_path
 from .validation import MAX_WIRE_BYTES, canonical, decode, identifier, obj, require, text
 
 TOKEN_VAR = "RELIQUARY_HERMES_TOKEN"
@@ -85,7 +86,9 @@ def read_settings(home: Path) -> Settings:
     # Accepted owner paths and mounts are verified by the native registry.
     owners = _owner_config(_read_object(state / "owners.json"), verify_files=False)
     provider = obj(_read_object(state / "provider.json"), {"binary"})
-    return Settings(state, owners["profile_id"], owners["principal_id"], _existing_file(provider["binary"]))
+    binary = packaged_host_path(home, Path(text(provider["binary"])))
+    require(binary.is_absolute() and binary.is_file(), "invalid_local_file")
+    return Settings(state, owners["profile_id"], owners["principal_id"], binary)
 
 
 def _profile_secret(home: Path):

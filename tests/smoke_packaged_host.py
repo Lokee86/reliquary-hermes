@@ -87,7 +87,7 @@ def smoke(home):
         assert file_hash(path) == starting_hashes[kind]
 
     prior, binary, defaults = _defaults(home)
-    assert binary.parent == PACKAGE / "host" and binary.is_file(), "packaged host was not discovered"
+    assert binary.is_relative_to(PACKAGE / "host") and binary.is_file(), "packaged host was not discovered"
     request = _candidate(home, {
         "main_rel": str(paths["REL"]), "active_phy": str(paths["PHY"]),
     }, prior, defaults)

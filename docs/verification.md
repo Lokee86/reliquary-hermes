@@ -97,6 +97,10 @@ The packaged-host smoke runs one isolated profile per archive. Its synthetic 2.1
 
 The workflow ad-hoc signs the macOS executable before creating the ZIP. The extracted-package check verifies that signature, then runs the same REL/PHY restart smoke as Linux. Record the successful workflow and the archive checksums when attaching assets to the matching GitHub release.
 
+### Catalog host bundle
+
+The native matrix produces four executable inputs for the catalog checkout. The verification run at the resulting pin rebuilds each executable separately, compares its final bytes with the tracked file, attests the matching build, and verifies the tracked file against the repository and exact pin. Stock Hermes installs from the pin in a disposable profile on each native runner. The packaged-host smoke verifies signed startup, retained PHY history and REL persistence across restart. A Linux re-pin check exercises an already pruned checkout and checks that the replacement starts and prunes without changing profile settings or owner data.
+
 ## Evidence covered
 
 - Strict bounded request and response DTOs reject spoofed authority, extra fields, malformed wire data and mismatched IDs, cuts or provenance. Each selected Memory has one correlated source-provenance entry.

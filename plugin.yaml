@@ -1,5 +1,5 @@
 name: reliquary
-version: "0.3.0"
+version: "0.3.1"
 description: "Local Reliquary memory and source provenance with Hermes-owned inference and an interactive relationship graph."
 author: Lokee86
 kind: exclusive

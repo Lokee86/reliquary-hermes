@@ -12,7 +12,7 @@ Each configured profile has a separate local service and credential. Multiple se
 
 ## Configuration and setup
 
-### Native release package (0.3.0)
+### Native hosts
 
 The directory package is named `reliquary` on every surface. Its root entry registers the memory provider and lifecycle observer. The web router resolves the provider's dashboard module through Hermes. Use the native executable built for the same source revision as the plugin. [Native host workflow](../.github/workflows/native.yml)
 
@@ -22,7 +22,7 @@ Setup and host startup may take over a minute on a large retained history. An ow
 
 Hosted processing uses only the profile-bound Hermes `ctx.llm` worker. The native process receives no model credentials and does not open a model route file. See the current [installation and disclosures](../README.md).
 
-1. Install the Reliquary plugin and its native host from the same plugin revision so both agree on new owner receipts. Setup looks for `plugins/reliquary/host/reliquary-hermes-host` on Linux and macOS and the `.exe` pathname on Windows. It accepts the existing saved binary path if the packaged file is absent. [Platform installation](#platform-installation)
+1. Install the Reliquary plugin and native host from the same revision. On Linux and macOS the catalog checkout selects a host under `plugins/reliquary/host/bundled/`. Existing profiles using the packaged path resolve the installed bundle on their next host start. Manual release archives provide the single executable in `host/`, and Windows uses the `.exe` in that directory. The runtime also accepts a separately configured host path. [Platform installation](#platform-installation)
 2. Select or create a General REL and active PHY. Either REL role accepts a verified REL 2.1 with any stored scope. Selecting an existing file keeps its original header and owner ID. New RELs for both roles report `unspecified`. A Hermes host with trusted session project attribution can select or create a dedicated REL for an active project. Stock Hermes shows saved project REL paths read-only and uses General memory for new conversations. Create Hermes projects through Projects or `hermes project create`, then refresh the list.
 3. Review the setup and connect. Hosts with project attribution show a confirmation when projects will use General memory. Setup derives profile and service identity, validates owners through the Rust host, provisions a random credential in Hermes secret storage, and checks the signed host topology before selecting the provider. Run `hermes memory setup reliquary` for headless setup.
 4. Start a Hermes session to attach the provider. Already attached sessions keep their accepted REL.
@@ -52,6 +52,10 @@ Paths are absolute. Configuration is scoped to the `hermes_home` that the pinned
 The graph uses the authenticated Web SDK byte transport. For Desktop graph support, build Hermes Desktop with the [bounded plugin REST byte bridge](../patches/hermes-45882968-plugin-rest-bytes.patch) on an isolated checkout at `458829681db8761e50b8242aa034d23ae9bcdcd5`. The SDK forwards bounded `application/octet-stream` bytes over its existing profile-aware REST and Electron IPC path. On a stock Desktop build, List and the inspector remain available and Graph explains the required host capability.
 
 ### Platform installation
+
+For catalog installs on Linux and macOS, Reliquary picks the native OS and CPU where the Hermes backend runs. Apple Silicon uses the ARM64 host under Rosetta. The first authenticated start removes the three unused executable files from the installed checkout. An interrupted cleanup can finish at a later start. Hermes may report those tracked deletions as local edits when it replaces the checkout during an update. Reinstall from the catalog after moving a pruned checkout to a different OS or CPU.
+
+Use the following archives for a manual installation.
 
 | Native bundle | Supported baseline | Archive |
 | --- | --- | --- |

@@ -94,6 +94,7 @@
       "paths": [
         "src/reliquary_hermes/client.py",
         "src/reliquary_hermes/inference_worker.py",
+        "src/reliquary_hermes/native_host.py",
         "src/reliquary_hermes/provider.py",
         "src/reliquary_hermes/settings.py",
         "src/reliquary_hermes/setup.py",
