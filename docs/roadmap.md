@@ -40,19 +40,19 @@ The [vendored Core revision](../vendor/reliquary/SOURCE-PROVENANCE.md) includes 
 
 ## Live owner switching
 
-The [live switching specification and plan](hermes-live-owner-switching-spec-2026-11-18.md) covers General and dedicated project RELs and the active PHY. It proposes a live assignment change that preserves accepted session bindings.
+Setup can switch General and dedicated project RELs and the active PHY on a running service. Accepted sessions and queued imports keep their original owner bindings. See the [live switching design](hermes-live-owner-switching-spec-2026-11-18.md) and [verification](verification.md#live-owner-switching).
 
-## Active UI rebuild specification
+## Dashboard rebuild
 
-The current dashboard is scheduled for a **hard-cut replacement**, not incremental remediation. See [Warlock-parity Hermes UI hard-cut rebuild](warlock-ui-hard-cut-rebuild-spec-2026-11-10.md). Warlock's existing Knowledge experience and scalable graph renderer are the reference implementation; existing Hermes backend provider/setup/sources contracts are preserved. The outdated SVG and hand-concatenated frontend will be deleted at cutover. Authenticated binary transport is an explicit integration gate.
+The current dashboard uses the shared React interface and Warlock graph renderer in Web and Desktop. The rebuild retains the provider, Setup and Sources contracts. Graph-capable hosts use authenticated binary transport. See the [dashboard rebuild design](warlock-ui-hard-cut-rebuild-spec-2026-11-10.md) and [verification guide](verification.md).
 
 ## Purpose
 
-Record the UI architecture plan, pending service lifecycle features and the REL homogeneity status.
+Record pending service lifecycle features and the status of owner setup and the dashboard rebuild.
 
 ## Overview
 
-The Warlock-parity UI hard-cut has its own implementation specification. Configurable queued-work keepalive remains a separate proposed service feature.
+Configurable queued-work keepalive remains a proposed service feature. The local service and verification guides describe the behavior available today.
 
 ## Related docs
 

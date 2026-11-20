@@ -101,6 +101,8 @@ The workflow ad-hoc signs the macOS executable before creating the ZIP. The extr
 
 The native matrix produces four executable inputs for the catalog checkout. The verification run at the resulting pin rebuilds each executable separately, compares its final bytes with the tracked file, attests the matching build, and verifies the tracked file against the repository and exact pin. Stock Hermes installs from the pin in a disposable profile on each native runner. The packaged-host smoke verifies signed startup, retained PHY history and REL persistence across restart. A Linux re-pin check exercises an already pruned checkout and checks that the replacement starts and prunes without changing profile settings or owner data.
 
+All four executable attestations verified at catalog candidate `ad29b22861d49a94fd32f83f91af80e5b254536d`. The initial install probe selected the older Windows-only catalog entry. The corrected probe seeded the candidate pin after initializing its disposable Hermes profile. Stock Hermes then installed that same candidate and passed the restart smoke on all four platforms. [Exact-commit attestations](https://github.com/Lokee86/reliquary-hermes/actions/runs/44685198812), [corrected stock install proof](https://github.com/Lokee86/reliquary-hermes/actions/runs/44687870762).
+
 ## Evidence covered
 
 - Strict bounded request and response DTOs reject spoofed authority, extra fields, malformed wire data and mismatched IDs, cuts or provenance. Each selected Memory has one correlated source-provenance entry.
