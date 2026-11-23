@@ -9,6 +9,7 @@ mod echo_codec;
 mod echo_model;
 mod echo_store;
 mod fragment;
+mod lexical;
 mod model;
 mod publication;
 mod retained;
@@ -26,6 +27,10 @@ pub use echo_model::{EchoError, EchoEvent, EchoEventKind};
 pub use echo_store::EchoStore;
 pub use fragment::{
     Fragment, FragmentConfig, FragmentDefinition, FragmentId, fragment_id, path_fragment_windows,
+};
+pub use lexical::{
+    FragmentLexicalIndex, FragmentLexicalIndexStats, LEXICAL_FREQUENCY_CAP, LexicalMatchCounts,
+    lexical_terms,
 };
 pub use model::{
     AcceptedTurnSource, ArchiveError, ArchiveHistorySnapshot, ArchivePublicationBinding,
@@ -110,6 +115,13 @@ pub fn source_publication(payload: &[u8]) -> Result<Option<SourcePublication>, A
         }
         _ => Ok(None),
     }
+}
+
+/// A turn or branch publication has only Archive-local effects. Episode and retained
+/// proof records are admitted through the coordinated owner replay.
+pub fn is_turn_or_branch_publication(payload: &[u8]) -> Result<bool, ArchiveError> {
+    Ok(applying_archive_payload(payload)?
+        .is_some_and(|body| body.starts_with(b"RELTURN2") || body.starts_with(b"RELBRCH1")))
 }
 
 #[cfg(test)]

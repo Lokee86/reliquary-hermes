@@ -2,36 +2,27 @@
 
 ## Purpose
 
-This directory is a source-only snapshot of Reliquary Core at
-`537de0205e65f719c64b7d5687935087b7c9ccf9` (Port offline REL and PHY owner history to 2.1). The host depends on the public `reliquary-memory` API.
+This source-only snapshot pins Reliquary Core at `010974130fb5cf7f0b5f624de9faa2ebcdac409d`.
+The Hermes host uses the public `reliquary-memory` API for leased owner mounts.
+Core restores verified REL checkpoints, replays recent writes, and reads older history on demand.
 
 ## Overview
 
-This revision includes native 2.1 replay for converted Archive, Memory, and other retained owner history. It also supplies direct Memory summary lookup for the Inspector and trusted read-only PHY detach for live owner switching.
-It includes the active-Memory Leiden recompute and durable REL dependency support. It carries forward the prior snapshot's partial Community
-decode and exact-cut graph projection, plus the already integrated hosted
-inference and authorized active-vector changes.
+The snapshot contains 712 Git-verified files. It includes the Cargo workspace and lock,
+Rust sources and tests, the referenced G4 fixture, and the existing Quinn source and licenses.
 
-The application, owner-session, and vector-store manifests resolve
-`lodestone-packed` through the approved local
-`vendor/lodestone/crates/packed` source subset. The vendored workspace and
-detached consumer lockfiles omit the Git source field for that package.
-The workspace, consumer, and host lockfiles add `leiden-rs` 0.8.1 and retain their
-existing dependency pins. See [Lodestone provenance](../lodestone/SOURCE-PROVENANCE.md).
-
-The snapshot contains the Root Cargo workspace manifests and lockfile, Rust
-sources and tests, the referenced G4 JSON test fixture, and the packaged
-`quinn-proto` source. It preserves the existing Apache-2.0 and MIT license
-files. Its inventory excludes Git history, Root documentation and tooling,
-build output, executables, profile configuration, credentials, and REL/PHY
-owner files.
+Cargo resolves `lodestone-core` and `lodestone-packed` at the public Git pin
+`ba67b28a463b63c65e9dbe1120bd8205f1784cdd` and `lore` at
+`c49390be048fa273ab47ff7d43bc4994ba7be8ce`. The workspace and detached consumer
+manifests and lockfiles match the Core revision. The native host lock uses the dependency
+versions from Core's CLI lock at that same revision.
 
 ## Related docs
 
-- [Integration installation and disclosures](../../README.md)
-- [Verification](../../docs/verification.md)
+- [Integration verification](../../docs/verification.md)
 
 ## Notes
 
-The Root source repository at this revision has no top-level license file. The
-existing third-party license files remain alongside their sources.
+The inventory excludes Core documentation, tooling, Git history, executables, profiles,
+owner files, and build output. The historical export records the Lodestone source and license
+used by earlier packages. [Lodestone provenance](../lodestone/SOURCE-PROVENANCE.md)

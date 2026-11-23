@@ -1913,8 +1913,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "lodestone-core"
+version = "0.2.0"
+source = "git+https://github.com/Lokee86/lodestone.git?rev=ba67b28a463b63c65e9dbe1120bd8205f1784cdd#ba67b28a463b63c65e9dbe1120bd8205f1784cdd"
+dependencies = [
+ "blake3",
+ "bytemuck",
+ "lodestone-packed",
+ "memmap2",
+ "rayon",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "lodestone-packed"
-version = "0.1.0"
+version = "0.2.0"
+source = "git+https://github.com/Lokee86/lodestone.git?rev=ba67b28a463b63c65e9dbe1120bd8205f1784cdd#ba67b28a463b63c65e9dbe1120bd8205f1784cdd"
 
 [[package]]
 name = "log"
@@ -2259,6 +2276,15 @@ name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
+name = "memmap2"
+version = "0.9.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "memoffset"
@@ -2976,6 +3002,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "rayon"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "rcgen"
 version = "0.14.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3062,6 +3108,7 @@ dependencies = [
 name = "reliquary-archive"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "reliquary-container",
  "serde",
  "serde_json",
@@ -3080,6 +3127,7 @@ dependencies = [
 name = "reliquary-container"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "sha2",
  "uuid",
 ]
@@ -3108,6 +3156,7 @@ name = "reliquary-ego-store"
 version = "0.1.0"
 dependencies = [
  "reliquary-container",
+ "serde",
 ]
 
 [[package]]
@@ -3144,6 +3193,7 @@ name = "reliquary-freshness-store"
 version = "0.1.0"
 dependencies = [
  "reliquary-container",
+ "serde",
  "sha2",
 ]
 
@@ -3153,6 +3203,7 @@ version = "0.1.0"
 dependencies = [
  "leiden-rs",
  "reliquary-container",
+ "serde",
  "sha2",
 ]
 
@@ -3172,6 +3223,7 @@ name = "reliquary-insomnia-store"
 version = "0.1.0"
 dependencies = [
  "reliquary-container",
+ "serde",
  "sha2",
 ]
 
@@ -3211,6 +3263,7 @@ name = "reliquary-memory-core"
 version = "0.1.0"
 dependencies = [
  "reliquary-container",
+ "serde",
  "sha2",
 ]
 
@@ -3218,6 +3271,8 @@ dependencies = [
 name = "reliquary-owner-session"
 version = "0.1.0"
 dependencies = [
+ "directories",
+ "libc",
  "reliquary-archive",
  "reliquary-container",
  "reliquary-ego-store",
@@ -3227,9 +3282,12 @@ dependencies = [
  "reliquary-memory-core",
  "reliquary-perception-store",
  "reliquary-vector-store",
+ "rmp-serde",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3297,8 +3355,10 @@ dependencies = [
 name = "reliquary-vector-store"
 version = "0.1.0"
 dependencies = [
+ "lodestone-core",
  "lodestone-packed",
  "reliquary-container",
+ "serde",
  "sha2",
 ]
 
@@ -3362,6 +3422,25 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rmp"
+version = "0.8.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ba8be72d372b2c9b35542551678538b562e7cf86c3315773cae48dfbfe7790c"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "rmp-serde"
+version = "1.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72f81bee8c8ef9b577d1681a70ebbc962c232461e397b22c208c43c04b67a155"
+dependencies = [
+ "rmp",
+ "serde",
 ]
 
 [[package]]
@@ -4228,7 +4307,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

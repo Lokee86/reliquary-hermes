@@ -476,6 +476,8 @@ fn publish_archive_vector_batch(
         source_archive_version,
     )?;
     container.sync()?;
+    session.archive_hybrid_cache.discard(profile_id);
+    session.archive_lexical_indexes.remove(&profile_id);
     Ok(Some(generation))
 }
 

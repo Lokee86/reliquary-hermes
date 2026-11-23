@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 
 /// Separately owned source-keyed reasoning/tool evidence. It shares only the
 /// physical REL Container with Archive and does not alter Archive activity.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct EchoStore {
     owner_id: Option<[u8; 16]>,
     container_identity: Option<ContainerIdentity>,
@@ -22,8 +22,9 @@ impl EchoStore {
             container_identity: Some(container.identity()),
             records: HashMap::new(),
         };
-        for frame in container.read_frames()? {
-            store.ingest(&frame.payload)?;
+        let mut frames = container.scan_frames()?;
+        while let Some(frame) = frames.next_frame()? {
+            store.ingest(frame.payload)?;
         }
         Ok(store)
     }

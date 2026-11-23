@@ -1,22 +1,26 @@
 //! Authenticated REL search, per-turn retrieval, and trusted Memory delivery.
 use crate::{
-    CapabilityRouter, ConfiguredRuntime, Instance, MemoryId, OwnerGrant, OwnerId, ProductError,
-    ProductErrorKind,
+    CapabilityRouter, CompatibilityProfileId, ConfiguredRuntime, Instance, MemoryId, OwnerGrant,
+    OwnerId, ProductError, ProductErrorKind,
 };
 use reliquary_application::RetrievalAction;
 use reliquary_runtime_gateway::{GatewayError, MemoryRetrievalRoute, MemoryRetrievalTurn};
 use reliquary_switchboard::DecisionConsumer;
+mod archive;
 mod embedding;
 mod outcome;
-use embedding::embedding_endpoint;
+pub use archive::ArchiveSearchOptions;
+use archive::{validate_archive_limit, validate_archive_vector};
+use embedding::{EmbeddingScope, embedding_endpoint};
 pub use outcome::{PreparedMemoryDelivery, PreparedRetrieval, RetrievalOutcome};
 
 pub use reliquary_application::{
     RetrievalAnchorReport, RetrievalDirection, RetrievalRelationEvidence,
 };
 pub use reliquary_runtime_gateway::{
-    RetrievalCut, RetrievalMemory, RetrievalMode, RetrievalPreview, RetrievalSource, SearchMode,
-    SearchResult,
+    ArchiveHybridHit, ArchiveHybridSearch, ArchiveLexicalIndexPublication, ArchiveVectorHit,
+    ArchiveVectorSearch, RetrievalCut, RetrievalMemory, RetrievalMode, RetrievalPreview,
+    RetrievalSource, SearchMode, SearchResult,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -57,6 +61,23 @@ impl Instance {
             .map_err(Into::into)
     }
 
+    /// Search the accepted Archive vectors for an explicit compatibility profile.
+    /// The caller supplies an embedding already qualified for that profile.
+    pub fn search_archive_vectors(
+        &self,
+        owner: OwnerId,
+        profile_id: CompatibilityProfileId,
+        query: &[f32],
+        limit: usize,
+    ) -> Result<ArchiveVectorSearch, ProductError> {
+        self.require_rel_read(owner)?;
+        validate_archive_limit(limit)?;
+        validate_archive_vector(query)?;
+        self.inner
+            .search_archive_vectors(owner.into(), profile_id, query, limit)
+            .map_err(retrieval_error)
+    }
+
     /// Passive search over the current REL cut. Lexical search invokes no provider.
     pub fn search(
         &self,
@@ -87,7 +108,7 @@ impl Instance {
                 .and_then(|runtime| embedding_endpoint(runtime, options.embedding_route.as_deref()))
                 .ok_or_else(|| unavailable("requested search embedding route is unavailable"))?;
             Some(
-                self.embed_retrieval_query(owner, query, endpoint)
+                self.embed_retrieval_query(owner, query, endpoint, EmbeddingScope::Memory)
                     .map_err(retrieval_error)?,
             )
         };
@@ -247,7 +268,12 @@ impl Instance {
                 query
                     .zip(endpoint)
                     .map(|(query, endpoint)| {
-                        self.embed_retrieval_query(session.owner, &query, endpoint)
+                        self.embed_retrieval_query(
+                            session.owner,
+                            &query,
+                            endpoint,
+                            EmbeddingScope::Memory,
+                        )
                     })
                     .transpose()
             })

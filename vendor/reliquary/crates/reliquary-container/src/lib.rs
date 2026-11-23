@@ -6,34 +6,41 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
 
 const MAGIC: [u8; 8] = *b"REL\0\r\n\x1a\n";
 const HEADER_LEN: u64 = 40;
 const FRAME_HEADER_LEN: u64 = 8;
+const SCAN_BUFFER_SIZE: usize = 64 * 1024;
 const CURRENT_VERSION: FormatVersion = FormatVersion { major: 2, minor: 1 };
 
+mod checkpoint;
+pub use checkpoint::{CheckpointClock, LeasedContainer, PhysicalCheckpoint, VerifiedPrefix};
 mod grouped_clock;
+mod leased_frame_reader;
+pub use leased_frame_reader::LeasedFrameReader;
+use leased_frame_reader::ReadLease;
 mod publication_envelope;
 pub use publication_envelope::{PublicationEnvelope, decode_publication, replace_publication_body};
 mod version_clock;
 pub use version_clock::PhysicalClock;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FormatVersion {
     pub major: u16,
     pub minor: u16,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum FileKind {
     Reliquary,
     Phylactery,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ReliquaryScope {
     Unspecified,
     Organization,
@@ -41,7 +48,7 @@ pub enum ReliquaryScope {
     Connection,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ContainerIdentity {
     pub file_kind: FileKind,
     pub scope: ReliquaryScope,
@@ -83,6 +90,7 @@ pub enum ContainerError {
         expected: FileKind,
         actual: FileKind,
     },
+    WrongOwner,
     TruncatedHeader,
     TruncatedFrame {
         offset: u64,
@@ -91,6 +99,7 @@ pub enum ContainerError {
         offset: u64,
         length: u64,
     },
+    InvalidFrameReference,
     RepairRequired {
         valid_end: u64,
     },
@@ -121,11 +130,13 @@ impl fmt::Display for ContainerError {
                 f,
                 "wrong container kind: expected {expected:?}, found {actual:?}"
             ),
+            Self::WrongOwner => f.write_str("container owner does not match the requested owner"),
             Self::TruncatedHeader => f.write_str("truncated container header"),
             Self::TruncatedFrame { offset } => write!(f, "truncated frame at {offset}"),
             Self::InvalidFrameLength { offset, length } => {
                 write!(f, "invalid frame length {length} at {offset}")
             }
+            Self::InvalidFrameReference => f.write_str("indexed frame payload verification failed"),
             Self::RepairRequired { valid_end } => write!(
                 f,
                 "incomplete tail requires explicit repair after {valid_end}"
@@ -172,7 +183,7 @@ fn acquire_exclusive(file: &File) -> Result<(), ContainerError> {
     })
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ObjectRef {
     pub offset: u64,
     pub length: u64,
@@ -184,18 +195,76 @@ pub struct PhysicalFrame {
     pub payload: Vec<u8>,
 }
 
-/// Streaming physical frame cursor. It retains only frame coordinates and reads
-/// each payload through a bounded `Read` implementation.
+/// One frame borrowed from the scan's reusable payload buffer.
+pub struct ScannedFrame<'a> {
+    pub object: ObjectRef,
+    pub payload: &'a [u8],
+}
+
+pub struct FrameScan<'a> {
+    cursor: PhysicalCursor<'a>,
+    payload: Vec<u8>,
+}
+
+impl FrameScan<'_> {
+    pub fn next_frame(&mut self) -> Result<Option<ScannedFrame<'_>>, ContainerError> {
+        let Some(object) = self.cursor.read_frame_into(&mut self.payload)? else {
+            return Ok(None);
+        };
+        Ok(Some(ScannedFrame {
+            object,
+            payload: &self.payload,
+        }))
+    }
+}
+
+// Cloned File handles share a system cursor. Read at explicit offsets so
+// separate scans can use the same leased file even when their reads interleave.
+struct PositionedFile {
+    file: File,
+    offset: u64,
+}
+
+impl Read for PositionedFile {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        let read = read_at(&self.file, self.offset, output)?;
+        self.offset += read as u64;
+        Ok(read)
+    }
+}
+
+fn read_at(file: &File, offset: u64, output: &mut [u8]) -> io::Result<usize> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileExt;
+        file.read_at(output, offset)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileExt;
+        file.seek_read(output, offset)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "positional file reads are unsupported on this platform",
+        ))
+    }
+}
+
+/// Streaming physical frame cursor. Each scan uses a fixed read buffer and
+/// exposes each payload through a bounded `Read` implementation.
 pub struct PhysicalCursor<'a> {
     _container: &'a Container,
-    file: File,
+    reader: BufReader<PositionedFile>,
     next_offset: u64,
     file_len: u64,
     done: bool,
 }
 
 pub struct FramePayloadReader<'a> {
-    file: &'a mut File,
+    reader: &'a mut BufReader<PositionedFile>,
     object: ObjectRef,
     remaining: u64,
 }
@@ -213,7 +282,7 @@ impl io::Read for FramePayloadReader<'_> {
         }
         let limit =
             usize::try_from(self.remaining.min(output.len() as u64)).unwrap_or(output.len());
-        let read = self.file.read(&mut output[..limit])?;
+        let read = self.reader.read(&mut output[..limit])?;
         if read == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -258,7 +327,9 @@ pub struct Container {
     mode: Mode,
     lease_token: [u8; 16],
     write_epoch: u64,
+    synced_epoch: u64,
     write_blocked: bool,
+    read_lease: OnceLock<Arc<ReadLease>>,
     next_version: u64,
     transaction_times: BTreeMap<u64, i64>,
     standalone_reservations: BTreeSet<u64>,
@@ -292,7 +363,9 @@ impl Container {
             mode: Mode::Write,
             lease_token: *Uuid::new_v4().as_bytes(),
             write_epoch: 0,
+            synced_epoch: 0,
             write_blocked: false,
+            read_lease: OnceLock::new(),
             next_version: 1,
             transaction_times: BTreeMap::new(),
             standalone_reservations: BTreeSet::new(),
@@ -302,103 +375,93 @@ impl Container {
     }
 
     pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self, ContainerError> {
-        Self::open_read_only_inner(path.as_ref(), None)
+        Self::open_current(path.as_ref(), Mode::Read, None, None)
     }
 
     pub fn open_read_only_as(
         path: impl AsRef<Path>,
         expected: FileKind,
     ) -> Result<Self, ContainerError> {
-        Self::open_read_only_inner(path.as_ref(), Some(expected))
+        Self::open_read_only_for(path, expected, None)
     }
 
-    fn open_read_only_inner(
-        path: &Path,
-        expected: Option<FileKind>,
+    pub fn open_read_only_for(
+        path: impl AsRef<Path>,
+        kind: FileKind,
+        owner: Option<[u8; 16]>,
     ) -> Result<Self, ContainerError> {
-        let mut file = OpenOptions::new().read(true).open(path)?;
-        acquire_shared(&file)?;
-        let (identity, owner_id) = read_header(&mut file)?;
-        check_kind(identity, expected)?;
-        let mut container = Self {
-            file,
-            path: path.to_path_buf(),
-            identity,
-            owner_id,
-            mode: Mode::Read,
-            lease_token: *Uuid::new_v4().as_bytes(),
-            write_epoch: 0,
-            write_blocked: false,
-            next_version: 1,
-            transaction_times: BTreeMap::new(),
-            standalone_reservations: BTreeSet::new(),
-            #[cfg(test)]
-            fail_next_append_after: None,
-        };
-        container.validate_frames()?;
-        container.rebuild_clock()?;
-        Ok(container)
+        Self::open_current(path.as_ref(), Mode::Read, Some(kind), owner)
     }
 
     pub fn open_writer(path: impl AsRef<Path>) -> Result<Self, ContainerError> {
-        Self::open_writer_as_inner(path.as_ref(), None)
+        Self::open_current(path.as_ref(), Mode::Write, None, None)
     }
 
     pub fn open_writer_as(
         path: impl AsRef<Path>,
         expected: FileKind,
     ) -> Result<Self, ContainerError> {
-        Self::open_writer_as_inner(path.as_ref(), Some(expected))
+        Self::open_writer_for(path, expected, None)
     }
 
-    fn open_writer_as_inner(
-        path: &Path,
-        expected: Option<FileKind>,
+    pub fn open_writer_for(
+        path: impl AsRef<Path>,
+        kind: FileKind,
+        owner: Option<[u8; 16]>,
     ) -> Result<Self, ContainerError> {
-        let mut file = OpenOptions::new().read(true).write(true).open(path)?;
-        acquire_exclusive(&file)?;
-        let (identity, owner_id) = read_header(&mut file)?;
-        check_kind(identity, expected)?;
-        let mut container = Self {
-            file,
-            path: path.to_path_buf(),
-            identity,
-            owner_id,
-            mode: Mode::Write,
-            lease_token: *Uuid::new_v4().as_bytes(),
-            write_epoch: 0,
-            write_blocked: false,
-            next_version: 1,
-            transaction_times: BTreeMap::new(),
-            standalone_reservations: BTreeSet::new(),
-            #[cfg(test)]
-            fail_next_append_after: None,
-        };
-        container.validate_frames()?;
-        container.rebuild_clock()?;
+        Self::open_current(path.as_ref(), Mode::Write, Some(kind), owner)
+    }
+
+    fn open_current(
+        path: &Path,
+        mode: Mode,
+        kind: Option<FileKind>,
+        owner: Option<[u8; 16]>,
+    ) -> Result<Self, ContainerError> {
+        let mut container = Self::open_leased(path, mode, kind, owner)?;
+        container.validate_from_start()?;
         Ok(container)
     }
 
-    /// Opens an exclusive repair session. It validates only the immutable header;
-    /// tail inspection and truncation remain explicit caller actions.
+    /// Opens an exclusive repair session. It validates only the immutable header.
     pub fn open_for_repair(
         path: impl AsRef<Path>,
         expected: FileKind,
     ) -> Result<Self, ContainerError> {
-        let path = path.as_ref();
-        let mut file = OpenOptions::new().read(true).write(true).open(path)?;
-        acquire_exclusive(&file)?;
+        Self::open_leased(path.as_ref(), Mode::Repair, Some(expected), None)
+    }
+
+    fn open_leased(
+        path: &Path,
+        mode: Mode,
+        kind: Option<FileKind>,
+        owner: Option<[u8; 16]>,
+    ) -> Result<Self, ContainerError> {
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(mode != Mode::Read)
+            .open(path)?;
+        if mode == Mode::Read {
+            acquire_shared(&file)?;
+        } else {
+            acquire_exclusive(&file)?;
+        }
         let (identity, owner_id) = read_header(&mut file)?;
-        check_kind(identity, Some(expected))?;
+        check_kind(identity, kind)?;
+        if owner.is_some_and(|expected| expected != owner_id) {
+            return Err(ContainerError::WrongOwner);
+        }
         Ok(Self {
             file,
             path: path.to_path_buf(),
             identity,
             owner_id,
-            mode: Mode::Repair,
+            mode,
             lease_token: *Uuid::new_v4().as_bytes(),
             write_epoch: 0,
+            synced_epoch: 0,
             write_blocked: false,
+            read_lease: OnceLock::new(),
             next_version: 1,
             transaction_times: BTreeMap::new(),
             standalone_reservations: BTreeSet::new(),
@@ -421,6 +484,11 @@ impl Container {
             epoch: self.write_epoch,
         })
     }
+
+    /// Appends on this handle since the lease was admitted.
+    pub fn append_epoch(&self) -> u64 {
+        self.write_epoch
+    }
     pub fn version(&self) -> FormatVersion {
         CURRENT_VERSION
     }
@@ -439,9 +507,10 @@ impl Container {
 
     /// Read exact physical bytes through the existing owner lease.
     pub fn physical_bytes(&self) -> Result<impl Read + '_, ContainerError> {
-        let mut file = self.file.try_clone()?;
-        file.seek(SeekFrom::Start(0))?;
-        Ok(file)
+        Ok(PositionedFile {
+            file: self.file.try_clone()?,
+            offset: 0,
+        })
     }
 
     fn file_identity(file: &File) -> Result<(u64, u64), ContainerError> {
@@ -609,18 +678,21 @@ impl Container {
         if self.mode != Mode::Write {
             return Err(ContainerError::ReadOnly);
         }
-        if self.write_blocked {
+        if self.write_blocked || self.read_lease.get().is_some_and(|lease| lease.is_fenced()) {
             return Err(ContainerError::WriteRecoveryRequired);
         }
         Ok(())
     }
 
-    fn rebuild_clock(&mut self) -> Result<(), ContainerError> {
-        let mut clock = PhysicalClock::default();
-        let mut cursor = self.physical_cursor()?;
-        while let Some(mut frame) = cursor.next_frame()? {
-            let mut bytes = Vec::new();
-            frame.read_to_end(&mut bytes).map_err(ContainerError::Io)?;
+    fn rebuild_clock_from(
+        &mut self,
+        from: u64,
+        extent: u64,
+        mut clock: PhysicalClock,
+    ) -> Result<(), ContainerError> {
+        let mut cursor = self.physical_cursor_at(from, extent)?;
+        let mut bytes = Vec::new();
+        while cursor.read_frame_into(&mut bytes)?.is_some() {
             clock.observe_frame(&bytes)?;
         }
         drop(cursor);
@@ -633,12 +705,12 @@ impl Container {
     }
 
     pub fn append(&mut self, payload: &[u8]) -> Result<ObjectRef, ContainerError> {
-        if self.mode != Mode::Write {
-            return Err(ContainerError::ReadOnly);
-        }
-        if self.write_blocked {
-            return Err(ContainerError::WriteRecoveryRequired);
-        }
+        let _read_guard = self
+            .read_lease
+            .get()
+            .map(|lease| lease.lock())
+            .transpose()?;
+        self.require_write()?;
         let len = u64::try_from(payload.len()).map_err(|_| ContainerError::InvalidFrameLength {
             offset: 0,
             length: u64::MAX,
@@ -678,47 +750,76 @@ impl Container {
     }
 
     pub fn sync(&mut self) -> Result<(), ContainerError> {
-        if self.mode != Mode::Write {
-            return Err(ContainerError::ReadOnly);
-        }
-        if self.write_blocked {
-            return Err(ContainerError::WriteRecoveryRequired);
-        }
+        let _read_guard = self
+            .read_lease
+            .get()
+            .map(|lease| lease.lock())
+            .transpose()?;
+        self.require_write()?;
         if let Err(error) = self.file.sync_all() {
             self.write_blocked = true;
             return Err(ContainerError::Io(error));
         }
+        self.synced_epoch = self.write_epoch;
         Ok(())
     }
 
     pub fn read_frames(&self) -> Result<Vec<PhysicalFrame>, ContainerError> {
         let mut cursor = self.physical_cursor()?;
         let mut frames = Vec::new();
-        while let Some(mut payload_reader) = cursor.next_frame()? {
-            let object = payload_reader.object();
-            let mut payload = Vec::new();
-            payload_reader
-                .read_to_end(&mut payload)
-                .map_err(ContainerError::Io)?;
-            frames.push(PhysicalFrame { object, payload });
+        let mut payload = Vec::new();
+        while let Some(object) = cursor.read_frame_into(&mut payload)? {
+            frames.push(PhysicalFrame {
+                object,
+                payload: std::mem::take(&mut payload),
+            });
         }
         Ok(frames)
     }
 
+    /// Replay frames in physical order using one reusable payload buffer.
+    pub fn scan_frames(&self) -> Result<FrameScan<'_>, ContainerError> {
+        self.scan_frames_from(HEADER_LEN)
+    }
+
+    /// Replay from an admitted physical frame boundary, through the current extent.
+    pub fn scan_frames_from(&self, offset: u64) -> Result<FrameScan<'_>, ContainerError> {
+        Ok(FrameScan {
+            cursor: self.physical_cursor_at(offset, self.extent()?)?,
+            payload: Vec::new(),
+        })
+    }
+
     pub fn physical_cursor(&self) -> Result<PhysicalCursor<'_>, ContainerError> {
+        self.physical_cursor_from(HEADER_LEN)
+    }
+
+    /// Stream frames from a previously admitted frame boundary.
+    pub fn physical_cursor_from(&self, offset: u64) -> Result<PhysicalCursor<'_>, ContainerError> {
+        self.physical_cursor_at(offset, self.extent()?)
+    }
+
+    fn physical_cursor_at(
+        &self,
+        offset: u64,
+        extent: u64,
+    ) -> Result<PhysicalCursor<'_>, ContainerError> {
+        if !(HEADER_LEN..=extent).contains(&offset) {
+            return Err(ContainerError::InvalidFrameReference);
+        }
+        self.require_extent(extent)?;
         let file = self.file.try_clone()?;
-        let file_len = file.metadata()?.len();
         Ok(PhysicalCursor {
             _container: self,
-            file,
-            next_offset: HEADER_LEN,
-            file_len,
+            reader: BufReader::with_capacity(SCAN_BUFFER_SIZE, PositionedFile { file, offset }),
+            next_offset: offset,
+            file_len: extent,
             done: false,
         })
     }
 
-    fn validate_frames(&self) -> Result<(), ContainerError> {
-        let mut cursor = self.physical_cursor()?;
+    fn validate_frames_from(&self, offset: u64, extent: u64) -> Result<(), ContainerError> {
+        let mut cursor = self.physical_cursor_at(offset, extent)?;
         while let Some(frame) = cursor.next_frame()? {
             drop(frame);
         }
@@ -774,29 +875,50 @@ impl Container {
 }
 
 impl PhysicalCursor<'_> {
+    fn read_frame_into(
+        &mut self,
+        payload: &mut Vec<u8>,
+    ) -> Result<Option<ObjectRef>, ContainerError> {
+        let Some(mut reader) = self.next_frame()? else {
+            return Ok(None);
+        };
+        payload.clear();
+        reader.read_to_end(payload)?;
+        Ok(Some(reader.object()))
+    }
+
     /// Advances to the next frame. Dropping a payload reader skips its unread
     /// suffix when the cursor advances again.
     pub fn next_frame(&mut self) -> Result<Option<FramePayloadReader<'_>>, ContainerError> {
         if self.done {
             return Ok(None);
         }
-        let actual_len = self.file.metadata()?.len();
-        if actual_len != self.file_len {
-            return Err(ContainerError::UnstableSnapshot);
-        }
-        if self.next_offset == self.file_len {
-            self.done = true;
-            return Ok(None);
-        }
-        if self.next_offset > self.file_len || self.file_len - self.next_offset < FRAME_HEADER_LEN {
-            return Err(ContainerError::RepairRequired {
-                valid_end: self.next_offset,
-            });
-        }
         let offset = self.next_offset;
-        self.file.seek(SeekFrom::Start(offset))?;
+        if self.file_len.saturating_sub(offset) < FRAME_HEADER_LEN {
+            self.check_length()?;
+            if offset == self.file_len {
+                self.done = true;
+                return Ok(None);
+            }
+            return Err(ContainerError::RepairRequired { valid_end: offset });
+        }
+
+        // A dropped payload reader can leave bytes unread. Advance within the
+        // buffer when possible and reposition the next read for a larger skip.
+        let buffered = self.reader.buffer().len();
+        let buffer_end = self.reader.get_ref().offset;
+        let buffer_start = buffer_end - buffered as u64;
+        if (buffer_start..=buffer_end).contains(&offset) {
+            self.reader.consume((offset - buffer_start) as usize);
+        } else {
+            self.reader.consume(buffered);
+            self.reader.get_mut().offset = offset;
+        }
+        if self.reader.buffer().len() < FRAME_HEADER_LEN as usize {
+            self.check_length()?;
+        }
         let mut length_bytes = [0; FRAME_HEADER_LEN as usize];
-        self.file.read_exact(&mut length_bytes).map_err(|error| {
+        self.reader.read_exact(&mut length_bytes).map_err(|error| {
             if error.kind() == io::ErrorKind::UnexpectedEof {
                 ContainerError::UnstableSnapshot
             } else {
@@ -811,15 +933,22 @@ impl PhysicalCursor<'_> {
             .checked_add(length)
             .ok_or(ContainerError::InvalidFrameLength { offset, length })?;
         if frame_end > self.file_len {
+            self.check_length()?;
             return Err(ContainerError::RepairRequired { valid_end: offset });
         }
-        self.file.seek(SeekFrom::Start(payload_start))?;
         self.next_offset = frame_end;
         Ok(Some(FramePayloadReader {
-            file: &mut self.file,
+            reader: &mut self.reader,
             object: ObjectRef { offset, length },
             remaining: length,
         }))
+    }
+
+    fn check_length(&self) -> Result<(), ContainerError> {
+        if self.reader.get_ref().file.metadata()?.len() != self.file_len {
+            return Err(ContainerError::UnstableSnapshot);
+        }
+        Ok(())
     }
 }
 
@@ -966,6 +1095,161 @@ mod tests {
         let frames = c.read_frames().unwrap();
         assert!(frames[0].payload.starts_with(b"RELVERS2"));
         assert!(frames[1].payload.starts_with(b"RELPUB01"));
+    }
+
+    #[test]
+    fn checkpoint_replays_a_bound_reservation_and_group_after_the_cut() {
+        let d = Dir::new();
+        let p = d.0.join("checkpoint.rel");
+        let mut writer = Container::create(&p, rel(), [5; 16]).unwrap();
+        let reserved = writer.reserve_version(Some(-3)).unwrap();
+        let undated = writer.reserve_version(None).unwrap();
+        assert!(matches!(
+            writer.capture_checkpoint(None),
+            Err(ContainerError::WriteRecoveryRequired)
+        ));
+        writer.sync().unwrap();
+        let (checkpoint, _) = writer.capture_checkpoint(None).unwrap();
+        let bound = writer
+            .append_bound_publication_envelope(reserved, b"MEMORY01body")
+            .unwrap();
+        let mut group = vec![0; 84];
+        group[..8].copy_from_slice(b"RELINSC7");
+        group[64..72].copy_from_slice(&3_u64.to_le_bytes());
+        group[72..76].copy_from_slice(&2_u32.to_le_bytes());
+        group[76..84].copy_from_slice(&9_i64.to_le_bytes());
+        writer.append(&group).unwrap();
+        writer
+            .commit_embedded_version_range_at(3, 2, Some(9))
+            .unwrap();
+        writer.sync().unwrap();
+        drop(writer);
+
+        let leased =
+            Container::prepare_checkpoint_open(&p, true, FileKind::Reliquary, Some([5; 16]))
+                .unwrap();
+        let (writer, prefix) = leased.finish(Some(checkpoint.clone())).unwrap();
+        let prefix = prefix.unwrap();
+        assert_eq!(prefix.covered_end(), checkpoint.covered_end);
+        assert!(!writer.has_unbound_version_reservation(reserved));
+        assert_eq!(writer.transaction_time_ns(reserved), Some(-3));
+        assert!(writer.has_unbound_version_reservation(undated));
+        assert_eq!(writer.transaction_time_ns(undated), None);
+        assert_eq!(writer.latest_version(), 4);
+        assert_eq!(writer.transaction_time_ns(4), Some(9));
+        {
+            let mut suffix = writer.scan_frames_from(prefix.covered_end()).unwrap();
+            assert_eq!(suffix.next_frame().unwrap().unwrap().object, bound);
+            assert_eq!(suffix.next_frame().unwrap().unwrap().payload, group);
+            assert!(suffix.next_frame().unwrap().is_none());
+        }
+        let (refreshed, _) = writer.capture_checkpoint(Some(&prefix)).unwrap();
+        drop(writer);
+
+        let cold = Container::open_writer(&p).unwrap();
+        assert_eq!(cold.capture_checkpoint(None).unwrap().0, refreshed);
+        drop(cold);
+        let reader =
+            Container::prepare_checkpoint_open(&p, false, FileKind::Reliquary, None).unwrap();
+        let (reader, prefix) = reader.finish(Some(refreshed)).unwrap();
+        let mut suffix = reader
+            .scan_frames_from(prefix.unwrap().covered_end())
+            .unwrap();
+        assert!(suffix.next_frame().unwrap().is_none());
+    }
+
+    #[test]
+    fn checkpoint_refuses_a_foreign_prefix_and_preserves_explicit_repair() {
+        let d = Dir::new();
+        let p = d.0.join("primary.rel");
+        let foreign = d.0.join("same-owner.rel");
+        let mut writer = Container::create(&p, rel(), [5; 16]).unwrap();
+        let body = writer.append(b"accepted").unwrap();
+        writer.sync().unwrap();
+        let (checkpoint, _) = writer.capture_checkpoint(None).unwrap();
+        drop(writer);
+
+        fs::copy(&p, &foreign).unwrap();
+        let prepare = |path| {
+            Container::prepare_checkpoint_open(path, true, FileKind::Reliquary, Some([5; 16]))
+                .unwrap()
+        };
+        assert!(
+            prepare(&foreign)
+                .finish(Some(checkpoint.clone()))
+                .unwrap()
+                .1
+                .is_none()
+        );
+
+        let mut file = OpenOptions::new().write(true).open(&p).unwrap();
+        let payload_start = body.offset + FRAME_HEADER_LEN;
+        file.seek(SeekFrom::Start(payload_start)).unwrap();
+        file.write_all(b"A").unwrap();
+        file.sync_all().unwrap();
+        assert!(
+            prepare(&p)
+                .finish(Some(checkpoint.clone()))
+                .unwrap()
+                .1
+                .is_none()
+        );
+
+        file.seek(SeekFrom::Start(payload_start)).unwrap();
+        file.write_all(b"a").unwrap();
+        file.seek(SeekFrom::End(0)).unwrap();
+        file.write_all(&[1]).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+        assert!(matches!(
+            prepare(&p).finish(Some(checkpoint.clone())),
+            Err(ContainerError::RepairRequired { valid_end }) if valid_end == checkpoint.covered_end
+        ));
+
+        let mut repair = Container::open_for_repair(&p, FileKind::Reliquary).unwrap();
+        let plan = repair.plan_tail_repair().unwrap().unwrap();
+        repair.repair_incomplete_tail(plan).unwrap();
+        drop(repair);
+        assert!(prepare(&p).finish(Some(checkpoint)).unwrap().1.is_some());
+    }
+
+    #[test]
+    fn indexed_reads_share_the_lease_and_fence_the_writer_on_damage() {
+        use sha2::{Digest, Sha256};
+
+        let d = Dir::new();
+        let p = d.0.join("indexed.rel");
+        let mut writer = Container::create(&p, rel(), [5; 16]).unwrap();
+        let object = writer.append(b"some old text").unwrap();
+        writer.sync().unwrap();
+        let reader = writer.leased_frame_reader().unwrap();
+        assert_eq!(
+            reader
+                .read_frame_range(object, 5, 3, Sha256::digest(b"old").into())
+                .unwrap(),
+            b"old"
+        );
+        writer.append(b"new text").unwrap();
+        assert_eq!(
+            reader
+                .read_frame(object, Sha256::digest(b"some old text").into())
+                .unwrap(),
+            b"some old text"
+        );
+        assert!(matches!(
+            reader.read_frame(object, [0; 32]),
+            Err(ContainerError::InvalidFrameReference)
+        ));
+        assert!(matches!(
+            writer.append(b"fenced"),
+            Err(ContainerError::WriteRecoveryRequired)
+        ));
+        drop(writer);
+        assert!(matches!(
+            reader.read_frame(object, Sha256::digest(b"some old text").into()),
+            Err(ContainerError::UnstableSnapshot)
+        ));
+        assert!(Container::open_writer(&p).is_ok());
     }
 
     #[test]
@@ -1164,6 +1448,76 @@ mod tests {
         }
         assert_eq!(total, payload.len());
         assert!(cursor.next_frame().unwrap().is_none());
+    }
+
+    #[test]
+    fn buffered_cursors_can_interleave_and_skip_unread_payloads() {
+        let d = Dir::new();
+        let p = d.0.join("interleaved.rel");
+        let mut writer = Container::create(&p, rel(), [5; 16]).unwrap();
+        let large = vec![0xA5; SCAN_BUFFER_SIZE + 17];
+        writer.append(&large).unwrap();
+        let empty = writer.append(b"").unwrap();
+        let tail = writer.append(b"tail").unwrap();
+        writer.sync().unwrap();
+        drop(writer);
+
+        let reader = Container::open_read_only(&p).unwrap();
+        let mut left = reader.physical_cursor().unwrap();
+        let mut right = reader.physical_cursor().unwrap();
+        {
+            let mut frame = left.next_frame().unwrap().unwrap();
+            let mut prefix = [0; 8];
+            frame.read_exact(&mut prefix).unwrap();
+            assert_eq!(prefix, [0xA5; 8]);
+
+            let mut raw_header = [0; HEADER_LEN as usize];
+            reader
+                .physical_bytes()
+                .unwrap()
+                .read_exact(&mut raw_header)
+                .unwrap();
+            assert_eq!(raw_header, encode_header(rel(), [5; 16]));
+            let mut complete = Vec::new();
+            right
+                .next_frame()
+                .unwrap()
+                .unwrap()
+                .read_to_end(&mut complete)
+                .unwrap();
+            assert_eq!(complete, large);
+            frame.read_exact(&mut prefix).unwrap();
+            assert_eq!(prefix, [0xA5; 8]);
+        }
+
+        for cursor in [&mut left, &mut right] {
+            assert_eq!(cursor.next_frame().unwrap().unwrap().object(), empty);
+            let mut last = cursor.next_frame().unwrap().unwrap();
+            assert_eq!(last.object(), tail);
+            let mut payload = Vec::new();
+            last.read_to_end(&mut payload).unwrap();
+            assert_eq!(payload, b"tail");
+            assert!(cursor.next_frame().unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn buffered_scan_rejects_a_length_change_before_completion() {
+        let d = Dir::new();
+        let p = d.0.join("length-changed.rel");
+        let mut writer = Container::create(&p, rel(), [5; 16]).unwrap();
+        writer.append(b"first").unwrap();
+        writer.append(b"second").unwrap();
+        let mut scan = writer.scan_frames().unwrap();
+        assert_eq!(scan.next_frame().unwrap().unwrap().payload, b"first");
+
+        let length = writer.file.metadata().unwrap().len();
+        writer.file.set_len(length + 2).unwrap();
+        assert_eq!(scan.next_frame().unwrap().unwrap().payload, b"second");
+        assert!(matches!(
+            scan.next_frame(),
+            Err(ContainerError::UnstableSnapshot)
+        ));
     }
 
     #[test]

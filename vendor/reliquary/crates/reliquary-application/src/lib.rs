@@ -1069,7 +1069,11 @@ pub use agentic_retrieval::{
 };
 pub use reliquary_retrieval::RetrievalConfig;
 pub use reliquary_retrieval::agentic::RetrievalTurn;
-pub use reliquary_retrieval::memory_retrieval::{MemoryRetrievalConfig, MemoryRetrievalResult};
+pub use reliquary_retrieval::memory_retrieval::{
+    MemoryRetrievalConfig, MemoryRetrievalMode, MemoryRetrievalResult,
+};
 
+mod archive_search;
 mod owner_retrieval;
+pub use archive_search::{ArchiveHybridHit, ArchiveHybridSearch, rank_archive_hybrid};
 pub use owner_retrieval::{agentic_memories, rank_owner_snapshot, route_owner_snapshot};

@@ -1,4 +1,64 @@
 use super::*;
+use reliquary_vector_store::{ArchiveFragmentId, PackedVectorView};
+use std::sync::Arc;
+
+mod archive_hybrid;
+pub(super) use archive_hybrid::ArchiveHybridCache;
+pub use archive_hybrid::{
+    ArchiveHybridView, ArchiveLexicalIndexInput, PreparedArchiveLexicalIndex,
+};
+
+/// One exact cosine match from an accepted Archive vector generation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ArchiveVectorHit {
+    pub fragment_id: [u8; 32],
+    pub ordinal: usize,
+    pub score: f64,
+}
+
+/// Exact matches and the owner cut from which their source fragments came.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArchiveVectorSearch {
+    pub profile_id: CompatibilityProfileId,
+    pub generation_id: [u8; 32],
+    pub source_archive_version: u64,
+    pub hits: Vec<ArchiveVectorHit>,
+}
+
+/// The accepted Archive cut captured for a single search.
+pub struct ArchiveVectorView {
+    generation: VectorGeneration,
+    dimensions: usize,
+    fragments: Arc<[ArchiveFragmentId]>,
+    vectors: PackedVectorView,
+}
+
+impl ArchiveVectorView {
+    pub fn dimensions(&self) -> usize {
+        self.dimensions
+    }
+
+    pub fn search(
+        &self,
+        query: &[f32],
+        limit: usize,
+    ) -> Result<ArchiveVectorSearch, OwnerSessionError> {
+        let hits = self.vectors.search_cosine(query, limit)?;
+        Ok(ArchiveVectorSearch {
+            profile_id: self.generation.compatibility_profile_id,
+            generation_id: self.generation.id.0,
+            source_archive_version: self.generation.source_archive_version,
+            hits: hits
+                .into_iter()
+                .map(|hit| ArchiveVectorHit {
+                    fragment_id: self.fragments[hit.index].0,
+                    ordinal: hit.index,
+                    score: hit.score,
+                })
+                .collect(),
+        })
+    }
+}
 
 impl RelSession {
     /// Replay all currently composable REL domains. Graph closure, accepted
@@ -9,9 +69,28 @@ impl RelSession {
         accepted_episodes: impl IntoIterator<Item = AcceptedEpisodeOrder>,
         dream_admissions: impl IntoIterator<Item = DreamBeginAdmission>,
     ) -> Result<Self, OwnerSessionError> {
+        Self::replay_current(
+            container,
+            graph_admission,
+            accepted_episodes,
+            dream_admissions,
+            false,
+        )
+    }
+
+    fn replay_current(
+        container: &Container,
+        graph_admission: &GraphAdmission,
+        accepted_episodes: impl IntoIterator<Item = AcceptedEpisodeOrder>,
+        dream_admissions: impl IntoIterator<Item = DreamBeginAdmission>,
+        leased: bool,
+    ) -> Result<Self, OwnerSessionError> {
         require_kind(container, FileKind::Reliquary)?;
-        let archive =
-            Archive::open(container).map_err(|e| OwnerSessionError::Record(e.to_string()))?;
+        let archive = if leased {
+            Archive::open_leased(container)
+        } else {
+            Archive::open(container)
+        }?;
         let echo = reliquary_archive::EchoStore::open(container)
             .map_err(|e| OwnerSessionError::Record(e.to_string()))?;
         let accepted_episodes = accepted_episodes.into_iter().collect::<Vec<_>>();
@@ -43,7 +122,7 @@ impl RelSession {
                 start_node_id: episode.start_node_id,
             })
             .collect::<Vec<_>>();
-        let replay = validate_rel_replay_admission(container, &archive)?;
+        let replay = validate_rel_replay_admission(container, &archive, leased)?;
         let grouped_completions = replay.completions;
         let local_owner_id: String = container
             .owner_id()
@@ -60,7 +139,17 @@ impl RelSession {
                 "external Memory reference points to the local REL owner".into(),
             ));
         }
-        let common = open_common(container, graph_admission, dream_admissions, true)?;
+        let mut common = if leased {
+            super::replay::open_common_replaying(
+                container,
+                graph_admission.owner_id().ok_or(GraphError::WrongOwner)?,
+                dream_admissions,
+                true,
+                reliquary_memory_core::MemoryReplayStart::Leased,
+            )?
+        } else {
+            open_common(container, graph_admission, dream_admissions, true)?
+        };
         if archive
             .project_correlations()
             .iter()
@@ -200,6 +289,16 @@ impl RelSession {
             &archive_vectors,
             &generations,
         )?;
+        let archive_lexical_indexes = if replay.has_archive_lexical_indexes {
+            super::archive_lexical::open_archive_lexical_indexes(
+                container,
+                &common.profiles,
+                &generations,
+                &archive_vectors,
+            )?
+        } else {
+            BTreeMap::new()
+        };
         let external_index =
             ExternalIndexStore::open(container).map_err(OwnerSessionError::Record)?;
         let external_references =
@@ -211,6 +310,9 @@ impl RelSession {
             .map_err(OwnerSessionError::Record)?;
         let container_file_identity = container.physical_file_identity()?;
         let writer_lease_proof = container.writer_lease_proof();
+        if leased {
+            common.packed_vectors.bind_read_lease(container)?;
+        }
         Ok(Self {
             owner_id: container.owner_id(),
             rel_dependencies: replay.dependencies,
@@ -222,10 +324,15 @@ impl RelSession {
             imports,
             archive_vectors,
             generations,
+            archive_hybrid_cache: ArchiveHybridCache::default(),
+            archive_lexical_indexes,
             external_index,
             external_references,
             external_memories,
             grouped_completions,
+            grouped_completion_reader: leased
+                .then(|| container.leased_frame_reader())
+                .transpose()?,
             native_import_grouped_epochs: replay.import_epochs,
             write_poisoned: false,
             container_identity: container.identity(),
@@ -259,7 +366,14 @@ impl RelSession {
     /// reconstructed inside owner-session. Callers cannot weaken replay by
     /// supplying an empty or partial admission set.
     pub fn open_path_current(path: impl AsRef<Path>) -> Result<Self, OwnerSessionError> {
-        let container = Container::open_read_only_as(path, FileKind::Reliquary)?;
+        Self::open_path_for_owner(path, None)
+    }
+
+    pub fn open_path_for_owner(
+        path: impl AsRef<Path>,
+        expected: Option<[u8; 16]>,
+    ) -> Result<Self, OwnerSessionError> {
+        let container = Container::open_read_only_for(path, FileKind::Reliquary, expected)?;
         Self::open_current(&container)
     }
 
@@ -270,6 +384,33 @@ impl RelSession {
         // populations from the durable semantic owners before admission.
         let owner_identity = GraphAdmission::for_changes(container.owner_id(), [], []);
         Self::open(container, &owner_identity, [], [])
+    }
+
+    pub(super) fn open_leased_current(container: &Container) -> Result<Self, OwnerSessionError> {
+        let owner_identity = GraphAdmission::for_changes(container.owner_id(), [], []);
+        Self::replay_current(container, &owner_identity, [], [], true)
+    }
+
+    /// Use a shared lease solely for the duration of a local read operation.
+    pub fn with_scoped_read<T>(
+        path: impl AsRef<Path>,
+        read: impl FnOnce(&Self) -> T,
+    ) -> Result<T, OwnerSessionError> {
+        let (_lease, session, _) = super::checkpoint::open(path.as_ref(), false, None)?;
+        Ok(read(&session))
+    }
+
+    pub(super) fn bind_checkpoint_reader(
+        &mut self,
+        container: &Container,
+    ) -> Result<(), OwnerSessionError> {
+        self.container_path = canonical_container_path(container)?;
+        self.writer_lease_proof = container.writer_lease_proof();
+        self.archive.bind_read_lease(container)?;
+        self.common.packed_vectors.bind_read_lease(container)?;
+        self.common.memories.bind_checkpoint_reader(container)?;
+        self.grouped_completion_reader = Some(container.leased_frame_reader()?);
+        Ok(())
     }
 
     #[cfg(feature = "d02-observation")]
@@ -335,8 +476,8 @@ impl RelSession {
         &self,
         conversation: &str,
         node: &str,
-    ) -> Vec<reliquary_archive::SourceAttachment> {
-        self.archive.files_for_source(conversation, node)
+    ) -> Result<Vec<reliquary_archive::SourceAttachment>, OwnerSessionError> {
+        Ok(self.archive.files_for_source(conversation, node)?)
     }
     pub fn episode(&self, id: reliquary_archive::EpisodeId) -> Option<&reliquary_archive::Episode> {
         self.archive.episode(id)
@@ -409,6 +550,38 @@ impl RelSession {
     pub fn import_status(&self, import_id: &str) -> Option<ImportEpochStatus> {
         self.imports.status(import_id)
     }
+    /// Pin the active Archive generation and its validated matrix and row mapping.
+    pub fn archive_vector_view(
+        &self,
+        profile_id: CompatibilityProfileId,
+    ) -> Result<Option<ArchiveVectorView>, OwnerSessionError> {
+        let Some(profile) = self.active_compatibility_profile(profile_id) else {
+            return Ok(None);
+        };
+        let Some(generation) = self.generations.current_generation(profile_id) else {
+            return Ok(None);
+        };
+        let (packed_id, fragments) = self
+            .archive_vectors
+            .row_mapping(generation.archive_vector_id)?;
+        Ok(Some(ArchiveVectorView {
+            generation,
+            dimensions: profile.dimensions as usize,
+            fragments,
+            vectors: self.common.packed_vectors.view(packed_id)?,
+        }))
+    }
+
+    pub fn archive_embedding_profiles(&self) -> Vec<CompatibilityProfile> {
+        self.generations
+            .current_generations()
+            .filter_map(|g| {
+                self.active_compatibility_profile(g.compatibility_profile_id)
+                    .cloned()
+            })
+            .collect()
+    }
+
     pub fn archive_vector_infos(&self) -> Vec<ArchiveVectorInfo> {
         self.archive_vectors.infos()
     }

@@ -73,6 +73,12 @@ On November 18, 2026, the signed Setup case kept the same process lease across a
 
 The locked native suite passed 126 tests with one graph scale characterization ignored. The matching Python suite passed 429 tests with five optional installed Desktop and live acceptance checks skipped. Dashboard typechecking, 26 tests, and the Web and Desktop build passed. Core passed 689 workspace tests with one Windows symlink test filtered for lack of symlink creation privilege. The 673-file vendored inventory matches the Core pin with the documented Lodestone adaptations. The native binary used in the Python suite had SHA-256 `ffec4a0e8c9b7b08ee2a62b3cacd563ee9ba1d627c54f704353f3e4be35cc9ca`. Logs and the Python case report are in `.test-temp/live-owner/`.
 
+## Verified REL checkpoints
+
+The native host uses Core `010974130fb5cf7f0b5f624de9faa2ebcdac409d`. The source audit verifies 712 files against that commit. The Core workspace, detached consumer, and native host manifests resolve with locked offline dependencies. The Lodestone and Lore revisions are available through their exact public Git pins. [Core source provenance](../vendor/reliquary/SOURCE-PROVENANCE.md)
+
+Use the optimized native host for configured-startup measurements. Start each disposable profile once to create the checkpoint and warm the file cache. Measure signed attach in three fresh host processes and close each through the signed runtime detach. Record the median attach time and peak startup working set, and confirm that the checkpoint and owner bytes match across the read-only samples. Check a separate REL write by reopening it after a forced restart.
+
 ## Memory inspector lookup
 
 The native regression creates 513 Memories in a disposable REL and opens the last Memory in ID order through `ui.memory_detail`. It checks the selected body and lifecycle. The Root inspection fixture checks that lookup by ID returns the same summary as List, reports an absent ID, and rejects a stale cut. The pinned HU03 dashboard probe covers authenticated read, correction, and terminal detail.

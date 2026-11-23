@@ -5,7 +5,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use reliquary_archive::ContentId;
+pub use reliquary_archive::lexical_terms;
+use reliquary_archive::{ContentId, LEXICAL_FREQUENCY_CAP, LexicalMatchCounts};
 use reliquary_memory_core::MemoryId;
 use reliquary_vector_store::VectorGenerationId;
 
@@ -293,31 +294,6 @@ fn valid_score(score: f64) -> bool {
     score > 0.0 && score.is_finite()
 }
 
-pub fn lexical_terms(value: &str) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut terms = Vec::new();
-    let mut word = String::new();
-    let flush = |word: &mut String, seen: &mut HashSet<String>, terms: &mut Vec<String>| {
-        if word.is_empty() {
-            return;
-        }
-        let term = word.to_lowercase();
-        word.clear();
-        if seen.insert(term.clone()) {
-            terms.push(term);
-        }
-    };
-    for current in value.chars() {
-        if current.is_alphanumeric() {
-            word.push(current);
-        } else {
-            flush(&mut word, &mut seen, &mut terms);
-        }
-    }
-    flush(&mut word, &mut seen, &mut terms);
-    terms
-}
-
 pub fn term_counts(value: &str) -> HashMap<String, usize> {
     let lower = value.to_lowercase();
     lexical_terms(value)
@@ -333,20 +309,25 @@ pub fn lexical_score(text: &str, terms: &[String]) -> f64 {
     if terms.is_empty() {
         return 0.0;
     }
-    let words = term_counts(text);
-    let mut matched_terms = 0_usize;
-    let mut frequency = 0_usize;
+    let words: HashSet<_> = lexical_terms(text).into_iter().collect();
+    let lower = text.to_lowercase();
+    let mut counts = LexicalMatchCounts::default();
     for term in terms {
-        if let Some(count) = words.get(term).copied().filter(|count| *count > 0) {
-            matched_terms += 1;
-            frequency += count.min(4);
+        if words.contains(term) {
+            let count = lower.matches(term).take(LEXICAL_FREQUENCY_CAP).count();
+            counts.matched_terms += usize::from(count > 0);
+            counts.frequency += count;
         }
     }
-    if matched_terms == 0 {
+    lexical_score_from_counts(terms.len(), counts)
+}
+
+pub fn lexical_score_from_counts(terms: usize, counts: LexicalMatchCounts) -> f64 {
+    if counts.matched_terms == 0 {
         return 0.0;
     }
-    let coverage = matched_terms as f64 / terms.len() as f64;
-    let density = (frequency as f64 / (terms.len() * 2) as f64).min(1.0);
+    let coverage = counts.matched_terms as f64 / terms as f64;
+    let density = (counts.frequency as f64 / (terms * 2) as f64).min(1.0);
     0.85 * coverage + 0.15 * density
 }
 
@@ -582,6 +563,11 @@ mod tests {
         let terms = lexical_terms("Alpha, beta alpha!");
         assert!((lexical_score("alpha alpha alpha", &terms) - 0.5375).abs() < 1e-9);
         assert_eq!(lexical_score("nothing", &terms), 0.0);
+        assert!(
+            (lexical_score("alpha alphabet alphabet alphabet alphabet", &terms) - 0.575).abs()
+                < 1e-9
+        );
+        assert_eq!(lexical_score("alphabet alphabet", &terms), 0.0);
     }
 
     #[test]

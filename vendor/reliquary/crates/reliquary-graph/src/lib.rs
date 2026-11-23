@@ -32,13 +32,17 @@ const COMMUNITY_MAGIC: &[u8; 8] = b"RELCOM01";
 const PARTIAL_COMMUNITY_MAGIC: &[u8; 8] = b"RELCMP01";
 const RETAINED_COMMUNITY_MAGIC: &[u8; 8] = b"RELCOM02";
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize,
+)]
 pub enum NodeRef {
     Memory(Id),
     Entity(Id),
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize,
+)]
 pub enum RelationKind {
     Topical,
     Factual,
@@ -52,14 +56,16 @@ pub enum RelationKind {
     PrincipalAssociation,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize,
+)]
 pub enum RelationOrigin {
     Dream,
     User,
     Perception,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RelationChange {
     pub source: NodeRef,
     pub target: NodeRef,
@@ -68,7 +74,7 @@ pub struct RelationChange {
     pub origin: RelationOrigin,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Relation {
     pub source: NodeRef,
     pub target: NodeRef,
@@ -136,16 +142,18 @@ impl GraphAdmission {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize,
+)]
 pub struct CommunityId(pub Id);
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Community {
     pub id: CommunityId,
     pub members: Vec<Id>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CommunitySnapshot {
     pub generation: u64,
     pub graph_version: u64,
@@ -153,7 +161,7 @@ pub struct CommunitySnapshot {
 }
 
 /// Exact algorithm inputs and result quality carried by an imported Community generation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CommunityDerivation {
     pub algorithm_version: u32,
     pub seed: u64,
@@ -201,14 +209,16 @@ impl From<ContainerError> for GraphError {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize,
+)]
 struct Key {
     source: NodeRef,
     target: NodeRef,
     kind: RelationKind,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct GraphStore {
     owner: [u8; 16],
     identity: ContainerIdentity,
@@ -261,30 +271,31 @@ impl GraphStore {
             incoming: BTreeMap::new(),
             duplicate_incident: BTreeMap::new(),
         };
-        for frame in container.read_frames()? {
-            if let Some(publication) = clocked_graph_in_frame(&frame.payload)? {
+        let mut frames = container.scan_frames()?;
+        while let Some(frame) = frames.next_frame()? {
+            if let Some(publication) = clocked_graph_in_frame(frame.payload)? {
                 store.replay_clocked(publication, admission)?;
             } else if frame.payload.starts_with(b"RELDRB") {
-                for relation in batch(&frame.payload, &store)? {
+                for relation in batch(frame.payload, &store)? {
                     store.apply_dream_relation(admission, relation)?;
                 }
-            } else if let Some((owner, relation)) = decode_graph(&frame.payload)? {
+            } else if let Some((owner, relation)) = decode_graph(frame.payload)? {
                 if owner != store.owner {
                     return Err(GraphError::WrongOwner);
                 }
                 store.apply_replay(relation, admission)?;
-            } else if let Some((owner, effect)) = user_association_in_frame(&frame.payload)? {
+            } else if let Some((owner, effect)) = user_association_in_frame(frame.payload)? {
                 if owner != store.owner {
                     return Err(GraphError::WrongOwner);
                 }
                 store.replay_user_association(admission, effect)?;
             } else if frame.payload.starts_with(b"RELMCOR") {
-                let relation = grouped(&frame.payload)?.ok_or(GraphError::CorruptRecord(
+                let relation = grouped(frame.payload)?.ok_or(GraphError::CorruptRecord(
                     "grouped correction requires owner replay",
                 ))?;
                 store.apply_management_supersession(admission, relation)?;
             } else if frame.payload.starts_with(b"RELDRG") || frame.payload.starts_with(b"RELDRS") {
-                let relation = grouped(&frame.payload)?.ok_or(GraphError::CorruptRecord(
+                let relation = grouped(frame.payload)?.ok_or(GraphError::CorruptRecord(
                     "grouped Dream requires owner replay",
                 ))?;
                 store.validate_grouped_relation(admission, relation)?;
@@ -698,6 +709,7 @@ fn validate_relation(
     Ok(())
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct CommunityStore {
     owner: [u8; 16],
     identity: ContainerIdentity,
@@ -719,8 +731,9 @@ impl CommunityStore {
             names: community_names::CommunityNames::default(),
             derivations: BTreeMap::new(),
         };
-        for frame in container.read_frames()? {
-            if let Some((owner, snapshot, coverage)) = decode_community(&frame.payload)? {
+        let mut frames = container.scan_frames()?;
+        while let Some(frame) = frames.next_frame()? {
+            if let Some((owner, snapshot, coverage)) = decode_community(frame.payload)? {
                 if owner != store.owner {
                     return Err(GraphError::WrongOwner);
                 }
@@ -747,7 +760,7 @@ impl CommunityStore {
                 store.current = Some(snapshot);
                 store.partial_coverage = matches!(coverage, CommunityCoverage::Partial);
             } else if let Some((owner, request, generation)) =
-                community_names::decode(&frame.payload)?
+                community_names::decode(frame.payload)?
             {
                 store.replay_rename(owner, request, generation)?;
             }

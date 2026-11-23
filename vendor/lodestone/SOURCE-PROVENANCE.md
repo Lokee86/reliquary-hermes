@@ -2,11 +2,11 @@
 
 ## Purpose
 
-This directory contains the minimum source subset required by Reliquary's vector-store dependency on `lodestone-packed`. It is derived from upstream Lodestone commit `7b4b3e02b2bd3f3e474fef1a31c8632f8bbea49f` at <https://github.com/Lokee86/lodestone>. The source is licensed under Apache-2.0; the upstream `LICENSE.md` is included.
+This directory records the Lodestone source subset packaged with earlier Reliquary hosts. It is derived from upstream Lodestone commit `7b4b3e02b2bd3f3e474fef1a31c8632f8bbea49f` at <https://github.com/Lokee86/lodestone>. The source is licensed under Apache-2.0; the upstream `LICENSE.md` is included.
 
 ## Overview
 
-The export contains the workspace manifest fields inherited by `lodestone-packed`, the complete package manifest and implementation, and the upstream license. The workspace member list is narrowed to `crates/packed`. Reliquary's vector-store manifest points to this local package. These are packaging changes; the package files and license retain their upstream contents. No other Lodestone crates, tests, documentation, generated artifacts, or Git history are included. The package has no nested Git dependencies.
+The export contains the workspace manifest fields inherited by `lodestone-packed`, the complete package manifest and implementation, and the upstream license. The workspace member list is narrowed to `crates/packed`. Earlier Root snapshots resolved `lodestone-packed` through this local package. These are packaging changes; the package files and license retain their upstream contents. No other Lodestone crates, tests, documentation, generated artifacts, or Git history are included. The package has no nested Git dependencies.
 
 | Upstream file at the pinned commit | Bytes | SHA-256 |
 | --- | ---: | --- |
@@ -24,4 +24,4 @@ The four upstream files total 16,157 bytes. The Cargo.toml member list was narro
 
 ## Notes
 
-The pinned Lodestone source and its license remain unmodified. The Root snapshot's source provenance is documented in [vendor/reliquary](../reliquary/SOURCE-PROVENANCE.md).
+The current Root snapshot resolves Lodestone through its public Git pin. [Core source provenance](../reliquary/SOURCE-PROVENANCE.md)

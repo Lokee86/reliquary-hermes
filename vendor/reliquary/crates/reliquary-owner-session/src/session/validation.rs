@@ -1,3 +1,5 @@
+use super::archive_lexical::ARCHIVE_LEXICAL_INDEX_MAGIC;
+use super::grouped_completion::StoredGroupedCompletion;
 use super::rel_dependencies::REL_DEPENDENCY_MAGIC;
 use super::*;
 
@@ -51,14 +53,16 @@ pub(super) fn require_kind(
 
 #[derive(Default)]
 pub(super) struct RelReplayAdmission {
-    pub completions: BTreeMap<(WorkEpisodeId, u32), GroupedInsomniaCompletion>,
+    pub completions: BTreeMap<(WorkEpisodeId, u32), StoredGroupedCompletion>,
     pub import_epochs: BTreeMap<(WorkEpisodeId, u32), String>,
     pub dependencies: RelDependencyDeclaration,
+    pub has_archive_lexical_indexes: bool,
 }
 
 pub(super) fn validate_rel_replay_admission(
     container: &Container,
     archive: &Archive,
+    leased: bool,
 ) -> Result<RelReplayAdmission, OwnerSessionError> {
     let mut admission = RelReplayAdmission::default();
     let mut imports = ImportEpochStore::prefix(container.owner_id());
@@ -66,17 +70,25 @@ pub(super) fn validate_rel_replay_admission(
     let mut visible_turns = std::collections::BTreeSet::new();
     let mut visible_memories = std::collections::BTreeSet::new();
     let mut activity = 0u64;
-    for frame in container.read_frames()? {
-        if super::native_import::is_import_epoch_marker(&frame.payload) {
+    let mut frames = container.scan_frames()?;
+    while let Some(frame) = frames.next_frame()? {
+        if super::native_import::is_import_epoch_marker(frame.payload) {
             imports
-                .ingest_prefix(&frame.payload)
+                .ingest_prefix(frame.payload)
                 .map_err(OwnerSessionError::Record)?;
             continue;
         }
-        let envelope = reliquary_container::decode_publication(&frame.payload)?;
-        let body = envelope
-            .as_ref()
-            .map_or(frame.payload.as_slice(), |value| value.body);
+        let envelope = reliquary_container::decode_publication(frame.payload)?;
+        let body = envelope.as_ref().map_or(frame.payload, |value| value.body);
+        if body.starts_with(ARCHIVE_LEXICAL_INDEX_MAGIC) {
+            if envelope.is_some() {
+                return Err(OwnerSessionError::Record(
+                    "Archive lexical index must be a top-level frame".into(),
+                ));
+            }
+            admission.has_archive_lexical_indexes = true;
+            continue;
+        }
         if body.starts_with(REL_DEPENDENCY_MAGIC) {
             if envelope.is_some() {
                 return Err(OwnerSessionError::Record(
@@ -104,8 +116,8 @@ pub(super) fn validate_rel_replay_admission(
         }
         let payload = envelope
             .filter(|envelope| envelope.body.starts_with(b"RELMCRT1"))
-            .map_or(frame.payload.as_slice(), |envelope| envelope.body);
-        match reliquary_archive::source_publication(&frame.payload)? {
+            .map_or(frame.payload, |envelope| envelope.body);
+        match reliquary_archive::source_publication(frame.payload)? {
             Some(reliquary_archive::SourcePublication::Episode(id)) => {
                 visible_episodes.insert(id);
             }
@@ -182,7 +194,11 @@ pub(super) fn validate_rel_replay_admission(
             }
             admission.import_epochs.insert(key, epoch.import_id.clone());
         }
-        if admission.completions.insert(key, completion).is_some() {
+        let stored = StoredGroupedCompletion::from_admitted(
+            completion,
+            leased.then_some((frame.object, payload)),
+        )?;
+        if admission.completions.insert(key, stored).is_some() {
             return Err(OwnerSessionError::Record(
                 "duplicate grouped completion attempt".into(),
             ));
@@ -233,6 +249,7 @@ pub(super) fn reject_rel_only_records(container: &Container) -> Result<(), Owner
         (b"RELINSC7", "grouped Insomnia completion"),
         (b"RELINSC8", "grouped Insomnia completion v8"),
         (b"RELAVFM1", "Archive vector format"),
+        (ARCHIVE_LEXICAL_INDEX_MAGIC, "Archive lexical index"),
         (b"RELAVEC1", "Archive vector"),
         (b"RELVGFM1", "vector generation format"),
         (b"RELVGEN1", "vector generation"),

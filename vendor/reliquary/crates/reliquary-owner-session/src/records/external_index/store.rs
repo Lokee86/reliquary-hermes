@@ -78,7 +78,7 @@ impl SourceState {
         Ok(())
     }
 }
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct ExternalIndexStore {
     pub sources: BTreeMap<String, SourceState>,
     /// A damaged derived record is discarded; canonical REL semantics stay intact.
@@ -96,8 +96,9 @@ impl ExternalIndexStore {
             owner: Some(container.owner_id()),
             ..Self::default()
         };
-        for frame in container.read_frames().map_err(|e| e.to_string())? {
-            store.ingest(&frame.payload);
+        let mut frames = container.scan_frames().map_err(|e| e.to_string())?;
+        while let Some(frame) = frames.next_frame().map_err(|e| e.to_string())? {
+            store.ingest(frame.payload);
         }
         Ok(store)
     }
@@ -156,6 +157,7 @@ impl ExternalIndexStore {
                     &descriptor.reference.conversation_id,
                     &descriptor.reference.message_id,
                 )
+                .map_err(|_| ExternalSourceError::Storage)?
                 .ok_or(ExternalSourceError::Unauthorized)?;
             if message.chunks.iter().any(|chunk| {
                 let start = chunk.reference.start as usize;

@@ -425,6 +425,7 @@ mod g4_test_cohort;
 mod tests;
 
 mod gateway_mounts;
+pub use gateway_mounts::{OwnerMountMode, PreparedOwnerMount};
 mod insomnia_worker;
 mod instance_context;
 mod instance_conversation;
@@ -462,7 +463,10 @@ mod host_memory_delivery;
 mod instance_entity;
 mod instance_perception_lifecycle;
 mod instance_vectors;
-pub use instance_vectors::PreparedVectorPublication;
+pub use instance_vectors::{
+    ArchiveHybridHit, ArchiveHybridSearch, ArchiveLexicalIndexPublication, ArchiveVectorHit,
+    ArchiveVectorSearch, PreparedVectorPublication,
+};
 mod instance_retrieval;
 
 mod instance_external_source;
