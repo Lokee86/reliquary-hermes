@@ -1,7 +1,7 @@
 //! Profile assignments, persisted topology compatibility and Setup wire values.
 use super::{
-    LegacyTopology, OwnerConfig, OwnerId, OwnerKind, ProjectOwner, RegisteredOwner, RegistryError,
-    SessionRoute, TOPOLOGY_FILE, Topology, owner_error, owner_file, store, valid_id,
+    Gateway, LegacyTopology, OwnerConfig, OwnerId, OwnerKind, ProjectOwner, RegisteredOwner,
+    RegistryError, SessionRoute, TOPOLOGY_FILE, Topology, owner_error, owner_file, store, valid_id,
 };
 use crate::service_http::MAX_WIRE_BYTES;
 use reliquary_memory::{Phylactery, ProductErrorKind, Rel};
@@ -119,31 +119,60 @@ pub(crate) fn committed_switch_status(
     }
 }
 
-pub(super) fn load_for_startup(
+pub(super) fn prepare_startup(
     config: &OwnerConfig,
     path: &Path,
+    gateway: &Gateway,
 ) -> Result<(Topology, StartupWrite), RegistryError> {
-    let accepted = load(path)?;
-    if let Some(PersistedTopology::Current(topology)) = accepted {
-        if topology.profile_id != config.profile_id || topology.principal_id != config.principal_id
-        {
-            return Err(TOPOLOGY_CHANGED);
+    let legacy = match load(path)? {
+        Some(PersistedTopology::Current(topology)) => {
+            if topology.profile_id != config.profile_id
+                || topology.principal_id != config.principal_id
+            {
+                return Err(TOPOLOGY_CHANGED);
+            }
+            return Ok((topology, StartupWrite::Current));
         }
-        return Ok((topology, StartupWrite::Current));
-    }
+        Some(PersistedTopology::Legacy(legacy)) => Some(legacy),
+        None => None,
+    };
 
+    // The Gateway is private to startup until all bindings and grants are ready.
+    let mut seen = BTreeMap::new();
     let changes = SwitchChanges {
-        main_rel: Some(verify_bootstrap_path(&config.main_rel, OwnerKind::Rel)?),
-        active_phy: Some(verify_bootstrap_path(
-            &config.active_phy,
-            OwnerKind::Phylactery,
-        )?),
+        main_rel: Some((&config.main_rel, legacy.as_ref().map(|v1| v1.main_rel))),
+        active_phy: Some((&config.active_phy, legacy.as_ref().map(|v1| v1.active_phy))),
         projects: config
             .projects
             .iter()
-            .map(|(id, path)| Ok((id.clone(), verify_bootstrap_path(path, OwnerKind::Rel)?)))
-            .collect::<Result<_, RegistryError>>()?,
-    };
+            .map(|(id, path)| {
+                let expected = legacy
+                    .as_ref()
+                    .and_then(|v1| v1.projects.get(id))
+                    .map(|owner| owner.rel_id);
+                (id.clone(), (path, expected))
+            })
+            .collect(),
+    }
+    .map(|(path, expected), kind| {
+        let path = owner_file(path)?;
+        if let Some(existing) = seen.insert(path.clone(), kind) {
+            return Err(RegistryError::Invalid(if existing == kind {
+                "duplicate_owner"
+            } else {
+                "invalid_owner"
+            }));
+        }
+        let owner_id = gateway
+            .mount_owner_path(&path, kind, kind == OwnerKind::Rel, expected)
+            .map_err(|error| match error.kind() {
+                ProductErrorKind::Admission => TOPOLOGY_CHANGED,
+                ProductErrorKind::Conflict => RegistryError::Invalid("duplicate_owner"),
+                ProductErrorKind::Verification => RegistryError::Invalid("invalid_owner"),
+                _ => owner_error(error),
+            })?;
+        Ok(ReviewedOwner { path, owner_id })
+    })?;
     let main = changes
         .main_rel
         .as_ref()
@@ -161,13 +190,12 @@ pub(super) fn load_for_startup(
             .map(|(id, project)| (id.clone(), project.owner_id))
             .collect(),
     )?;
-    let (legacy, write) = match accepted {
-        Some(PersistedTopology::Legacy(legacy)) => {
+    let (legacy, write) = match legacy {
+        Some(legacy) => {
             legacy.allow_bootstrap(&bootstrap)?;
             (legacy, StartupWrite::Upgrade)
         }
         None => (bootstrap.clone(), StartupWrite::Create),
-        Some(PersistedTopology::Current(_)) => unreachable!(),
     };
     let mut topology = Topology {
         version: 2,
@@ -542,13 +570,6 @@ fn check_unique_roles(
         return Err(RegistryError::Invalid("duplicate_owner"));
     }
     Ok(())
-}
-
-fn verify_bootstrap_path(path: &Path, kind: OwnerKind) -> Result<ReviewedOwner, RegistryError> {
-    verify_path(path, kind).map_err(|error| match error {
-        RegistryError::Invalid("wrong_owner_kind") => RegistryError::Invalid("invalid_owner"),
-        _ => error,
-    })
 }
 
 pub(super) fn verify_path(path: &Path, kind: OwnerKind) -> Result<ReviewedOwner, RegistryError> {

@@ -1,8 +1,8 @@
 //! Live mount staging and publication of accepted assignments.
 use super::{
-    Admissions, Gateway, HostCredentialBinding, OwnerGrant, OwnerId, OwnerKind, Path, Phylactery,
-    RegisteredOwner, Registry, RegistryError, Rel, SwitchChanges, SwitchReview, SwitchStatus,
-    Topology, TrustedHostAdmission, owner_error, owner_file, store,
+    Admissions, Gateway, HostCredentialBinding, OwnerGrant, OwnerId, OwnerKind, Path,
+    ProductErrorKind, RegisteredOwner, Registry, RegistryError, SwitchChanges, SwitchReview,
+    SwitchStatus, Topology, TrustedHostAdmission, owner_error, owner_file, store,
     topology::{ReviewedOwner, check_wire_size, verify_path},
 };
 use std::collections::BTreeSet;
@@ -137,16 +137,19 @@ impl Registry {
             .chain(next.projects.values().map(|project| project.rel_id))
         {
             if mounted_rels.insert(owner) {
-                mount(&self.gateway, owner, &next.owners[&owner], staged)?;
+                staged.push(mount_registered(
+                    &self.gateway,
+                    owner,
+                    &next.owners[&owner],
+                )?);
             }
         }
         if next.active_phy != self.active_phy() {
-            mount(
+            staged.push(mount_registered(
                 &self.gateway,
                 next.active_phy,
                 &next.owners[&next.active_phy],
-                staged,
-            )?;
+            )?);
         }
         let admissions = Admissions::new(&self.gateway, next, &mounted_rels, &self.credential)?;
         Ok((mounted_rels, admissions))
@@ -207,65 +210,49 @@ impl Admissions {
 pub(super) fn mount_on_startup(
     gateway: &Gateway,
     topology: &Topology,
-    credential: &str,
 ) -> Result<BTreeSet<OwnerId>, RegistryError> {
-    mount(
+    mount_registered(
         gateway,
         topology.active_phy,
         &topology.owners[&topology.active_phy],
-        &mut Vec::new(),
     )?;
     let mut rels = BTreeSet::new();
     for (&owner, entry) in &topology.owners {
         if entry.kind != OwnerKind::Rel {
             continue;
         }
-        let mut staged = Vec::new();
-        match mount(gateway, owner, entry, &mut staged) {
-            Ok(()) => {
+        match mount_registered(gateway, owner, entry) {
+            Ok(_) => {
                 rels.insert(owner);
             }
             Err(error) if topology.current_rel(owner) => return Err(error),
-            Err(_) => discard_mounts(gateway, credential, &staged)?,
+            Err(_) => {}
         }
     }
     Ok(rels)
 }
 
-fn mount(
+fn mount_registered(
     gateway: &Gateway,
     expected: OwnerId,
     owner: &RegisteredOwner,
-    staged: &mut Vec<StagedMount>,
-) -> Result<(), RegistryError> {
+) -> Result<StagedMount, RegistryError> {
     let path = owner_file(&owner.path)?;
     if path != owner.path {
         return Err(CHANGED);
     }
-    let mounted = match owner.kind {
-        OwnerKind::Rel => {
-            let rel = Rel::open(&path).map_err(owner_error)?;
-            if rel.owner_id() != expected {
-                return Err(CHANGED);
-            }
-            gateway.mount_rel(&rel, true)
-        }
-        OwnerKind::Phylactery => {
-            let phy = Phylactery::open(&path).map_err(owner_error)?;
-            if phy.owner_id() != expected {
-                return Err(CHANGED);
-            }
-            gateway.mount_phylactery(&phy, false)
-        }
-    }
-    .map_err(owner_error)?;
-    // A path can change between read-only verification and writer open. In
-    // that case discard the actual mount, which could bear a different ID.
-    staged.push((mounted, owner.kind));
-    if mounted != expected {
-        return Err(CHANGED);
-    }
-    Ok(())
+    let mounted = gateway
+        .mount_owner_path(
+            &path,
+            owner.kind,
+            owner.kind == OwnerKind::Rel,
+            Some(expected),
+        )
+        .map_err(|error| match error.kind() {
+            ProductErrorKind::Admission => CHANGED,
+            _ => owner_error(error),
+        })?;
+    Ok((mounted, owner.kind))
 }
 
 fn discard_mounts(

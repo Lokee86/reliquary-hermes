@@ -189,11 +189,18 @@ impl Registry {
         let state_dir = state_dir.canonicalize().map_err(|_| store::UNAVAILABLE)?;
         let lease = acquire_service_lease(&state_dir)?;
         let topology_path = state_dir.join(TOPOLOGY_FILE);
-        let (topology, write) = topology::load_for_startup(&config, &topology_path)?;
+        let gateway = Gateway::new();
+        let (topology, write) = topology::prepare_startup(&config, &topology_path, &gateway)?;
         let sessions_dir = state_dir.join("sessions-v1");
         store::sessions_dir(&sessions_dir, write != topology::StartupWrite::Create)?;
-        let gateway = Gateway::new();
-        let mounted_rels = switch::mount_on_startup(&gateway, &topology, token)?;
+        let mounted_rels = match write {
+            topology::StartupWrite::Current => switch::mount_on_startup(&gateway, &topology)?,
+            topology::StartupWrite::Create | topology::StartupWrite::Upgrade => topology
+                .owners
+                .iter()
+                .filter_map(|(&id, owner)| (owner.kind == OwnerKind::Rel).then_some(id))
+                .collect(),
+        };
         let admissions = Admissions::new(&gateway, &topology, &mounted_rels, token)?;
         topology::publish_startup(&topology_path, &topology, write)?;
         Ok(Self {

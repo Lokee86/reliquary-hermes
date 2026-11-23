@@ -431,7 +431,19 @@ fn switches_all_roles_and_reopens_pinned_legacy_and_v2_sessions() {
 
     let old_phy_file = std::fs::read(&fixture.phy).unwrap();
     let old_rel_file = std::fs::read(&fixture.main).unwrap();
+    let old_topology = std::fs::read(&topology_path).unwrap();
+    let mut wrong_bootstrap = fixture.config();
+    wrong_bootstrap.active_phy = next_phy.clone();
+    assert_eq!(
+        Registry::open(wrong_bootstrap, &fixture.state, TOKEN)
+            .err()
+            .unwrap()
+            .code(),
+        "owner_topology_changed"
+    );
+    assert_eq!(std::fs::read(&topology_path).unwrap(), old_topology);
     {
+        // The rejected bootstrap released the General writer it staged first.
         let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
         let first_instance = registry.instance().unwrap();
         assert_eq!(registry.switch_status().unwrap().generation, 0);
@@ -697,6 +709,50 @@ fn failed_switch_releases_staging_and_stale_review_cannot_overwrite() {
         next_owner.owner_id().to_string()
     );
     assert_eq!(restarted.active_phy(), fixture.phy_id);
+}
+
+#[test]
+fn changed_owner_at_the_reviewed_path_leaves_no_mount() {
+    let fixture = Fixture::new();
+    let mut registry = Registry::open(fixture.config(), &fixture.state, TOKEN).unwrap();
+    let bound = registry.bind_session("original", None).unwrap();
+    let accepted = std::fs::read(&registry.topology_path).unwrap();
+
+    let candidate = fixture.main.with_file_name("candidate.rel");
+    let replacement = fixture.main.with_file_name("replacement.rel");
+    let reviewed = Rel::create(&candidate).unwrap().owner_id();
+    let actual = Rel::create(&replacement).unwrap().owner_id();
+    let review = registry
+        .review_switch(SwitchChanges {
+            main_rel: Some(candidate.clone()),
+            active_phy: None,
+            projects: BTreeMap::new(),
+        })
+        .unwrap();
+    assert_eq!(review.changes.main_rel.as_ref().unwrap().owner_id, reviewed);
+    assert_ne!(actual, reviewed);
+    std::fs::copy(replacement, &candidate).unwrap();
+
+    assert_eq!(
+        registry.apply_switch(review).unwrap_err().code(),
+        "mounted_owner_changed"
+    );
+    assert_eq!(std::fs::read(&registry.topology_path).unwrap(), accepted);
+    assert_eq!(registry.bind_session("original", None).unwrap(), bound);
+    assert_eq!(
+        registry.bind_session("fresh", None).unwrap().rel_id,
+        bound.rel_id
+    );
+    assert!(inspect_dashboard_cut(&registry.instance().unwrap(), actual, OwnerKind::Rel).is_err());
+
+    // The wrong owner was never installed and its writer lease is free.
+    assert_eq!(
+        registry
+            .gateway
+            .mount_owner_path(&candidate, OwnerKind::Rel, true, Some(actual))
+            .unwrap(),
+        actual
+    );
 }
 
 #[test]
