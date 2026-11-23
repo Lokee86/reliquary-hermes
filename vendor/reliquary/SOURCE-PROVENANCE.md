@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This source-only snapshot pins Reliquary Core at `010974130fb5cf7f0b5f624de9faa2ebcdac409d`.
+This source-only snapshot pins Reliquary Core at `33f32b2d0d7d6e55a9ca817d4ff4ac735f2ff5df`.
 The Hermes host uses the public `reliquary-memory` API for leased owner mounts.
 Core restores verified REL checkpoints, replays recent writes, and reads older history on demand.
 

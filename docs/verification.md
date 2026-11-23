@@ -75,7 +75,7 @@ The locked native suite passed 126 tests with one graph scale characterization i
 
 ## Verified REL checkpoints
 
-The native host uses Core `010974130fb5cf7f0b5f624de9faa2ebcdac409d`. The source audit verifies 712 files against that commit. The Core workspace, detached consumer, and native host manifests resolve with locked offline dependencies. The Lodestone and Lore revisions are available through their exact public Git pins. [Core source provenance](../vendor/reliquary/SOURCE-PROVENANCE.md)
+The native host uses Core `33f32b2d0d7d6e55a9ca817d4ff4ac735f2ff5df`. The source audit verifies 712 files against that commit. The Core workspace, detached consumer, and native host manifests resolve with locked offline dependencies. The Lodestone and Lore revisions are available through their exact public Git pins. [Core source provenance](../vendor/reliquary/SOURCE-PROVENANCE.md)
 
 Use the optimized native host for configured-startup measurements. Start each disposable profile once to create the checkpoint and warm the file cache. Measure signed attach in three fresh host processes and close each through the signed runtime detach. Record the median attach time and peak startup working set, and confirm that the checkpoint and owner bytes match across the read-only samples. Check a separate REL write by reopening it after a forced restart.
 
