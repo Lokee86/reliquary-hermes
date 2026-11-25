@@ -1,7 +1,7 @@
 use super::{EmbeddingScope, embedding_endpoint, retrieval_error, unavailable, validate_text};
 use crate::{
     ArchiveHybridSearch, ArchiveLexicalIndexPublication, CompatibilityProfileId, ConfiguredRuntime,
-    Instance, OwnerGrant, OwnerId, ProductError, RetrievalConfig,
+    Instance, OwnerGrant, OwnerId, ProductError, RetrievalConfig, TemporalArchiveHybridSearch,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -11,6 +11,34 @@ pub struct ArchiveSearchOptions {
 }
 
 impl Instance {
+    /// Search Archive from a natural-language query that must contain a resolvable date.
+    /// The request time and IANA calendar zone are trusted host context, never query input.
+    pub fn search_archive_for_query(
+        &self,
+        owner: OwnerId,
+        query: &str,
+        basis: crate::TemporalBasis,
+        options: ArchiveSearchOptions,
+        runtime: &ConfiguredRuntime,
+        request_time_ns: i64,
+        calendar_zone: &str,
+    ) -> Result<TemporalArchiveHybridSearch, ProductError> {
+        self.require_rel_read(owner)?;
+        let resolved = reliquary_application::resolve_archive_temporal_query(
+            query,
+            basis,
+            request_time_ns,
+            calendar_zone,
+        )
+        .map_err(|error| {
+            ProductError::new(
+                crate::ProductErrorKind::TemporalQueryRequired,
+                error.to_string(),
+            )
+        })?;
+        self.search_archive_temporal(owner, &resolved.topic, options, runtime, resolved.filter)
+    }
+
     /// Persist lexical indexes for the active Archive generations in a writable REL.
     pub fn publish_archive_lexical_indexes(
         &self,
@@ -40,6 +68,53 @@ impl Instance {
             .map_err(retrieval_error)?;
         self.inner
             .search_archive_hybrid(owner.into(), profile, text, &query, policy)
+            .map_err(retrieval_error)
+    }
+
+    /// Search the active Archive generation with a source or mentioned-time window.
+    pub fn search_archive_temporal(
+        &self,
+        owner: OwnerId,
+        text: &str,
+        options: ArchiveSearchOptions,
+        runtime: &ConfiguredRuntime,
+        filter: crate::TemporalFilter,
+    ) -> Result<TemporalArchiveHybridSearch, ProductError> {
+        self.require_rel_read(owner)?;
+        let text = validate_text(text)?;
+        if filter.end_exclusive_ns <= filter.start_ns {
+            return Err(ProductError::invalid("invalid temporal filter"));
+        }
+        let policy = archive_policy(runtime.retrieval, options.limit)?;
+        let endpoint = embedding_endpoint(runtime, options.embedding_route.as_deref())
+            .ok_or_else(|| unavailable("requested search embedding route is unavailable"))?;
+        let (profile, query) = self
+            .embed_retrieval_query(owner, text, endpoint, EmbeddingScope::Archive)
+            .map_err(retrieval_error)?;
+        self.inner
+            .search_archive_hybrid_temporal(owner.into(), profile, text, &query, policy, filter)
+            .map_err(retrieval_error)
+    }
+
+    /// Temporal Archive search with an already qualified embedding.
+    pub fn search_archive_hybrid_temporal(
+        &self,
+        owner: OwnerId,
+        profile: CompatibilityProfileId,
+        text: &str,
+        query: &[f32],
+        limit: usize,
+        filter: crate::TemporalFilter,
+    ) -> Result<TemporalArchiveHybridSearch, ProductError> {
+        self.require_rel_read(owner)?;
+        let text = validate_text(text)?;
+        if filter.end_exclusive_ns <= filter.start_ns {
+            return Err(ProductError::invalid("invalid temporal filter"));
+        }
+        validate_archive_vector(query)?;
+        let policy = archive_policy(RetrievalConfig::default(), Some(limit))?;
+        self.inner
+            .search_archive_hybrid_temporal(owner.into(), profile, text, query, policy, filter)
             .map_err(retrieval_error)
     }
 

@@ -312,7 +312,11 @@ pub enum DecisionConsumer {
     EntityResolution,
     MemoryRetrieval,
     Chronos,
+    ObservationContribution,
+    ObservationVerification,
 }
+
+pub const OBSERVATION_DECISION_MODEL: &str = "typesafe/jev-1.13";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DecisionRouteSelection<'a> {
@@ -322,7 +326,32 @@ pub enum DecisionRouteSelection<'a> {
     Unavailable,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DecisionRouteSource {
+    Dedicated,
+    Shared,
+    General,
+    Unavailable,
+}
+
+fn select_decision_source(
+    has_dedicated: bool,
+    has_shared: bool,
+    has_general: bool,
+) -> DecisionRouteSource {
+    if has_dedicated {
+        DecisionRouteSource::Dedicated
+    } else if has_shared {
+        DecisionRouteSource::Shared
+    } else if has_general {
+        DecisionRouteSource::General
+    } else {
+        DecisionRouteSource::Unavailable
+    }
+}
+
 /// Selects operation-specific, shared decision, then general fallback routes.
+/// Observation consumers require the tested shared native model.
 pub fn select_decision_route<'a>(
     config: &'a ModelSwitchboardConfig,
     consumer: DecisionConsumer,
@@ -331,17 +360,39 @@ pub fn select_decision_route<'a>(
         DecisionConsumer::EntityResolution => config.entity_resolution_decision.as_ref(),
         DecisionConsumer::MemoryRetrieval => config.memory_retrieval_decision.as_ref(),
         DecisionConsumer::Chronos => None,
+        DecisionConsumer::ObservationContribution | DecisionConsumer::ObservationVerification => {
+            return config
+                .general_decision
+                .as_ref()
+                .filter(|route| route.model == OBSERVATION_DECISION_MODEL)
+                .map_or(
+                    DecisionRouteSelection::Unavailable,
+                    DecisionRouteSelection::Shared,
+                );
+        }
     };
-    if let Some(route) = dedicated {
-        return DecisionRouteSelection::Dedicated(route);
+    match select_decision_source(
+        dedicated.is_some(),
+        config.general_decision.is_some(),
+        config.general.is_some(),
+    ) {
+        DecisionRouteSource::Dedicated => DecisionRouteSelection::Dedicated(
+            dedicated.expect("selected dedicated route must be present"),
+        ),
+        DecisionRouteSource::Shared => DecisionRouteSelection::Shared(
+            config
+                .general_decision
+                .as_ref()
+                .expect("selected shared route must be present"),
+        ),
+        DecisionRouteSource::General => DecisionRouteSelection::General(
+            config
+                .general
+                .as_ref()
+                .expect("selected general route must be present"),
+        ),
+        DecisionRouteSource::Unavailable => DecisionRouteSelection::Unavailable,
     }
-    if let Some(route) = config.general_decision.as_ref() {
-        return DecisionRouteSelection::Shared(route);
-    }
-    if let Some(route) = config.general.as_ref() {
-        return DecisionRouteSelection::General(route);
-    }
-    DecisionRouteSelection::Unavailable
 }
 
 /// Binds a selected configuration route to the caller's provider adapters.
@@ -439,11 +490,34 @@ impl std::error::Error for DecisionEndpointError {}
 pub trait DecisionEndpoint: Send + Sync {
     fn model(&self) -> &str;
     fn evaluate(&self, state: &Value, questions: &Value) -> Result<Value, DecisionEndpointError>;
+
+    /// Apply a consumer response budget. Native transport applies it while reading the body.
+    fn evaluate_bounded(
+        &self,
+        state: &Value,
+        questions: &Value,
+        max_response_bytes: usize,
+    ) -> Result<Value, DecisionEndpointError> {
+        let reply = self.evaluate(state, questions)?;
+        if serde_json::to_vec(&reply)
+            .map_err(|_| {
+                DecisionEndpointError::InvalidResponse("response could not be serialized")
+            })?
+            .len()
+            > max_response_bytes
+        {
+            return Err(DecisionEndpointError::InvalidResponse(
+                "response exceeded the byte limit",
+            ));
+        }
+        Ok(reply)
+    }
 }
 
 mod config_document;
 mod configured;
 mod device_auth;
+mod hosted_config;
 mod model_config;
 mod protected_config;
 mod runtime_probe;
@@ -454,6 +528,7 @@ pub use configured::{
     HostedInferenceIdentity, ProcessingRouteIdentity, RuntimeEndpointFailure,
 };
 pub use device_auth::{CodexDeviceCode, DeviceAuthError};
+pub use hosted_config::{HostedEmbeddingSettings, HostedModelRoute, HostedSwitchboardConfig};
 pub use model_config::{GeneralRoute, ModelRoute, ModelSlot};
 pub use protected_config::master_key::MasterKeyError;
 pub use protected_config::{ConfigFile, CredentialKind};

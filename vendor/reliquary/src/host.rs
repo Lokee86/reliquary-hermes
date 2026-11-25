@@ -46,6 +46,8 @@ struct MountedOwnerRecord {
 #[derive(Clone)]
 pub struct Gateway {
     pub(crate) inner: runtime::Gateway,
+    pub(crate) identity: Arc<runtime::IdentityLifecycle>,
+    perception: Arc<runtime::PerceptionLifecycle>,
     mounted: Arc<Mutex<BTreeMap<OwnerId, MountedOwnerRecord>>>,
 }
 
@@ -57,10 +59,53 @@ impl Default for Gateway {
 
 impl Gateway {
     pub fn new() -> Self {
+        let inner = runtime::Gateway::new();
+        let perception = Arc::new(inner.perception_lifecycle());
         Self {
-            inner: runtime::Gateway::new(),
+            inner,
+            identity: Arc::default(),
+            perception,
             mounted: Arc::new(Mutex::new(BTreeMap::new())),
         }
+    }
+
+    /// Set the configured runtime for Gateway-managed work. Entity comparisons use
+    /// its Entity route, including when a previously recorded pair needs a new judgment.
+    pub fn set_runtime(
+        &self,
+        runtime: Option<&crate::ConfiguredRuntime>,
+    ) -> Result<(), ProductError> {
+        let endpoint = runtime.and_then(crate::ConfiguredRuntime::entity_endpoint);
+        let route = runtime
+            .map(|runtime| {
+                blake3::Hash::from_bytes(runtime.processing_route_identity().entity_identity)
+                    .to_hex()
+                    .to_string()
+            })
+            .unwrap_or_default();
+        self.identity.set_route(endpoint, route)?;
+        self.perception.set_routes(runtime.and_then(|runtime| {
+            use reliquary_switchboard::DecisionConsumer;
+            Some(runtime::PerceptionRoutes {
+                general: runtime.general_endpoint()?,
+                contribution: runtime
+                    .decision_endpoint_for(DecisionConsumer::ObservationContribution)?,
+                verification: runtime
+                    .decision_endpoint_for(DecisionConsumer::ObservationVerification)?,
+                embedding: runtime.embedding_endpoint()?,
+                identity: runtime.processing_route_identity().perception,
+                embedding_identity: runtime.processing_route_identity().perception_embedding,
+            })
+        }))?;
+        Ok(())
+    }
+
+    pub(crate) fn admit_perception(
+        &self,
+        instance: &Arc<runtime::Instance>,
+        managed: Vec<runtime::OwnerId>,
+    ) -> Result<(), ProductError> {
+        Ok(self.perception.admit(instance, managed)?)
     }
 
     pub fn mount_rel(&self, rel: &Rel, writable: bool) -> Result<OwnerId, ProductError> {
@@ -234,6 +279,10 @@ pub use admission::{
 #[path = "host_instance.rs"]
 mod instance;
 pub use instance::{ConversationQueue, Instance};
+
+#[path = "host_entity_review.rs"]
+mod entity_review;
+pub use entity_review::{EntityReviewAuthority, EntityReviewSession};
 
 #[path = "host_context.rs"]
 pub(crate) mod context;

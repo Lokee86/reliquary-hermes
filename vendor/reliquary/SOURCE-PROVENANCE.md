@@ -2,20 +2,21 @@
 
 ## Purpose
 
-This source-only snapshot pins Reliquary Core at `33f32b2d0d7d6e55a9ca817d4ff4ac735f2ff5df`.
+This source-only snapshot pins Reliquary Core at `f9882b9e10a449ed1ffb56bda86dd0566b384cc3`.
 The Hermes host uses the public `reliquary-memory` API for leased owner mounts.
 Core restores verified REL checkpoints, replays recent writes, and reads older history on demand.
+This revision includes same-REL Perception, hosted native decision binding, and typed Observation recall.
 
 ## Overview
 
-The snapshot contains 712 Git-verified files. It includes the Cargo workspace and lock,
-Rust sources and tests, the referenced G4 fixture, and the existing Quinn source and licenses.
+The snapshot contains 809 Git-verified files. It includes the Cargo workspace and lock,
+Rust sources and tests, the referenced G4 fixture, the MPL 2.0 license, and the pinned Quinn source and licenses.
 
 Cargo resolves `lodestone-core` and `lodestone-packed` at the public Git pin
 `ba67b28a463b63c65e9dbe1120bd8205f1784cdd` and `lore` at
 `c49390be048fa273ab47ff7d43bc4994ba7be8ce`. The workspace and detached consumer
-manifests and lockfiles match the Core revision. The native host lock uses the dependency
-versions from Core's CLI lock at that same revision.
+manifests and lockfiles match the Core revision. The detached host lock is resolved against
+this source snapshot.
 
 ## Related docs
 

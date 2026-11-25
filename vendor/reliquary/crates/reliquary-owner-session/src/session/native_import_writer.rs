@@ -86,6 +86,33 @@ impl RelWriter {
         Ok(ImportEpochStatus::Open(start))
     }
 
+    /// Authorize Archive-only derivation after source staging, before settlement.
+    /// This uses the accepted owner cut without binding the semantic work plan.
+    pub fn validate_native_import_archive_publication(
+        &self,
+        import_id: &str,
+    ) -> Result<(), OwnerSessionError> {
+        self.ensure_import_scope(import_id)?;
+        let start = self.session.imports.open_epoch().expect("scope checked");
+        let key = decode_import_key(&start.import_key)
+            .ok_or_else(|| OwnerSessionError::Record("invalid native import key".into()))?;
+        let accepted = self
+            .session
+            .native_import_receipt(&key)
+            .is_some_and(|receipt| {
+                receipt.owner_uuid == self.session.owner_id
+                    && receipt.source_digest == key
+                    && receipt.source_namespace == start.source_namespace
+                    && receipt.source_format == start.source_format
+            });
+        if !accepted {
+            return Err(OwnerSessionError::Record(
+                "Archive vector publication requires a staged import receipt".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Admit one prepared import turn and advance its named native branch.
     /// The epoch ID is required on every scoped mutation; ordinary writers
     /// remain fenced until a completion coordinator settles the epoch.
@@ -97,6 +124,56 @@ impl RelWriter {
     ) -> Result<reliquary_archive::Node, OwnerSessionError> {
         self.ensure_import_scope(import_id)?;
         self.accept_scoped_turn_and_advance_branch(input, branch)
+    }
+
+    /// Publish one redacted Echo event before the copied source receipt closes staging.
+    pub fn accept_native_import_echo(
+        &mut self,
+        import_id: &str,
+        event: reliquary_archive::EchoEvent,
+    ) -> Result<(), OwnerSessionError> {
+        use reliquary_archive::EchoEventKind;
+        self.ensure_import_scope(import_id)?;
+        let start = self
+            .session
+            .imports
+            .open_epoch()
+            .expect("checked import scope");
+        let key = decode_import_key(&start.import_key).ok_or_else(|| {
+            OwnerSessionError::Record("native import epoch has an invalid import key".into())
+        })?;
+        let approved_kind = match event.kind {
+            EchoEventKind::ReasoningSummary
+            | EchoEventKind::ToolCall
+            | EchoEventKind::ToolResult => true,
+            EchoEventKind::ActivityStarted | EchoEventKind::ActivityCompleted => {
+                event.correlation_id.as_deref() == Some(crate::model::HERMES_MODEL_ROUND_ECHO)
+                    && event.content.is_empty()
+            }
+            _ => false,
+        };
+        if start.source_format != reliquary_archive::HERMES_COPIED_SOURCE_FORMAT
+            || self.session.archive.import_receipt(&key).is_some()
+            || !start.pre.archive_version.is_some_and(|prior| {
+                self.session
+                    .archive
+                    .node_archive_version(&event.conversation_id, &event.message_id)
+                    .is_some_and(|version| version > prior)
+            })
+            || !approved_kind
+        {
+            return Err(OwnerSessionError::Record(
+                "Echo evidence requires an open Hermes copy and its accepted source message".into(),
+            ));
+        }
+        if let Err(error) = self.session.echo.put(&mut self.container, event) {
+            if matches!(error, reliquary_archive::EchoError::Container(_)) {
+                self.session.write_poisoned = true;
+            }
+            return Err(OwnerSessionError::Record(error.to_string()));
+        }
+        self.session.writer_lease_proof = self.container.writer_lease_proof();
+        Ok(())
     }
 
     /// Finalize an imported source path and queue its one Archive-owned

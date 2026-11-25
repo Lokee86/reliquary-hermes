@@ -60,6 +60,7 @@ struct State {
     body_memories: HashMap<MemoryBodyId, BTreeSet<MemoryId>>,
     mutations: HashMap<String, (MemoryId, usize)>,
     tombstones: HashMap<MemoryId, TerminalTombstone>,
+    changes: Vec<MemoryId>,
     next_memory_version: u64,
 }
 
@@ -71,6 +72,7 @@ impl Default for State {
             body_memories: HashMap::new(),
             mutations: HashMap::new(),
             tombstones: HashMap::new(),
+            changes: Vec::new(),
             next_memory_version: 1,
         }
     }
@@ -87,6 +89,36 @@ pub struct MemoryStore {
     reader: Option<LeasedFrameReader>,
 }
 
+fn memory_replay_frame(prefix: &[u8]) -> bool {
+    if prefix.starts_with(b"RELPUB") {
+        // The container admits the full clock stream; keep invalid envelopes
+        // visible to the normal decoder and read only Memory publications.
+        return match reliquary_container::decode_publication(prefix) {
+            Ok(Some(publication)) => [BODY, CREATION, DELTA, TOMBSTONE]
+                .iter()
+                .any(|marker| publication.body.starts_with(*marker)),
+            _ => true,
+        };
+    }
+    [
+        FORMAT.as_slice(),
+        BODY,
+        CREATION,
+        DELTA,
+        TOMBSTONE,
+        b"RELMRTE",
+        b"RELINSC7",
+        b"RELINSC8",
+        b"RELMCOR",
+        b"RELMRET",
+        b"RELDRB",
+        b"RELDRF",
+        b"RELDRS",
+    ]
+    .iter()
+    .any(|marker| prefix.starts_with(*marker))
+}
+
 #[path = "management_group.rs"]
 mod management_group;
 pub use management_group::{GroupedManagementEffect, PreparedMemoryCorrection};
@@ -98,18 +130,17 @@ impl MemoryStore {
             if frame.object().length < 8 {
                 continue;
             }
-            let mut magic = [0; 8];
-            frame.read_exact(&mut magic)?;
+            let mut prefix = [0; 40];
+            let used = frame.object().length.min(prefix.len() as u64) as usize;
+            frame.read_exact(&mut prefix[..used])?;
+            let magic: [u8; 8] = prefix[..8].try_into().unwrap();
             if magic.starts_with(b"RELPUB") {
                 let len = usize::try_from(frame.object().length)
                     .map_err(|_| MemoryError::FieldTooLarge)?;
                 if len > 128 * 1024 * 1024 {
                     return Err(MemoryError::FieldTooLarge);
                 }
-                let mut payload = Vec::with_capacity(len);
-                payload.extend_from_slice(&magic);
-                frame.read_to_end(&mut payload)?;
-                if let Some(envelope) = reliquary_container::decode_publication(&payload)?
+                if let Some(envelope) = reliquary_container::decode_publication(&prefix[..used])?
                     && [BODY, CREATION, DELTA, TOMBSTONE]
                         .iter()
                         .any(|marker| envelope.body.starts_with(*marker))
@@ -279,11 +310,19 @@ impl MemoryStore {
             ..Self::default()
         };
         let (mut store, mut cursor, cold) = match start {
-            MemoryReplayStart::Detached => (empty(), container.physical_cursor()?, true),
+            MemoryReplayStart::Detached => (
+                empty(),
+                container.matching_physical_cursor(memory_replay_frame)?,
+                true,
+            ),
             MemoryReplayStart::Leased => {
                 let mut store = empty();
                 store.bind_checkpoint_reader(container)?;
-                (store, container.physical_cursor()?, true)
+                (
+                    store,
+                    container.matching_physical_cursor(memory_replay_frame)?,
+                    true,
+                )
             }
             MemoryReplayStart::Checkpoint {
                 mut store,
@@ -293,6 +332,9 @@ impl MemoryStore {
                 (store, container.physical_cursor_from(covered_end)?, false)
             }
         };
+        if cold && container.max_frame_length()? > 128 * 1024 * 1024 {
+            return Err(MemoryError::FieldTooLarge);
+        }
         while let Some(mut frame) = cursor.next_frame()? {
             let object = frame.object();
             let len = usize::try_from(object.length).map_err(|_| MemoryError::FieldTooLarge)?;
@@ -350,7 +392,7 @@ impl MemoryStore {
                 if let Some((bodies, records, routing)) = decode_grouped(&payload)? {
                     // Owner replay validates any missing grouped payload only
                     // after it has admitted the exact terminal-prune manifest.
-                    store.apply_grouped_completion_inner(
+                    store = store.with_grouped_completion(
                         bodies,
                         records,
                         Some((object, &payload)),
@@ -450,8 +492,9 @@ impl MemoryStore {
         bodies: Vec<(MemoryBodyId, Vec<u8>)>,
         records: Vec<Vec<u8>>,
     ) -> Result<(), MemoryError> {
-        let mut projected = self.clone();
-        projected.apply_grouped_completion(bodies, records)
+        self.clone()
+            .with_grouped_completion(unindexed_bodies(bodies), records, None, false)
+            .map(drop)
     }
 
     pub fn apply_grouped_completion(
@@ -459,7 +502,10 @@ impl MemoryStore {
         bodies: Vec<(MemoryBodyId, Vec<u8>)>,
         records: Vec<Vec<u8>>,
     ) -> Result<(), MemoryError> {
-        self.apply_grouped_completion_inner(unindexed_bodies(bodies), records, None, false)
+        *self =
+            self.clone()
+                .with_grouped_completion(unindexed_bodies(bodies), records, None, false)?;
+        Ok(())
     }
 
     pub fn apply_indexed_grouped_completion(
@@ -469,22 +515,29 @@ impl MemoryStore {
         bodies: Vec<RetainedGroupedBody>,
         records: Vec<Vec<u8>>,
     ) -> Result<(), MemoryError> {
-        self.apply_grouped_completion_inner(bodies, records, Some((object, payload)), false)
+        *self = self.clone().with_grouped_completion(
+            bodies,
+            records,
+            Some((object, payload)),
+            false,
+        )?;
+        Ok(())
     }
 
-    fn apply_grouped_completion_inner(
-        &mut self,
+    // Replay owns this candidate. A live caller supplies a snapshot so a
+    // rejected group cannot expose partial changes to its existing store.
+    fn with_grouped_completion(
+        mut self,
         bodies: Vec<RetainedGroupedBody>,
         records: Vec<Vec<u8>>,
         frame: Option<(ObjectRef, &[u8])>,
         allow_missing_body_for_owner_admission: bool,
-    ) -> Result<(), MemoryError> {
+    ) -> Result<Self, MemoryError> {
         if !records.is_empty() && !self.initialized {
             return Err(MemoryError::Corrupt(
                 "grouped creation precedes Memory format",
             ));
         }
-        let mut next = self.clone();
         let mut seen_bodies = std::collections::BTreeSet::new();
         let mut provided_bodies = std::collections::BTreeSet::new();
         for RetainedGroupedBody {
@@ -499,7 +552,7 @@ impl MemoryStore {
             }
             let body = decode_grouped_body(id, &bytes)?;
             provided_bodies.insert(id);
-            let location = match (next.reader.is_some(), frame, payload_offset) {
+            let location = match (self.reader.is_some(), frame, payload_offset) {
                 (true, Some((object, payload)), Some(offset)) => {
                     let start = usize::try_from(offset).map_err(|_| MemoryError::FieldTooLarge)?;
                     let end = start
@@ -512,7 +565,7 @@ impl MemoryStore {
                 }
                 _ => None,
             };
-            next.insert_body(id, body, &bytes, location)?;
+            self.insert_body(id, body, &bytes, location)?;
         }
         let mut used_provided_bodies = std::collections::BTreeSet::new();
         for bytes in records {
@@ -526,9 +579,9 @@ impl MemoryStore {
             if provided_bodies.contains(&record.body_id) {
                 used_provided_bodies.insert(record.body_id);
             }
-            next.replay(&bytes)?;
+            self.replay(&bytes)?;
             if !allow_missing_body_for_owner_admission
-                && !next.state.bodies.contains_key(&record.body_id)
+                && !self.state.bodies.contains_key(&record.body_id)
             {
                 return Err(MemoryError::Corrupt("grouped creation has no body backing"));
             }
@@ -539,10 +592,9 @@ impl MemoryStore {
             ));
         }
         for id in &provided_bodies {
-            next.validate_body_records(*id)?;
+            self.validate_body_records(*id)?;
         }
-        *self = next;
-        Ok(())
+        Ok(self)
     }
 
     /// Prepare an immutable-body metadata revision for an owner-approved
@@ -659,6 +711,23 @@ impl MemoryStore {
     pub fn memory_ids(&self) -> impl Iterator<Item = MemoryId> + '_ {
         self.state.revisions.keys().copied()
     }
+
+    /// Source identities changed in an exact range of owner Memory versions.
+    /// Includes terminal tombstones and never reads a body.
+    pub fn changes_after(
+        &self,
+        after: u64,
+        through: u64,
+        limit: usize,
+    ) -> impl Iterator<Item = (u64, MemoryId)> + '_ {
+        let end = through.min(self.memory_version()) as usize;
+        let start = after.min(end as u64) as usize;
+        self.state.changes[start..end]
+            .iter()
+            .take(limit)
+            .enumerate()
+            .map(move |(offset, id)| ((start + offset + 1) as u64, *id))
+    }
     /// Whether retained owner history names this body, even if its payload is unavailable.
     pub fn references_body(&self, body_id: MemoryBodyId) -> bool {
         self.state.body_memories.contains_key(&body_id)
@@ -681,6 +750,10 @@ impl MemoryStore {
     /// Install the body identities verified by owner retention admission.
     pub fn retain_pruned_body_fence(&mut self, bodies: BTreeSet<MemoryBodyId>) {
         self.pruned_bodies.extend(bodies);
+    }
+
+    pub fn pruned_body_count(&self) -> usize {
+        self.pruned_bodies.len()
     }
 
     fn require_unpruned_body(&self, id: MemoryBodyId) -> Result<(), MemoryError> {
@@ -888,6 +961,7 @@ impl MemoryStore {
         self.state
             .mutations
             .insert(draft.mutation_id, (target, revision_index));
+        self.state.changes.push(target);
         self.state.next_memory_version = next_version;
         Ok(PublishResult {
             revision: revision_with_body(&record, Some(body)),
@@ -938,6 +1012,7 @@ impl MemoryStore {
             memory_version,
         };
         self.state.tombstones.insert(id, tombstone);
+        self.state.changes.push(id);
         self.state.next_memory_version = next;
         Ok(tombstone)
     }
@@ -1103,6 +1178,7 @@ impl MemoryStore {
                 .entry(record.body_id)
                 .or_default()
                 .insert(record.id);
+            self.state.changes.push(record.id);
             self.state.revisions.insert(record.id, vec![record]);
             self.state.next_memory_version = self
                 .state
@@ -1243,6 +1319,7 @@ impl MemoryStore {
                 .mutations
                 .insert(record.mutation_id.clone(), (delta.id, index));
             history.push(record);
+            self.state.changes.push(delta.id);
             self.state.next_memory_version = self
                 .state
                 .next_memory_version
@@ -1271,6 +1348,7 @@ impl MemoryStore {
                     memory_version,
                 },
             );
+            self.state.changes.push(id);
             self.state.next_memory_version = self
                 .state
                 .next_memory_version

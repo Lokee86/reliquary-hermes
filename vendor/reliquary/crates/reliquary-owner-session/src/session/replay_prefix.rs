@@ -1,10 +1,23 @@
 //! Exact owner identity/version cuts at the physical effect prefix.
+use super::identity_receipt::{IdentityHistory, LocalProjection};
+use super::identity_separation::{SeparationHistory, SeparationProjection};
+use super::observations::ObservationPrefix;
 use super::*;
 use crate::records::user_memory::{UserMemoryEffect, UserMemoryRecord};
+use reliquary_perception_store::observation::ObservationStore;
 pub(super) fn validate_graph_prefix(
     container: &Container,
     memory_store: &MemoryStore,
-) -> Result<(), OwnerSessionError> {
+    identity_context: Option<(&PerceptionStore, [u8; 32])>,
+    pruned_bodies: &BTreeSet<MemoryBodyId>,
+    observation_archive_cuts: &BTreeMap<u64, (u64, u64)>,
+) -> Result<(IdentityHistory, SeparationHistory, ObservationStore), OwnerSessionError> {
+    let mut observations = ObservationStore::default();
+    let mut receipts = IdentityHistory::default();
+    let mut separations = SeparationHistory::default();
+    let mut perception_cut = 0;
+    let mut retained_ordinal_cut = None;
+    let mut observed_bodies = BTreeSet::new();
     let mut memories = std::collections::BTreeSet::new();
     let mut memory_bodies = std::collections::BTreeSet::new();
     let mut birth_bodies = std::collections::BTreeMap::new();
@@ -13,8 +26,66 @@ pub(super) fn validate_graph_prefix(
     let mut entities = std::collections::BTreeSet::new();
     let mut graph_version = 0;
     let mut memory_head = 0;
-    let mut frames = container.scan_frames()?;
+    let mut frames = container
+        .scan_matching_frames(crate::records::frame_selection::without_archive_publications)?;
     while let Some(frame) = frames.next_frame()? {
+        if let Some((perception, history_generation)) = identity_context {
+            let envelope = reliquary_container::decode_publication(frame.payload)?;
+            let body = envelope.as_ref().map_or(frame.payload, |entry| entry.body);
+            if body.starts_with(super::observations::PREFIX) {
+                let prefix = ObservationPrefix {
+                    owner: container.owner_id(),
+                    generation: history_generation,
+                    memories: memory_store,
+                    memory_cut: memory_head,
+                    perception,
+                    perception_cut,
+                    retained_ordinal_cut,
+                    observed_bodies: Some(&observed_bodies),
+                    unobserved_suffix_bodies: None,
+                };
+                prefix.admit(&mut observations, frame.payload, observation_archive_cuts)?;
+                continue;
+            }
+            if body.starts_with(super::identity_receipt::PREFIX) {
+                let projection = LocalProjection {
+                    memories: memory_store,
+                    memory_cut: memory_head,
+                    observed_bodies: Some(&observed_bodies),
+                    pruned_bodies,
+                    perception,
+                    perception_cut,
+                    retained_ordinal_cut,
+                };
+                receipts.replay(frame.payload, container.owner_id(), projection)?;
+                continue;
+            }
+            if body.starts_with(super::identity_separation::PREFIX) {
+                let projection = SeparationProjection {
+                    owner: container.owner_id(),
+                    history_generation,
+                    receipts: &receipts,
+                    perception,
+                    memory_cut: memory_head,
+                    perception_cut,
+                };
+                separations.replay(frame.payload, projection)?;
+                continue;
+            }
+            if let Some(ordinal) =
+                reliquary_perception_store::retained_resolution_ordinal_in_frame(frame.payload)?
+            {
+                retained_ordinal_cut = Some(ordinal);
+            }
+            if let Some(id) = reliquary_memory_core::body_id_in_frame(body)? {
+                observed_bodies.insert(id);
+            }
+            if let Some(version) =
+                reliquary_perception_store::perception_version_in_frame(frame.payload)?
+            {
+                perception_cut = version;
+            }
+        }
         if let Some(frontier) =
             crate::records::dream_frontier::FrontierRecord::decode(frame.payload)
                 .map_err(OwnerSessionError::Record)?
@@ -139,6 +210,9 @@ pub(super) fn validate_graph_prefix(
             } else if crate::records::insomnia_completion::is_grouped_completion(payload) {
                 let completion = GroupedInsomniaCompletion::decode(payload)
                     .map_err(OwnerSessionError::Record)?;
+                if identity_context.is_some() {
+                    observed_bodies.extend(completion.bodies.iter().map(|body| body.id));
+                }
                 for record in completion.memory_records {
                     let record = reliquary_memory_core::decode_grouped_creation(&record)?;
                     memory_head = record.memory_version;
@@ -306,7 +380,7 @@ pub(super) fn validate_graph_prefix(
             graph_version = relation.graph_version;
         }
     }
-    Ok(())
+    Ok((receipts, separations, observations))
 }
 
 pub(super) fn validate_user_memory_prefix(

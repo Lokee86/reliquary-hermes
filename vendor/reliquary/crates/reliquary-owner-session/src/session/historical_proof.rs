@@ -9,6 +9,7 @@ mod projection;
 #[cfg(test)]
 mod tests;
 
+use super::{identity_receipt::StoredReceipt, identity_separation::StoredSeparation};
 use grouped::validate_grouped_memory_cut;
 use projection::{common_count, common_history, validate_rel_cut};
 
@@ -27,6 +28,9 @@ pub struct HistoricalOwnerCut {
 pub struct RelHistoricalCut {
     pub owner: HistoricalOwnerCut,
     pub archive_version: u64,
+    pub identity_version: u64,
+    pub separation_version: u64,
+    pub observation_version: u64,
     pub freshness: FreshnessEventCut,
 }
 
@@ -77,6 +81,11 @@ pub(super) struct CommonHistory {
     pub(super) unavailable_payloads: usize,
 }
 
+struct IdentityAuditHistory<'a> {
+    receipts: &'a [StoredReceipt],
+    separations: &'a [StoredSeparation],
+}
+
 impl RelSession {
     /// Capture the fully accepted owner heads as one explicit historical cut.
     pub fn current_historical_cut(&self) -> RelHistoricalCut {
@@ -90,6 +99,9 @@ impl RelSession {
                 vector_version: self.generations.vector_version(),
             },
             archive_version: self.archive.archive_version(),
+            identity_version: self.identity_history.frontier(),
+            separation_version: self.identity_separation_history.frontier(),
+            observation_version: self.observations.frontier(),
             freshness: self.freshness.cut_through_turn(rel_turn),
         }
     }
@@ -124,6 +136,54 @@ impl RelSession {
             .map_err(HistoricalProofError::InvalidState)?;
         let freshness_evidence = self.freshness.replay_entries_at(&cut.freshness);
         validate_rel_cut(&common, &archive, &freshness)?;
+        let identities = self
+            .identity_history
+            .at(cut.identity_version)
+            .ok_or(HistoricalProofError::FutureCut("identity comparison"))?;
+        if identities.iter().any(|entry| {
+            entry.memory_cut > cut.owner.memory_version
+                || entry.perception_cut > cut.owner.perception_version
+        }) {
+            return Err(HistoricalProofError::InconsistentCut(
+                "identity receipts exceed the Memory or perception cut",
+            ));
+        }
+        let separations = self
+            .identity_separation_history
+            .at(cut.separation_version)
+            .ok_or(HistoricalProofError::FutureCut(
+                "Entity separation confirmation",
+            ))?;
+        if separations.iter().any(|entry| {
+            entry.memory_cut > cut.owner.memory_version
+                || entry.perception_cut > cut.owner.perception_version
+                || entry.identity_cut > cut.identity_version
+        }) {
+            return Err(HistoricalProofError::InconsistentCut(
+                "Entity separation confirmations exceed the Memory, perception or identity receipt cut",
+            ));
+        }
+        let observation_records = self.observations.records();
+        let count = observation_records
+            .partition_point(|(receipt, _)| receipt.publication_version <= cut.observation_version);
+        let observations = &observation_records[..count];
+        if observations
+            .last()
+            .map_or(0, |(receipt, _)| receipt.publication_version)
+            != cut.observation_version
+        {
+            return Err(HistoricalProofError::FutureCut("Observation"));
+        }
+        if observations.iter().any(|(_, record)| {
+            record.memory_cut > cut.owner.memory_version
+                || record.perception_cut > cut.owner.perception_version
+                || record.archive_cut > cut.archive_version
+                || record.rel_turn > cut.freshness.rel_turn
+        }) {
+            return Err(HistoricalProofError::InconsistentCut(
+                "Observation publications exceed the Memory, Perception or REL activity cut",
+            ));
+        }
         let retained = common_count(&common)
             .checked_add(archive.turns.len())
             .and_then(|count| count.checked_add(archive.branch_revisions.len()))
@@ -132,6 +192,9 @@ impl RelSession {
             .and_then(|count| count.checked_add(archive.fragment_definitions.len()))
             .and_then(|count| count.checked_add(archive.conversation_tombstones.len()))
             .and_then(|count| count.checked_add(freshness_evidence.len()))
+            .and_then(|count| count.checked_add(identities.len()))
+            .and_then(|count| count.checked_add(separations.len()))
+            .and_then(|count| count.checked_add(observations.len()))
             .ok_or(HistoricalProofError::LimitExceeded)?;
         if retained > MAX_PROOF_RECORDS || archive.publication_bindings.len() > MAX_PROOF_RECORDS {
             return Err(HistoricalProofError::LimitExceeded);
@@ -146,6 +209,11 @@ impl RelSession {
                 &archive,
                 &freshness,
                 &freshness_evidence,
+                IdentityAuditHistory {
+                    receipts: identities,
+                    separations,
+                },
+                observations,
                 cut,
             ),
             retained_records: retained,

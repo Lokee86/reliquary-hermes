@@ -5,6 +5,8 @@
 
 mod archive;
 mod codec;
+mod embedding_redaction;
+pub use embedding_redaction::redact_embedding_text;
 mod echo_codec;
 mod echo_model;
 mod echo_store;
@@ -26,7 +28,8 @@ pub use archive::{
 pub use echo_model::{EchoError, EchoEvent, EchoEventKind};
 pub use echo_store::EchoStore;
 pub use fragment::{
-    Fragment, FragmentConfig, FragmentDefinition, FragmentId, fragment_id, path_fragment_windows,
+    Fragment, FragmentConfig, FragmentDefinition, FragmentId, FragmentPassage, fragment_id,
+    path_fragment_windows,
 };
 pub use lexical::{
     FragmentLexicalIndex, FragmentLexicalIndexStats, LEXICAL_FREQUENCY_CAP, LexicalMatchCounts,
@@ -83,6 +86,45 @@ pub fn import_receipt_in_frame(payload: &[u8]) -> Result<Option<ImportReceipt>, 
     }
 }
 
+/// Conservative physical-prefix test for an Archive import receipt. Callers
+/// must pass the complete frame to `import_receipt_in_frame` for validation.
+/// Uncertain or malformed Archive headers stay selected for that validation.
+pub fn import_receipt_candidate(prefix: &[u8]) -> bool {
+    match applying_archive_payload(prefix) {
+        Ok(Some(payload)) => payload.starts_with(b"CVAIMPT1"),
+        Ok(None) => false,
+        Err(_) => true,
+    }
+}
+
+#[cfg(test)]
+mod import_receipt_candidate_tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_nested_timed_receipt_without_decoding_its_record() {
+        let mut frame = b"RELPUB01".to_vec();
+        frame.extend_from_slice(&1u64.to_le_bytes());
+        frame.push(1);
+        frame.extend_from_slice(&0i64.to_le_bytes());
+        frame.extend_from_slice(b"RELAPB01");
+        frame.extend_from_slice(&1u64.to_le_bytes());
+        frame.push(0);
+        frame.extend_from_slice(b"CVAIMPT1");
+        frame.resize(80, 0);
+        assert!(import_receipt_candidate(&frame[..64]));
+        frame[42..50].copy_from_slice(b"RELTURN2");
+        assert!(!import_receipt_candidate(&frame[..64]));
+        frame[16] = 9;
+        assert!(import_receipt_candidate(&frame[..64]));
+    }
+}
+
+/// Select payloads carrying accepted Archive semantics during physical replay.
+pub fn archive_replay_frame(prefix: &[u8]) -> bool {
+    archive::archive_replay_frame(prefix)
+}
+
 /// Owner-session source facts needed to validate a physical Archive prefix.
 pub enum SourcePublication {
     Turn {
@@ -93,15 +135,20 @@ pub enum SourcePublication {
     Episode(EpisodeId),
 }
 
+/// Whether an owner payload begins with an Archive source record marker.
+/// The caller still needs `source_publication` to validate the complete record.
+pub fn is_source_publication_marker(payload: &[u8]) -> bool {
+    [b"RELEPIS1", b"RELTURN2", b"RELTPR01"]
+        .iter()
+        .any(|marker| payload.starts_with(*marker))
+}
+
 /// Identify accepted source publications without exposing the Archive codec.
 pub fn source_publication(payload: &[u8]) -> Result<Option<SourcePublication>, ArchiveError> {
     let Some(payload) = applying_archive_payload(payload)? else {
         return Ok(None);
     };
-    if ![b"RELEPIS1", b"RELTURN2", b"RELTPR01"]
-        .iter()
-        .any(|marker| payload.starts_with(*marker))
-    {
+    if !is_source_publication_marker(payload) {
         return Ok(None);
     }
     match codec::decode_record(payload)? {

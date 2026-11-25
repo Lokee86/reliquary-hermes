@@ -3,6 +3,7 @@
 //! This crate owns accepted turn, branch, and Episode semantics. Container owns
 //! framing and bytes; Archive does not depend on the application or other owners.
 
+mod fragment_passages;
 mod history;
 mod payload;
 mod publications;
@@ -25,14 +26,27 @@ use crate::{
 use payload::{FrameRange, Payload};
 use reliquary_container::{
     Container, ContainerError, ContainerIdentity, FileKind, LeasedFrameReader, ObjectRef,
-    PhysicalClock,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
-use std::io::Read;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 use turn_table::{AcceptedTurn, TurnTable};
+
+pub(crate) fn archive_replay_frame(prefix: &[u8]) -> bool {
+    if prefix.starts_with(b"RELPUB") {
+        return match reliquary_container::decode_publication(prefix) {
+            Ok(Some(publication)) => {
+                publication.body.starts_with(b"RELAPB")
+                    || publication
+                        .body
+                        .starts_with(crate::retained::PROJECT_BACKING_PREFIX)
+            }
+            _ => true,
+        };
+    }
+    prefix.starts_with(b"RELAPB") || crate::codec::archive_record_prefix(prefix)
+}
 
 mod evidence;
 pub use evidence::{
@@ -123,37 +137,54 @@ impl Archive {
     }
 
     fn open_with_payloads(container: &Container, leased: bool) -> Result<Self, ArchiveError> {
+        Self::open_observing_prefixes(container, leased, archive_replay_frame, |_, _, _| {})
+    }
+
+    /// Observe Archive version and activity at selected physical frames.
+    /// The selector must include all frames selected by `archive_replay_frame`.
+    pub fn open_observing_prefixes(
+        container: &Container,
+        leased: bool,
+        select: fn(&[u8]) -> bool,
+        mut observe: impl FnMut(&[u8], u64, u64),
+    ) -> Result<Self, ArchiveError> {
         let mut archive = Self::empty();
         if leased {
             archive.bind_read_lease(container)?;
         } else {
             archive.bind_empty_owner(container)?;
         }
-        let mut clock = None;
-        {
-            let mut cursor = container.physical_cursor()?;
-            while let Some(mut frame) = cursor.next_frame()? {
-                let mut marker = [0; 8];
-                if frame.object().length < marker.len() as u64 {
-                    continue;
-                }
-                frame.read_exact(&mut marker).map_err(ContainerError::Io)?;
-                if &marker == crate::PROJECT_BACKING_MARKER
-                    || &marker == crate::PROJECT_CORRELATION_MARKER
-                {
-                    clock = Some(PhysicalClock::default());
-                    break;
-                }
+        let mut cursor = container.matching_physical_cursor(|prefix| {
+            prefix.starts_with(crate::PROJECT_BACKING_MARKER)
+                || prefix.starts_with(crate::PROJECT_CORRELATION_MARKER)
+        })?;
+        let has_project_clock = cursor.next_frame()?.is_some();
+        drop(cursor);
+        if has_project_clock {
+            let mut frames = container.scan_clocked_matching_frames(select)?;
+            while let Some(frame) = frames.next_frame()? {
+                observe(
+                    frame.payload,
+                    archive.archive_version,
+                    archive.rel_turn_count,
+                );
+                archive.replay_frame(
+                    container,
+                    frame.object,
+                    frame.payload,
+                    frame.global_version,
+                )?;
             }
-        }
-        let mut frames = container.scan_frames()?;
-        while let Some(frame) = frames.next_frame()? {
-            let global_version = clock
-                .as_mut()
-                .map(|clock| clock.observe_frame(frame.payload))
-                .transpose()?
-                .unwrap_or(0);
-            archive.replay_frame(container, frame.object, frame.payload, global_version)?;
+        } else {
+            let mut frames = container.scan_matching_frames(select)?;
+            while let Some(frame) = frames.next_frame()? {
+                observe(
+                    frame.payload,
+                    archive.archive_version,
+                    archive.rel_turn_count,
+                );
+                archive.replay_frame(container, frame.object, frame.payload, 0)?;
+            }
         }
         Ok(archive)
     }
@@ -559,6 +590,14 @@ impl Archive {
                 close_tail,
             })
             .collect::<Vec<_>>();
+        self.put_fragment_definitions(container, proposed)
+    }
+
+    fn put_fragment_definitions(
+        &mut self,
+        container: &mut Container,
+        proposed: Vec<crate::FragmentDefinition>,
+    ) -> Result<Vec<crate::FragmentDefinition>, ArchiveError> {
         let mut output = Vec::with_capacity(proposed.len());
         let mut new_definitions = Vec::new();
         for definition in proposed {
@@ -1147,22 +1186,46 @@ impl Archive {
                     ));
                 }
                 let mut expected = BTreeMap::new();
+                let mut branch_windows = BTreeMap::new();
                 for definition in &definitions {
                     if definition.archive_cut != archive_cut {
                         return Err(ArchiveError::CorruptRecord("fragment cut mismatch"));
                     }
-                    let fragments = self.branch_fragment_windows(
-                        &definition.fragment.conversation_id,
-                        &definition.branch_id,
-                        definition.config,
-                        definition.close_tail,
-                    )?;
-                    if !fragments.contains(&definition.fragment)
-                        || expected
-                            .insert(definition.fragment.id, definition)
-                            .is_some()
+                    if definition.fragment.passage.is_some() {
+                        self.validate_passage_definition(definition)?;
+                    } else {
+                        let key = (
+                            definition.fragment.conversation_id.as_str(),
+                            definition.branch_id.as_str(),
+                            definition.config.turns,
+                            definition.config.overlap,
+                            definition.close_tail,
+                        );
+                        let windows = match branch_windows.entry(key) {
+                            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                            std::collections::btree_map::Entry::Vacant(entry) => {
+                                let windows = self
+                                    .branch_fragment_windows(
+                                        key.0,
+                                        key.1,
+                                        definition.config,
+                                        key.4,
+                                    )?
+                                    .into_iter()
+                                    .map(|window| (window.id, window))
+                                    .collect::<BTreeMap<_, _>>();
+                                entry.insert(windows)
+                            }
+                        };
+                        if windows.get(&definition.fragment.id) != Some(&definition.fragment) {
+                            return Err(ArchiveError::CorruptRecord("invalid fragment definition"));
+                        }
+                    }
+                    if expected
+                        .insert(definition.fragment.id, definition)
+                        .is_some()
                     {
-                        return Err(ArchiveError::CorruptRecord("invalid fragment definition"));
+                        return Err(ArchiveError::CorruptRecord("duplicate fragment definition"));
                     }
                 }
                 if expected.len() != definitions.len()

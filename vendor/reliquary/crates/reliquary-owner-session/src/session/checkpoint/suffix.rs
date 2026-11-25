@@ -1,6 +1,9 @@
 use super::super::{
-    GraphAdmission, MemoryId, OwnerSessionError, RelSession,
-    rel_dependencies::REL_DEPENDENCY_MAGIC, replay, replay_prefix,
+    GraphAdmission, MemoryBodyId, MemoryId, OwnerSessionError, RelSession,
+    identity_separation::{PREFIX as SEPARATION_PREFIX, SeparationProjection},
+    observations,
+    rel_dependencies::REL_DEPENDENCY_MAGIC,
+    replay, replay_prefix,
 };
 use crate::records::user_memory::UserMemoryRecord;
 use reliquary_container::{Container, PhysicalCheckpoint};
@@ -27,6 +30,7 @@ pub(super) fn replay(
     }
     let mut frames = container.scan_frames_from(checkpoint.covered_end)?;
     let mut memory_changed = false;
+    let mut suffix_bodies = BTreeSet::new();
     while let Some(frame) = frames.next_frame()? {
         let payload = frame.payload;
         if payload.starts_with(b"RELVERS1") || payload.starts_with(b"RELVERS2") {
@@ -39,20 +43,24 @@ pub(super) fn replay(
         if reliquary_archive::is_turn_or_branch_publication(payload)? {
             // These publications carry their own coordinates. The separate
             // project-binding carriers that need a frontier use full replay.
-            session
-                .archive
-                .replay_frame(container, frame.object, payload, 0)?;
             continue;
         }
         let envelope = reliquary_container::decode_publication(payload)?;
         let body = envelope.as_ref().map_or(payload, |value| value.body);
+        if body.starts_with(super::super::identity_receipt::PREFIX) {
+            return Ok(false);
+        }
+        if body.starts_with(SEPARATION_PREFIX) || body.starts_with(observations::PREFIX) {
+            continue;
+        }
         if let Some(id) = body_id_in_frame(body)?
-            && session.common.memories.references_body(id)
             && !session.common.memories.contains_body_payload(id)
         {
-            // Previously unbacked revisions can now change mention spans and
-            // Dream eligibility. Admit those cross-store effects from the start.
-            return Ok(false);
+            if session.common.memories.references_body(id) {
+                // Newly backed revisions can change cross-store effects.
+                return Ok(false);
+            }
+            suffix_bodies.insert(id);
         }
         if native_memory_frame(body) || (envelope.is_none() && management_frame(payload)) {
             memory_changed = true;
@@ -61,10 +69,13 @@ pub(super) fn replay(
         }
     }
 
-    if memory_changed {
-        return replay_memory_suffix(session, container, checkpoint.covered_end);
-    }
-    Ok(true)
+    replay_typed_suffix(
+        session,
+        container,
+        checkpoint.covered_end,
+        memory_changed,
+        suffix_bodies,
+    )
 }
 
 fn native_memory_frame(payload: &[u8]) -> bool {
@@ -77,27 +88,50 @@ fn management_frame(payload: &[u8]) -> bool {
     payload.starts_with(b"RELMCOR") || payload.starts_with(b"RELMRET")
 }
 
-fn replay_memory_suffix(
+fn replay_typed_suffix(
     session: &mut RelSession,
     container: &Container,
     covered_end: u64,
+    memory_changed: bool,
+    mut suffix_bodies: BTreeSet<MemoryBodyId>,
 ) -> Result<bool, OwnerSessionError> {
     let common = &mut session.common;
     let mut memory_head = common.memories.memory_version();
     let mut touched = BTreeSet::new();
-    common.memories = replay::replay_memories(
-        container,
-        MemoryReplayStart::Checkpoint {
-            store: std::mem::take(&mut common.memories),
-            covered_end,
-        },
-        true,
-        &mut BTreeSet::new(),
-        &mut common.user_memory_requests,
-    )?;
+    if memory_changed {
+        common.memories = replay::replay_memories(
+            container,
+            MemoryReplayStart::Checkpoint {
+                store: std::mem::take(&mut common.memories),
+                covered_end,
+            },
+            true,
+            &mut BTreeSet::new(),
+            &mut common.user_memory_requests,
+        )?;
+    }
 
     let mut frames = container.scan_frames_from(covered_end)?;
     while let Some(frame) = frames.next_frame()? {
+        if reliquary_archive::is_turn_or_branch_publication(frame.payload)? {
+            session
+                .archive
+                .replay_frame(container, frame.object, frame.payload, 0)?;
+            continue;
+        }
+        if frame.payload.starts_with(REL_DEPENDENCY_MAGIC) {
+            continue; // Already applied in the eligibility pass.
+        }
+        let envelope = reliquary_container::decode_publication(frame.payload)?;
+        let body = envelope.as_ref().map_or(frame.payload, |value| value.body);
+        if body.starts_with(observations::PREFIX) {
+            observations::admit_suffix(session, frame.payload, memory_head, &suffix_bodies)?;
+            continue;
+        }
+        if let Some(id) = body_id_in_frame(body)? {
+            suffix_bodies.remove(&id);
+        }
+        let common = &mut session.common;
         if let Some(record) =
             UserMemoryRecord::decode(frame.payload).map_err(OwnerSessionError::Record)?
         {
@@ -122,14 +156,26 @@ fn replay_memory_suffix(
                 track_memory_change(child, &mut memory_head, &mut touched)?;
             }
         } else {
-            let envelope = reliquary_container::decode_publication(frame.payload)?;
-            track_memory_change(
-                envelope.as_ref().map_or(frame.payload, |value| value.body),
-                &mut memory_head,
-                &mut touched,
-            )?;
+            if body.starts_with(SEPARATION_PREFIX) {
+                if !session.identity_separation_history.replay(
+                    frame.payload,
+                    SeparationProjection {
+                        owner: session.owner_id,
+                        history_generation: session.history_generation,
+                        receipts: &session.identity_history,
+                        perception: &common.perception,
+                        memory_cut: memory_head,
+                        perception_cut: common.perception.version(),
+                    },
+                )? {
+                    return Ok(false);
+                }
+            } else if memory_changed {
+                track_memory_change(body, &mut memory_head, &mut touched)?;
+            }
         }
     }
+    let common = &mut session.common;
     if memory_head != common.memories.memory_version() {
         return Err(OwnerSessionError::Record(
             "checkpoint Memory frontier differs".into(),
@@ -149,7 +195,9 @@ fn replay_memory_suffix(
     }) {
         return Ok(false);
     }
-    common.refresh_dream_index(&touched.into_iter().collect::<Vec<_>>())?;
+    if memory_changed {
+        common.refresh_dream_index(&touched.into_iter().collect::<Vec<_>>())?;
+    }
     Ok(true)
 }
 

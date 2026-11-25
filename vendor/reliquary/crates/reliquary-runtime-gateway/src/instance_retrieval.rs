@@ -1,8 +1,14 @@
 use super::instance_owner::RelMount;
 use super::*;
-use reliquary_application::{
-    AgenticMemory, RetrievalAction, RetrievalEvaluation, RetrievalTurn, evaluate_retrieval,
+use crate::instance_observation_reads::{
+    ObservationReadCut, observations_are_current, rank_current_observations,
 };
+use crate::instance_passive_retrieval::capture_memory_snapshot;
+use reliquary_application::{
+    RetrievalAction, RetrievalEvaluation, RetrievalTurn, evaluate_snapshot_retrieval,
+};
+use reliquary_application::{TemporalEvidence, TemporalFilter};
+use reliquary_owner_session::observation::{ObservationCitation, ObservationSource};
 use reliquary_owner_session::{
     FreshnessEventProof, FreshnessMemoryId,
     model::{CompatibilityProfileId, MemoryId},
@@ -15,6 +21,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+
+const MAX_AGENTIC_OBSERVATIONS: usize = 8;
 
 /// Opaque proposal bound to one authenticated Instance, REL, turn, and exact
 /// body revisions. It grants no delivery or Freshness authority by itself.
@@ -45,6 +53,28 @@ impl PreparedMemoryDelivery {
     /// The opaque result remains the only authority to deliver its contents.
     pub fn stable_id(&self) -> &str {
         &self.use_id
+    }
+}
+
+/// Result of completing trusted delivery for one exact prepared selection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RetrievalDeliveryOutcome {
+    /// The pending selection completed. Observation-only delivery has no
+    /// Memory use to record.
+    Confirmed { recorded_memory_use: bool },
+    /// Exact delivery had already been confirmed.
+    Replay,
+}
+
+impl RetrievalDeliveryOutcome {
+    /// Whether this invocation added a durable Memory-use receipt.
+    pub fn recorded_memory_use(self) -> bool {
+        matches!(
+            self,
+            Self::Confirmed {
+                recorded_memory_use: true
+            }
+        )
     }
 }
 
@@ -91,6 +121,7 @@ pub enum RetrievalMode {
 pub(super) struct TurnState {
     pub(super) turn: reliquary_application::RetrievalTurn,
     pub(super) generation: u64,
+    pub(super) provided_observations: BTreeSet<ObservationCitation>,
     pub(super) pending_use_id: Option<String>,
     pub(super) pending_profile: Option<CompatibilityProfileId>,
     pub(super) handoff_checked: bool,
@@ -131,9 +162,15 @@ struct DeliveryPayload<'a> {
     pub(super) community_generation: Option<u64>,
     pub(super) community_graph_version: Option<u64>,
     pub(super) query: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) temporal_filter: Option<TemporalFilter>,
     pub(super) searched_ids: Vec<String>,
     pub(super) selected_ids: Vec<String>,
     pub(super) memories: Vec<DeliveredMemory<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) selected_observations: Vec<ObservationCitation>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) observations: Vec<&'a ObservationClaim>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -147,9 +184,15 @@ pub(super) struct DeliveryManifest {
     pub(super) community_generation: Option<u64>,
     pub(super) community_graph_version: Option<u64>,
     pub(super) query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) temporal_filter: Option<TemporalFilter>,
     pub(super) searched_ids: Vec<String>,
     pub(super) selected_ids: Vec<String>,
     pub(super) memories: Vec<ManifestMemory>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) selected_observations: Vec<ObservationCitation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) observations: Vec<ObservationClaim>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -175,20 +218,6 @@ mod recovery;
 #[cfg(test)]
 #[path = "instance_retrieval/tests.rs"]
 mod tests;
-fn memories_for_bindings(
-    memories: &[AgenticMemory],
-    ids: &BTreeSet<reliquary_owner_session::model::MemoryId>,
-) -> Vec<(
-    reliquary_owner_session::model::MemoryId,
-    u64,
-    reliquary_owner_session::model::MemoryBodyId,
-)> {
-    memories
-        .iter()
-        .filter(|m| ids.contains(&m.id))
-        .map(|m| (m.id, m.revision, m.body_id))
-        .collect()
-}
 pub(super) fn validate_prepared(
     instance: &Instance,
     turn: &MemoryRetrievalTurn,

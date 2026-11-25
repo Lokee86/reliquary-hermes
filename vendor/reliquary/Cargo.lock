@@ -585,9 +585,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
+ "js-sys",
  "num-traits",
  "serde",
+ "wasm-bindgen",
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "chrono-tz"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
+dependencies = [
+ "chrono",
+ "phf",
 ]
 
 [[package]]
@@ -2645,6 +2657,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "phf"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "913273894cec178f401a31ec4b656318d95473527be05c0752cc41cdc32be8b7"
+dependencies = [
+ "phf_shared",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06005508882fb681fd97892ecff4b7fd0fee13ef1aa569f8695dae7ab9099981"
+dependencies = [
+ "siphasher",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3086,6 +3116,8 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "reliquary-application"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "chrono-tz",
  "lodestone-packed",
  "lore",
  "reliquary-archive",
@@ -3093,6 +3125,7 @@ dependencies = [
  "reliquary-container",
  "reliquary-context-engine",
  "reliquary-dream",
+ "reliquary-ego",
  "reliquary-ego-store",
  "reliquary-entity-resolution",
  "reliquary-freshness",
@@ -3100,8 +3133,10 @@ dependencies = [
  "reliquary-graph",
  "reliquary-insomnia",
  "reliquary-insomnia-store",
+ "reliquary-memory-audit",
  "reliquary-memory-core",
  "reliquary-owner-session",
+ "reliquary-perception",
  "reliquary-perception-store",
  "reliquary-project-environment",
  "reliquary-retrieval",
@@ -3118,6 +3153,7 @@ name = "reliquary-archive"
 version = "0.1.0"
 dependencies = [
  "aho-corasick",
+ "regex",
  "reliquary-container",
  "serde",
  "serde_json",
@@ -3157,6 +3193,16 @@ dependencies = [
  "reliquary-memory-core",
  "reliquary-switchboard",
  "reliquary-vectors",
+ "serde_json",
+]
+
+[[package]]
+name = "reliquary-ego"
+version = "0.1.0"
+dependencies = [
+ "reliquary-memory-audit",
+ "reliquary-switchboard",
+ "serde",
  "serde_json",
 ]
 
@@ -3261,6 +3307,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "reliquary-memory-audit"
+version = "0.1.0"
+dependencies = [
+ "reliquary-switchboard",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "reliquary-memory-core"
 version = "0.1.0"
 dependencies = [
@@ -3294,6 +3349,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "reliquary-perception"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "reliquary-memory-audit",
+ "reliquary-switchboard",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "reliquary-perception-store"
 version = "0.1.0"
 dependencies = [
@@ -3323,6 +3389,8 @@ dependencies = [
  "reliquary-memory-core",
  "reliquary-vector-store",
  "reliquary-vectors",
+ "serde",
+ "time",
 ]
 
 [[package]]

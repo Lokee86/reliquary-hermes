@@ -11,7 +11,7 @@ use crate::{
     FRESHNESS_POLICY_VERSION, FreshnessMemoryId, FreshnessPolicy, FreshnessRecord, validate_policy,
 };
 use reliquary_container::{Container, ContainerError, ContainerIdentity};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 
 mod history_cut;
@@ -19,6 +19,20 @@ mod history_cut;
 mod initial_dream;
 
 const MAX_FRAME_BYTES: u64 = 128 * 1024 * 1024;
+
+fn freshness_replay_frame(prefix: &[u8]) -> bool {
+    [
+        POLICY_MAGIC.as_slice(),
+        b"RELFRS",
+        crate::historical_snapshot::MAGIC,
+        crate::RETAINED_FRESHNESS_AUTHORITY_MARKER,
+        b"RELDRF",
+        b"RELINSC7",
+        b"RELINSC8",
+    ]
+    .iter()
+    .any(|marker| prefix.starts_with(*marker))
+}
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct FreshnessStore {
@@ -31,6 +45,9 @@ pub struct FreshnessStore {
     events: BTreeMap<String, FreshnessEvent>,
     uses: BTreeMap<String, (FreshnessUseReceipt, FreshnessEventProof)>,
     journal: Vec<JournalEntry>,
+    journal_by_memory: BTreeMap<FreshnessMemoryId, Vec<usize>>,
+    changed_memories: Vec<FreshnessMemoryId>,
+    last_event_by_turn: BTreeMap<u64, String>,
     historical_snapshots: Vec<HistoricalFreshnessSnapshot>,
     retained_authority: Option<crate::RetainedFreshnessAuthority>,
 }
@@ -53,6 +70,9 @@ impl FreshnessStore {
             events: BTreeMap::new(),
             uses: BTreeMap::new(),
             journal: Vec::new(),
+            journal_by_memory: BTreeMap::new(),
+            changed_memories: Vec::new(),
+            last_event_by_turn: BTreeMap::new(),
             historical_snapshots: Vec::new(),
             retained_authority: None,
         }
@@ -89,17 +109,15 @@ impl FreshnessStore {
         let owner = container.owner_id();
         let mut store = Self::new(Some(owner));
         store.identity = Some(container.identity());
-        let mut cursor = container.physical_cursor().map_err(display_error)?;
-        let mut clock = reliquary_container::PhysicalClock::default();
-        while let Some(mut frame) = cursor.next_frame().map_err(display_error)? {
-            if frame.object().length > MAX_FRAME_BYTES {
-                return Err("Freshness record frame exceeds size limit".into());
-            }
-            let mut payload = Vec::new();
-            frame
-                .read_to_end(&mut payload)
-                .map_err(|error| error.to_string())?;
-            let global_version = clock.observe_frame(&payload).map_err(display_error)?;
+        if container.max_frame_length().map_err(display_error)? > MAX_FRAME_BYTES {
+            return Err("Freshness record frame exceeds size limit".into());
+        }
+        let mut frames = container
+            .scan_clocked_matching_frames(freshness_replay_frame)
+            .map_err(display_error)?;
+        while let Some(frame) = frames.next_frame().map_err(display_error)? {
+            let payload = frame.payload;
+            let global_version = frame.global_version;
             if payload.starts_with(b"RELDRF") {
                 for effect in decode_dream(&payload, &store)? {
                     store.ingest_payload(&effect)?;
@@ -503,6 +521,37 @@ impl FreshnessStore {
         self.project(Some(cut))
     }
 
+    /// Reuse historical projection for a bounded page without replaying
+    /// unrelated Memory activities or cloning an entire retained snapshot.
+    pub fn records_for_memories_at(
+        &self,
+        cut: &FreshnessEventCut,
+        memories: impl IntoIterator<Item = FreshnessMemoryId>,
+    ) -> Result<BTreeMap<FreshnessMemoryId, FreshnessRecord>, String> {
+        self.project_selected(Some(cut), Some(&memories.into_iter().collect()))
+    }
+
+    pub fn memory_change_position(&self) -> u64 {
+        self.changed_memories.len() as u64
+    }
+
+    /// Bounded continuation by affected Memory, including a journal entry
+    /// that reinforces more than one Memory.
+    pub fn memory_changes_after(
+        &self,
+        after: u64,
+        through: u64,
+        limit: usize,
+    ) -> impl Iterator<Item = (u64, FreshnessMemoryId)> + '_ {
+        let end = through.min(self.memory_change_position()) as usize;
+        let start = after.min(end as u64) as usize;
+        self.changed_memories[start..end]
+            .iter()
+            .take(limit)
+            .enumerate()
+            .map(move |(offset, id)| ((start + offset + 1) as u64, *id))
+    }
+
     /// Project all accepted events through the given turn, including events
     /// accepted on that turn. An event cut without an ID instead selects the
     /// boundary before that turn's events.
@@ -753,6 +802,8 @@ impl FreshnessStore {
     }
 
     fn apply_entry(&mut self, entry: JournalEntry) -> Result<(), String> {
+        let position = self.journal.len();
+        let journal_by_memory = &mut self.journal_by_memory;
         match &entry {
             JournalEntry::Birth {
                 memory_id,
@@ -768,6 +819,11 @@ impl FreshnessStore {
                 }
                 self.births
                     .insert(*memory_id, (*accepted_turn, *admitted_at_birth));
+                journal_by_memory
+                    .entry(*memory_id)
+                    .or_default()
+                    .push(position);
+                self.changed_memories.push(*memory_id);
             }
             JournalEntry::Admission {
                 memory_id,
@@ -781,6 +837,11 @@ impl FreshnessStore {
                     };
                 }
                 self.admissions.insert(*memory_id, *accepted_turn);
+                journal_by_memory
+                    .entry(*memory_id)
+                    .or_default()
+                    .push(position);
+                self.changed_memories.push(*memory_id);
             }
             JournalEntry::Event(event) => {
                 if let Some(old) = self.events.get(&event.event_id) {
@@ -790,7 +851,12 @@ impl FreshnessStore {
                         Err("conflicting Freshness event".into())
                     };
                 }
+                for id in event.effects.keys() {
+                    journal_by_memory.entry(*id).or_default().push(position);
+                    self.changed_memories.push(*id);
+                }
                 self.events.insert(event.event_id.clone(), event.clone());
+                note_turn_event(&mut self.last_event_by_turn, event);
             }
             JournalEntry::AcceptedUse(receipt, proof) => {
                 if let Some((old, old_proof)) = self.uses.get(&receipt.use_id) {
@@ -806,6 +872,8 @@ impl FreshnessStore {
                     .owner_uuid
                     .ok_or("Freshness owner identity is required")?;
                 for source in &receipt.sources {
+                    journal_by_memory.entry(*source).or_default().push(position);
+                    self.changed_memories.push(*source);
                     let event = FreshnessEvent {
                         event_id: accepted_event_id(owner, &receipt.use_id, *source),
                         accepted_turn: receipt.accepted_turn,
@@ -821,6 +889,7 @@ impl FreshnessStore {
                             .into_iter()
                             .collect(),
                     };
+                    note_turn_event(&mut self.last_event_by_turn, &event);
                     self.events.insert(event.event_id.clone(), event);
                 }
             }
@@ -887,6 +956,14 @@ impl FreshnessStore {
         &self,
         cut: Option<&FreshnessEventCut>,
     ) -> Result<BTreeMap<FreshnessMemoryId, FreshnessRecord>, String> {
+        self.project_selected(cut, None)
+    }
+
+    fn project_selected(
+        &self,
+        cut: Option<&FreshnessEventCut>,
+        memories: Option<&BTreeSet<FreshnessMemoryId>>,
+    ) -> Result<BTreeMap<FreshnessMemoryId, FreshnessRecord>, String> {
         #[derive(Clone)]
         enum Action {
             Birth(FreshnessMemoryId, bool),
@@ -903,9 +980,14 @@ impl FreshnessStore {
                             })))
             })
         });
-        let mut records = selected
-            .map(|snapshot| snapshot.records.clone())
-            .unwrap_or_default();
+        let mut records = match (selected, memories) {
+            (Some(snapshot), None) => snapshot.records.clone(),
+            (Some(snapshot), Some(ids)) => ids
+                .iter()
+                .filter_map(|id| snapshot.records.get(id).map(|record| (*id, *record)))
+                .collect(),
+            (None, _) => BTreeMap::new(),
+        };
         let journal_start = selected
             .map(|snapshot| snapshot.journal_entries_included as usize)
             .unwrap_or(0);
@@ -913,7 +995,21 @@ impl FreshnessStore {
             .owner_uuid
             .ok_or("Freshness owner identity is required")?;
         let mut actions: Vec<(u64, u8, String, Action)> = Vec::new();
-        for entry in &self.journal[journal_start..] {
+        let journal_entries: Box<dyn Iterator<Item = &JournalEntry> + '_> = match memories {
+            Some(ids) => {
+                let positions: BTreeSet<_> = ids
+                    .iter()
+                    .filter_map(|id| self.journal_by_memory.get(id))
+                    .flat_map(|positions| {
+                        let start = positions.partition_point(|index| *index < journal_start);
+                        positions[start..].iter().copied()
+                    })
+                    .collect();
+                Box::new(positions.into_iter().map(|index| &self.journal[index]))
+            }
+            None => Box::new(self.journal[journal_start..].iter()),
+        };
+        for entry in journal_entries {
             match entry {
                 JournalEntry::Birth {
                     memory_id,
@@ -978,6 +1074,9 @@ impl FreshnessStore {
                 }
                 Action::Event(event) => {
                     for (id, amount) in &event.effects {
+                        if memories.is_some_and(|ids| !ids.contains(id)) {
+                            continue;
+                        }
                         let record = records
                             .get_mut(id)
                             .ok_or("Freshness event precedes accepted birth")?;
@@ -996,6 +1095,13 @@ impl FreshnessStore {
             }
         }
         Ok(records)
+    }
+}
+
+fn note_turn_event(last: &mut BTreeMap<u64, String>, event: &FreshnessEvent) {
+    let known = last.entry(event.accepted_turn).or_default();
+    if *known < event.event_id {
+        known.clone_from(&event.event_id);
     }
 }
 

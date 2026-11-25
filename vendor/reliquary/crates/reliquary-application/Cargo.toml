@@ -2,12 +2,16 @@
 name = "reliquary-application"
 version = "0.1.0"
 edition = "2024"
+license = "MPL-2.0"
 publish = false
 
 [dependencies]
 reliquary-insomnia = { path = "../reliquary-insomnia" }
 reliquary-dream = { path = "../reliquary-dream" }
 reliquary-entity-resolution = { path = "../reliquary-entity-resolution" }
+reliquary-memory-audit = { path = "../reliquary-memory-audit" }
+reliquary-ego = { path = "../reliquary-ego" }
+reliquary-perception = { path = "../reliquary-perception" }
 reliquary-owner-session = { path = "../reliquary-owner-session" }
 reliquary-freshness = { path = "../reliquary-freshness" }
 reliquary-retrieval = { path = "../reliquary-retrieval" }
@@ -19,6 +23,8 @@ reliquary-project-environment = { path = "../reliquary-project-environment" }
 sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+chrono-tz = "0.10"
+chrono = "0.4"
 
 [dev-dependencies]
 lore = { git = "https://github.com/EpicGames/lore.git", rev = "c49390be048fa273ab47ff7d43bc4994ba7be8ce" }

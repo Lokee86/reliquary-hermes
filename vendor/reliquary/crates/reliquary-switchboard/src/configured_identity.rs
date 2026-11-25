@@ -1,10 +1,10 @@
 //! Stable identity of the routes an owner processing job may invoke.
 use super::model_config::{
-    DREAM, EMBEDDING, ENTITY, GENERAL, INSOMNIA, INSOMNIA_METADATA, RuntimeConfig,
+    DREAM, EMBEDDING, ENTITY, GENERAL, INSOMNIA, INSOMNIA_METADATA, RuntimeConfig, SHARED,
 };
 use super::{
     CredentialsConfig, GeneralRoute, HostedInferenceIdentity, ModelProvider,
-    ProcessingRouteIdentity,
+    OBSERVATION_DECISION_MODEL, ProcessingRouteIdentity,
 };
 use ring::digest::{SHA256, digest};
 use serde_json::{Value, json};
@@ -65,7 +65,34 @@ pub(super) fn processing_routes(
         ])
     });
     let dream = general_identity(dream);
+    let identity_route = entity.map(|(_, route)| {
+        json!([
+            provider(route.endpoint.provider),
+            route.endpoint.model,
+            route.endpoint.url,
+            route.reasoning_effort
+        ])
+    });
+    let native = config
+        .general_decision
+        .as_ref()
+        .filter(|route| route.model == OBSERVATION_DECISION_MODEL)
+        .map(|route| json!([SHARED, route.model, route.url, route.credential_id.0]));
     ProcessingRouteIdentity {
+        perception_embedding: hash(json!([
+            "reliquary-perception-embedding-route-v1",
+            embedding
+        ])),
+        perception: hash(json!([
+            "reliquary-perception-routes-v1",
+            general_identity(general),
+            native,
+            embedding
+        ])),
+        entity_identity: hash(json!([
+            "reliquary-entity-identity-route-v1",
+            identity_route
+        ])),
         import: hash(json!([
             "reliquary-owner-processing-routes-v1",
             general_identity(insomnia),
@@ -96,6 +123,16 @@ pub(super) fn hosted(identity: &HostedInferenceIdentity) -> ProcessingRouteIdent
         }
     ]);
     ProcessingRouteIdentity {
+        perception_embedding: hash(json!([
+            "reliquary-perception-embedding-route-v1",
+            embedding
+        ])),
+        perception: hash(json!([
+            "reliquary-hermes-hosted-perception-v1",
+            general,
+            embedding
+        ])),
+        entity_identity: hash(json!(["reliquary-entity-identity-route-v1", general])),
         import: hash(json!([
             "reliquary-hermes-hosted-import-v1",
             general,
@@ -107,6 +144,54 @@ pub(super) fn hosted(identity: &HostedInferenceIdentity) -> ProcessingRouteIdent
             embedding
         ])),
     }
+}
+
+pub(super) fn hosted_switchboard(
+    general_route: Value,
+    entity_route: Value,
+    insomnia_route: Value,
+    ownership_route: Value,
+    dream_route: Value,
+    entity_extraction_route: Value,
+    embedding_route: Value,
+) -> ProcessingRouteIdentity {
+    let import = json!([
+        "reliquary-hosted-switchboard-import-v1",
+        insomnia_route,
+        ownership_route,
+        entity_extraction_route,
+        dream_route,
+        entity_route,
+        embedding_route,
+    ]);
+    let live_dream = json!([
+        "reliquary-hosted-switchboard-live-dream-v1",
+        dream_route,
+        embedding_route,
+    ]);
+    ProcessingRouteIdentity {
+        perception: hash(json!([
+            "reliquary-hosted-switchboard-perception-v1",
+            general_route,
+            embedding_route
+        ])),
+        perception_embedding: hash(json!([
+            "reliquary-perception-embedding-route-v1",
+            embedding_route
+        ])),
+        entity_identity: hash(json!(["reliquary-entity-identity-route-v1", entity_route])),
+        import: hash(import),
+        live_dream: hash(live_dream),
+    }
+}
+
+pub(super) fn hosted_native_perception(base: [u8; 32], route_identity: &str) -> [u8; 32] {
+    hash(json!([
+        "reliquary-hosted-native-perception-v1",
+        base,
+        OBSERVATION_DECISION_MODEL,
+        route_identity
+    ]))
 }
 
 fn hash(canonical: Value) -> [u8; 32] {

@@ -86,11 +86,8 @@ impl RelSession {
         leased: bool,
     ) -> Result<Self, OwnerSessionError> {
         require_kind(container, FileKind::Reliquary)?;
-        let archive = if leased {
-            Archive::open_leased(container)
-        } else {
-            Archive::open(container)
-        }?;
+        let (archive, observation_archive_cuts) =
+            super::observations::open_archive(container, leased)?;
         let echo = reliquary_archive::EchoStore::open(container)
             .map_err(|e| OwnerSessionError::Record(e.to_string()))?;
         let accepted_episodes = accepted_episodes.into_iter().collect::<Vec<_>>();
@@ -139,17 +136,23 @@ impl RelSession {
                 "external Memory reference points to the local REL owner".into(),
             ));
         }
-        let mut common = if leased {
+        let history_generation = owner_history_generation_from_container(container)
+            .map_err(OwnerSessionError::Record)?;
+        let (mut common, identity_history, identity_separation_history, observations) =
             super::replay::open_common_replaying(
                 container,
                 graph_admission.owner_id().ok_or(GraphError::WrongOwner)?,
                 dream_admissions,
                 true,
-                reliquary_memory_core::MemoryReplayStart::Leased,
-            )?
-        } else {
-            open_common(container, graph_admission, dream_admissions, true)?
-        };
+                if leased {
+                    reliquary_memory_core::MemoryReplayStart::Leased
+                } else {
+                    reliquary_memory_core::MemoryReplayStart::Detached
+                },
+                (replay.has_identity_history || !observation_archive_cuts.is_empty())
+                    .then_some(history_generation),
+                &observation_archive_cuts,
+            )?;
         if archive
             .project_correlations()
             .iter()
@@ -226,6 +229,12 @@ impl RelSession {
             },
         )
         .map_err(OwnerSessionError::Record)?;
+        let observation_scores = super::observations::restore_scores(
+            &archive,
+            &common.memories,
+            &freshness,
+            &observations,
+        )?;
         let insomnia =
             InsomniaStore::open_with_grouped_completion(container, accepted_episodes, |payload| {
                 let completion = GroupedInsomniaCompletion::decode(payload)
@@ -306,8 +315,6 @@ impl RelSession {
         let external_memories = ExternalMemoryStore::open(container, &common.memories)
             .map_err(OwnerSessionError::Record)?;
         let container_path = canonical_container_path(container)?;
-        let history_generation = owner_history_generation_from_container(container)
-            .map_err(OwnerSessionError::Record)?;
         let container_file_identity = container.physical_file_identity()?;
         let writer_lease_proof = container.writer_lease_proof();
         if leased {
@@ -316,6 +323,10 @@ impl RelSession {
         Ok(Self {
             owner_id: container.owner_id(),
             rel_dependencies: replay.dependencies,
+            identity_history,
+            identity_separation_history,
+            observations,
+            observation_scores,
             archive,
             echo,
             common,
@@ -429,6 +440,22 @@ impl RelSession {
     pub fn archive_node(&self, conversation: &str, node: &str) -> Option<&Node> {
         self.archive.node(conversation, node)
     }
+    pub fn archive_node_version(&self, conversation: &str, node: &str) -> Option<u64> {
+        self.archive.node_archive_version(conversation, node)
+    }
+
+    pub fn imported_archive_source(
+        &self,
+        conversation: &str,
+        node: &str,
+    ) -> Option<(
+        &crate::model::ImportReceipt,
+        &crate::model::ImportedConversation,
+        &crate::model::ImportedMessage,
+    )> {
+        self.archive.imported_turn_reference(conversation, node)
+    }
+
     pub fn archive_branch(
         &self,
         conversation: &str,

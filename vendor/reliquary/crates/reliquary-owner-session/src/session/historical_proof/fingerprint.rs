@@ -11,14 +11,42 @@ pub(super) fn rel(
     archive: &reliquary_archive::ArchiveHistorySnapshot,
     freshness: &BTreeMap<FreshnessMemoryId, FreshnessRecord>,
     freshness_evidence: &[FreshnessReplayEntry],
+    identity: IdentityAuditHistory<'_>,
+    observations: &[(
+        reliquary_perception_store::observation::ObservationBatchReceipt,
+        reliquary_perception_store::observation::ObservationRecord,
+    )],
     cut: &RelHistoricalCut,
 ) -> [u8; 32] {
-    canonical_hash(json!({
+    let mut value = json!({
         "schema": SCHEMA, "kind": "REL", "owner": owner_id,
         "cut": rel_cut_value(cut), "common": common_value(history),
         "archive": archive_value(archive),
         "freshness": freshness_value(freshness, freshness_evidence),
-    }))
+    });
+    if !identity.receipts.is_empty() {
+        value["identity_receipts"] = json!(identity.receipts);
+        value["cut"]["identity_version"] = json!(cut.identity_version);
+    }
+    if !identity.separations.is_empty() {
+        value["identity_separation_confirmations"] = json!(identity.separations);
+        value["cut"]["separation_version"] = json!(cut.separation_version);
+    }
+    if !observations.is_empty() {
+        // A digest of the lossless wire representation includes exact
+        // receptor float values and private progress without expanding either.
+        value["observation_records"] = json!(
+            observations
+                .iter()
+                .map(|row| {
+                    let bytes = rmp_serde::to_vec_named(row).expect("validated Observation record");
+                    <[u8; 32]>::from(Sha256::digest(bytes))
+                })
+                .collect::<Vec<_>>()
+        );
+        value["cut"]["observation_version"] = json!(cut.observation_version);
+    }
+    canonical_hash(value)
 }
 
 pub(super) fn phy(
@@ -505,7 +533,7 @@ fn import_receipt_value(value: &reliquary_archive::ImportReceipt) -> Value {
 }
 
 fn fragment_value(value: &reliquary_archive::FragmentDefinition) -> Value {
-    json!({
+    let mut encoded = json!({
         "fragment": {"id": value.fragment.id.0,
             "conversation_id": value.fragment.conversation_id,
             "start_node_id": value.fragment.start_node_id,
@@ -513,7 +541,15 @@ fn fragment_value(value: &reliquary_archive::FragmentDefinition) -> Value {
         "branch_id": value.branch_id, "archive_cut": value.archive_cut,
         "config": {"turns": value.config.turns, "overlap": value.config.overlap},
         "close_tail": value.close_tail,
-    })
+    });
+    if let Some(passage) = value.fragment.passage {
+        encoded["fragment"]["passage"] = json!({
+            "parent_id": passage.parent_id.0,
+            "start_byte": passage.start_byte,
+            "end_byte": passage.end_byte,
+        });
+    }
+    encoded
 }
 
 fn freshness_value(

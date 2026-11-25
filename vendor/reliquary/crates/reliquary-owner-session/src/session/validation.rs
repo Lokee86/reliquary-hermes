@@ -57,6 +57,7 @@ pub(super) struct RelReplayAdmission {
     pub import_epochs: BTreeMap<(WorkEpisodeId, u32), String>,
     pub dependencies: RelDependencyDeclaration,
     pub has_archive_lexical_indexes: bool,
+    pub has_identity_history: bool,
 }
 
 pub(super) fn validate_rel_replay_admission(
@@ -70,9 +71,25 @@ pub(super) fn validate_rel_replay_admission(
     let mut visible_turns = std::collections::BTreeSet::new();
     let mut visible_memories = std::collections::BTreeSet::new();
     let mut activity = 0u64;
-    let mut frames = container.scan_frames()?;
+    let mut grouped = container.matching_physical_cursor(|prefix| {
+        let body = match reliquary_container::decode_publication(prefix) {
+            Ok(Some(publication)) => publication.body,
+            Ok(None) => prefix,
+            Err(_) => return true,
+        };
+        body.starts_with(b"RELINSC")
+    })?;
+    let needs_archive_activity = grouped.next_frame()?.is_some();
+    let select: fn(&[u8]) -> bool = if needs_archive_activity {
+        crate::records::frame_selection::without_packed_vectors
+    } else {
+        // Archive replay already validates source identity and content. With
+        // no grouped completion there is no owner activity cut to compare.
+        crate::records::frame_selection::without_archive_or_packed
+    };
+    let mut frames = container.scan_matching_frames(select)?;
     while let Some(frame) = frames.next_frame()? {
-        if super::native_import::is_import_epoch_marker(frame.payload) {
+        if crate::records::import::is_import_epoch_marker(frame.payload) {
             imports
                 .ingest_prefix(frame.payload)
                 .map_err(OwnerSessionError::Record)?;
@@ -80,6 +97,12 @@ pub(super) fn validate_rel_replay_admission(
         }
         let envelope = reliquary_container::decode_publication(frame.payload)?;
         let body = envelope.as_ref().map_or(frame.payload, |value| value.body);
+        if body.starts_with(super::identity_receipt::PREFIX)
+            || body.starts_with(super::identity_separation::PREFIX)
+        {
+            admission.has_identity_history = true;
+            continue;
+        }
         if body.starts_with(ARCHIVE_LEXICAL_INDEX_MAGIC) {
             if envelope.is_some() {
                 return Err(OwnerSessionError::Record(
@@ -260,6 +283,10 @@ pub(super) fn reject_rel_only_records(container: &Container) -> Result<(), Owner
         (b"RELXMRP3", "external Memory receipt"),
         (b"RELXHST1", "external host evidence receipt"),
         (REL_DEPENDENCY_MAGIC, "REL dependency declaration"),
+        (
+            super::identity_receipt::MARKER,
+            "cross-REL identity receipt",
+        ),
     ];
     use std::io::Read;
     let mut cursor = container.physical_cursor()?;
@@ -300,6 +327,21 @@ pub(super) fn reject_rel_only_records(container: &Container) -> Result<(), Owner
                     return Err(OwnerSessionError::RelOnlyRecordInPhylactery(domain));
                 }
             }
+        }
+        if length >= 6 && prefix.starts_with(super::identity_receipt::PREFIX) {
+            return Err(OwnerSessionError::RelOnlyRecordInPhylactery(
+                "cross-REL identity receipt",
+            ));
+        }
+        if length >= 6 && prefix.starts_with(super::identity_separation::PREFIX) {
+            return Err(OwnerSessionError::RelOnlyRecordInPhylactery(
+                "cross-REL Entity separation",
+            ));
+        }
+        if length >= 6 && prefix.starts_with(super::observations::PREFIX) {
+            return Err(OwnerSessionError::RelOnlyRecordInPhylactery(
+                "Observation publication",
+            ));
         }
         if length >= 6 && &prefix[..6] == b"RELAPB" {
             return Err(OwnerSessionError::RelOnlyRecordInPhylactery(

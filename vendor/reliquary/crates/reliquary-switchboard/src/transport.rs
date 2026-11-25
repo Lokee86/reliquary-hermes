@@ -232,14 +232,22 @@ pub(super) fn validated_http_url(value: &str) -> Result<reqwest::Url, &'static s
 }
 
 fn response_bytes(response: reqwest::blocking::Response) -> Result<Vec<u8>, String> {
-    let mut bytes = Vec::new();
-    response
-        .take((MAX_RESPONSE_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "provider response read failed".to_owned())?;
+    let bytes = read_response_bytes(response, MAX_RESPONSE_BYTES)?;
     if bytes.len() > MAX_RESPONSE_BYTES {
         return Err("provider response exceeded the 1 MiB limit".into());
     }
+    Ok(bytes)
+}
+
+fn read_response_bytes(
+    response: reqwest::blocking::Response,
+    limit: usize,
+) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    response
+        .take((limit + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "provider response read failed".to_owned())?;
     Ok(bytes)
 }
 
@@ -519,7 +527,29 @@ impl ConfiguredDecisionEndpoint {
             .ok_or(DecisionEndpointError::InvalidConfiguration(
                 "decision route requires an API-key credential",
             ))?;
-        let api_key = secret.clone();
+        Self::with_transport(url, route.model.clone(), secret.clone())
+    }
+
+    /// Build the bounded native decision client with an in-memory host credential.
+    pub fn native(url: &str, model: &str, api_key: &str) -> Result<Self, DecisionEndpointError> {
+        if model != OBSERVATION_DECISION_MODEL {
+            return Err(DecisionEndpointError::InvalidConfiguration(
+                "Observation requires typesafe/jev-1.13",
+            ));
+        }
+        let url = validated_http_url(url).map_err(DecisionEndpointError::InvalidConfiguration)?;
+        reqwest::header::HeaderValue::from_str(api_key)
+            .map_err(|_| DecisionEndpointError::InvalidConfiguration("invalid API key"))?;
+        let api_key = SecretString::new(api_key)
+            .map_err(|_| DecisionEndpointError::InvalidConfiguration("invalid API key"))?;
+        Self::with_transport(url, model.to_owned(), api_key)
+    }
+
+    fn with_transport(
+        url: reqwest::Url,
+        model: String,
+        api_key: SecretString,
+    ) -> Result<Self, DecisionEndpointError> {
         let client = reqwest::blocking::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .no_proxy()
@@ -529,7 +559,7 @@ impl ConfiguredDecisionEndpoint {
         Ok(Self {
             client,
             url,
-            model: route.model.clone(),
+            model,
             api_key,
         })
     }
@@ -541,12 +571,19 @@ impl DecisionEndpoint for ConfiguredDecisionEndpoint {
     }
 
     fn evaluate(&self, state: &Value, questions: &Value) -> Result<Value, DecisionEndpointError> {
-        let auth = SecretString::new(format!("Bearer {}", self.api_key.0))
-            .expect("API key was validated as non-empty");
+        self.evaluate_bounded(state, questions, MAX_RESPONSE_BYTES)
+    }
+
+    fn evaluate_bounded(
+        &self,
+        state: &Value,
+        questions: &Value,
+        max_response_bytes: usize,
+    ) -> Result<Value, DecisionEndpointError> {
         let response = self
             .client
             .post(self.url.clone())
-            .header(reqwest::header::AUTHORIZATION, auth.0.as_str())
+            .bearer_auth(self.api_key.0.as_str())
             .json(&json!({"model": self.model, "state": state, "questions": questions}))
             .send()
             .map_err(|_error| DecisionEndpointError::Failure("provider request failed".into()))?;
@@ -561,7 +598,18 @@ impl DecisionEndpoint for ConfiguredDecisionEndpoint {
         if !status.is_success() {
             return Err(DecisionEndpointError::HttpStatus(status.as_u16()));
         }
-        let bytes = response_bytes(response).map_err(DecisionEndpointError::Failure)?;
+        let bytes = if max_response_bytes < MAX_RESPONSE_BYTES {
+            let bytes = read_response_bytes(response, max_response_bytes)
+                .map_err(DecisionEndpointError::Failure)?;
+            if bytes.len() > max_response_bytes {
+                return Err(DecisionEndpointError::InvalidResponse(
+                    "response exceeded the byte limit",
+                ));
+            }
+            bytes
+        } else {
+            response_bytes(response).map_err(DecisionEndpointError::Failure)?
+        };
         serde_json::from_slice(&bytes)
             .map_err(|_| DecisionEndpointError::InvalidResponse("provider response is not JSON"))
     }

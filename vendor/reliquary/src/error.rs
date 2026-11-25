@@ -20,6 +20,7 @@ pub enum ProductErrorKind {
     Io,
     Verification,
     InvalidInput,
+    TemporalQueryRequired,
 }
 
 #[derive(Debug)]
@@ -86,7 +87,7 @@ impl From<GatewayError> for ProductError {
                     InvalidPage | PageBytesExceeded | InvalidInput(_) => {
                         ProductErrorKind::InvalidInput
                     }
-                    NotFound | Terminal => ProductErrorKind::Unavailable,
+                    NotFound | Terminal | Unavailable(_) => ProductErrorKind::Unavailable,
                     Stale => ProductErrorKind::Stale,
                     Unsupported => ProductErrorKind::Unsupported,
                     Conflict => ProductErrorKind::Conflict,

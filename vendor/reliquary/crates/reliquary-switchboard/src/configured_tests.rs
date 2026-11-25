@@ -162,6 +162,12 @@ fn hosted_routes_bind_shared_general_decisions_and_validate_identity() {
             "general-model"
         );
     }
+    for consumer in [
+        DecisionConsumer::ObservationContribution,
+        DecisionConsumer::ObservationVerification,
+    ] {
+        assert!(routes.decision_endpoint(consumer).is_none());
+    }
     let readiness = routes.readiness();
     assert!(readiness.contains("general=true, decision=true, embedding=true"));
     assert!(readiness.contains("entity_resolution=general"));
@@ -332,6 +338,91 @@ fn offline_load_selects_dedicated_then_shared() {
     for private in [TEST_KEY, "KEY", "entity-model", "offline.example.invalid"] {
         assert!(!report.contains(private));
     }
+}
+
+#[test]
+fn observation_consumers_require_the_configured_shared_native_model() {
+    const URL: &str = "https://offline.example.invalid";
+    let consumers = [
+        DecisionConsumer::ObservationContribution,
+        DecisionConsumer::ObservationVerification,
+    ];
+    let general = (General, general(OBSERVATION_DECISION_MODEL, URL));
+    let dedicated = (
+        EntityResolutionDecision,
+        decision(OBSERVATION_DECISION_MODEL, URL),
+    );
+    let general_only = bind(std::slice::from_ref(&general));
+    let incompatible = bind(&[
+        general.clone(),
+        dedicated.clone(),
+        (GeneralDecision, decision("another-native-model", URL)),
+    ]);
+    let native = bind(&[
+        general.clone(),
+        dedicated,
+        (GeneralDecision, decision(OBSERVATION_DECISION_MODEL, URL)),
+    ]);
+    let rebound = bind(&[
+        general,
+        (
+            GeneralDecision,
+            decision(
+                OBSERVATION_DECISION_MODEL,
+                "https://elsewhere.example.invalid",
+            ),
+        ),
+    ]);
+    for consumer in consumers {
+        assert!(general_only.decision_endpoint(consumer).is_none());
+        assert!(incompatible.decision_endpoint(consumer).is_none());
+        assert_eq!(
+            native.decision_endpoint(consumer).unwrap().model(),
+            OBSERVATION_DECISION_MODEL
+        );
+    }
+    assert!(
+        native
+            .readiness()
+            .contains("observation_contribution=decision, observation_verification=decision")
+    );
+    assert_eq!(
+        incompatible.processing_route_identity().perception,
+        general_only.processing_route_identity().perception,
+    );
+    assert_ne!(
+        native.processing_route_identity().perception,
+        general_only.processing_route_identity().perception
+    );
+    assert_ne!(
+        native.processing_route_identity().perception,
+        rebound.processing_route_identity().perception
+    );
+}
+
+#[test]
+fn observation_native_transport_enforces_response_cap_before_decoding() {
+    // Valid JSON whose insignificant whitespace exceeds the requested cap.
+    let body = format!("{{{}}}", " ".repeat(128));
+    let (url, request) = mock_server("200 OK", "", &body);
+    assert!(ConfiguredDecisionEndpoint::native(&url, "a-different-model", TEST_KEY).is_err());
+    assert!(ConfiguredDecisionEndpoint::native(&url, OBSERVATION_DECISION_MODEL, "").is_err());
+    let endpoint =
+        ConfiguredDecisionEndpoint::native(&url, OBSERVATION_DECISION_MODEL, TEST_KEY).unwrap();
+    let state = json!({"claim": "The session was held indoors."});
+    let questions = json!({"verify": {"type": "choice"}});
+    assert!(matches!(
+        endpoint.evaluate_bounded(&state, &questions, 128),
+        Err(DecisionEndpointError::InvalidResponse(
+            "response exceeded the byte limit"
+        ))
+    ));
+    let request = String::from_utf8(request.join().unwrap()).unwrap();
+    let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(
+        body,
+        json!({"model": OBSERVATION_DECISION_MODEL, "state": state, "questions": questions})
+    );
 }
 
 #[test]
@@ -572,4 +663,317 @@ fn online_probe_rejects_invalid_and_oversized_structured_responses() {
         );
         request.join().unwrap();
     }
+}
+
+fn hosted_route(endpoint: &str, model: &str) -> HostedModelRoute {
+    HostedModelRoute {
+        endpoint: endpoint.into(),
+        model: Some(model.into()),
+        reasoning_effort: None,
+        embedding: None,
+    }
+}
+
+fn hosted_embedding_route(endpoint: &str, model: &str) -> HostedModelRoute {
+    HostedModelRoute {
+        endpoint: endpoint.into(),
+        model: Some(model.into()),
+        reasoning_effort: None,
+        embedding: Some(HostedEmbeddingSettings {
+            dimensions: 3,
+            normalization: EmbeddingNormalization::L2,
+        }),
+    }
+}
+
+fn hosted_embedding_route_with_normalization(
+    endpoint: &str,
+    model: &str,
+    normalization: EmbeddingNormalization,
+) -> HostedModelRoute {
+    HostedModelRoute {
+        endpoint: endpoint.into(),
+        model: Some(model.into()),
+        reasoning_effort: None,
+        embedding: Some(HostedEmbeddingSettings {
+            dimensions: 3,
+            normalization,
+        }),
+    }
+}
+
+#[test]
+fn hosted_switchboard_resolves_each_slot_and_uses_shared_decision_precedence() {
+    use std::cell::RefCell;
+
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = HostedSwitchboardConfig::new(temp.path().join("hosted.cfg"));
+    for (slot, route) in [
+        (
+            ModelSlot::General,
+            hosted_route("general-ref", "general-model"),
+        ),
+        (
+            ModelSlot::Insomnia,
+            hosted_route("insomnia-ref", "insomnia-model"),
+        ),
+        (
+            ModelSlot::InsomniaMetadata,
+            hosted_route("metadata-ref", "metadata-model"),
+        ),
+        (
+            ModelSlot::EntityExtraction,
+            hosted_route("extraction-ref", "extraction-model"),
+        ),
+        (ModelSlot::Dream, hosted_route("dream-ref", "dream-model")),
+        (
+            ModelSlot::EntityResolution,
+            hosted_route("entity-ref", "entity-model"),
+        ),
+        (
+            ModelSlot::GeneralDecision,
+            hosted_route("shared-ref", "shared-decision"),
+        ),
+        (
+            ModelSlot::EntityResolutionDecision,
+            hosted_route("entity-decision-ref", "entity-decision"),
+        ),
+        (
+            ModelSlot::MemoryRetrievalDecision,
+            hosted_route("retrieval-ref", "retrieval-decision"),
+        ),
+        (
+            ModelSlot::Embedding,
+            hosted_embedding_route("embedding-ref", "embedding-model"),
+        ),
+    ] {
+        config.set_model(slot, Some(route)).unwrap();
+    }
+
+    let resolved = RefCell::new(Vec::new());
+    let routes = ConfiguredRoutes::hosted_switchboard(
+        &config,
+        |slot, route| {
+            resolved.borrow_mut().push(slot);
+            Ok((
+                format!("scope:{}", route.endpoint),
+                Arc::new(HostedGeneral {
+                    calls: AtomicUsize::new(0),
+                    model: route.model.clone().unwrap(),
+                }) as Arc<dyn GeneralEndpoint>,
+            ))
+        },
+        |slot, route| {
+            resolved.borrow_mut().push(slot);
+            let settings = route.embedding.as_ref().unwrap();
+            Ok((
+                format!("scope:{}", route.endpoint),
+                Arc::new(HostedEmbedding {
+                    calls: AtomicUsize::new(0),
+                    model: route.model.clone().unwrap(),
+                    dimensions: settings.dimensions,
+                    normalization: settings.normalization,
+                }) as Arc<dyn EmbeddingEndpoint>,
+            ))
+        },
+    )
+    .unwrap();
+
+    let mut resolved_slots = resolved.borrow().clone();
+    resolved_slots.sort();
+    assert_eq!(
+        resolved_slots,
+        ModelSlot::ALL.to_vec(),
+        "every configured Switchboard slot is resolved exactly once"
+    );
+    assert_eq!(routes.general_endpoint().unwrap().model(), "general-model");
+    assert_eq!(
+        routes.insomnia_endpoint().unwrap().model(),
+        "insomnia-model"
+    );
+    assert_eq!(
+        routes.insomnia_ownership_endpoint().unwrap().model(),
+        "metadata-model"
+    );
+    assert_eq!(
+        routes.entity_extraction_endpoint().unwrap().model(),
+        "extraction-model"
+    );
+    assert_eq!(routes.dream_endpoint().unwrap().model(), "dream-model");
+    assert_eq!(routes.entity_endpoint().unwrap().model(), "entity-model");
+    assert_eq!(
+        routes.embedding_endpoint().unwrap().model(),
+        Some("embedding-model")
+    );
+    assert_eq!(
+        routes
+            .decision_endpoint(DecisionConsumer::Chronos)
+            .unwrap()
+            .model(),
+        "shared-decision"
+    );
+    assert_eq!(
+        routes
+            .decision_endpoint(DecisionConsumer::EntityResolution)
+            .unwrap()
+            .model(),
+        "entity-decision"
+    );
+    assert_eq!(
+        routes
+            .decision_endpoint(DecisionConsumer::MemoryRetrieval)
+            .unwrap()
+            .model(),
+        "retrieval-decision"
+    );
+
+    for consumer in [
+        DecisionConsumer::ObservationContribution,
+        DecisionConsumer::ObservationVerification,
+    ] {
+        assert!(routes.decision_endpoint(consumer).is_none());
+    }
+
+    let base = routes.processing_route_identity();
+    let endpoint = Arc::new(
+        ConfiguredDecisionEndpoint::native(
+            "https://offline.example.invalid/decisions",
+            OBSERVATION_DECISION_MODEL,
+            TEST_KEY,
+        )
+        .unwrap(),
+    ) as Arc<dyn DecisionEndpoint>;
+    let routes = routes
+        .with_native_perception_decision(endpoint.clone(), "native-ref")
+        .unwrap();
+    for consumer in [
+        DecisionConsumer::ObservationContribution,
+        DecisionConsumer::ObservationVerification,
+    ] {
+        assert!(Arc::ptr_eq(
+            &routes.decision_endpoint(consumer).unwrap(),
+            &endpoint
+        ));
+    }
+    for (consumer, model) in [
+        (DecisionConsumer::Chronos, "shared-decision"),
+        (DecisionConsumer::EntityResolution, "entity-decision"),
+        (DecisionConsumer::MemoryRetrieval, "retrieval-decision"),
+    ] {
+        assert_eq!(routes.decision_endpoint(consumer).unwrap().model(), model);
+    }
+    let native = routes.processing_route_identity();
+    assert_eq!(base.entity_identity, native.entity_identity);
+    assert_eq!(base.import, native.import);
+    assert_eq!(base.live_dream, native.live_dream);
+    assert_eq!(base.perception_embedding, native.perception_embedding);
+    assert_ne!(base.perception, native.perception);
+    let routes = routes
+        .with_native_perception_decision(endpoint.clone(), "other-native-ref")
+        .unwrap();
+    assert_ne!(
+        routes.processing_route_identity().perception,
+        native.perception
+    );
+    let routes = routes
+        .with_native_perception_decision(endpoint.clone(), "native-ref")
+        .unwrap();
+    assert_eq!(
+        routes.processing_route_identity().perception,
+        native.perception
+    );
+    assert!(
+        routes
+            .with_native_perception_decision(endpoint, "")
+            .is_err()
+    );
+}
+
+#[test]
+fn hosted_switchboard_preserves_legacy_identity_only_for_migrated_route_shape() {
+    fn bind_config(general_ref: &str, entity_ref: &str, entity: bool) -> ConfiguredRoutes {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = HostedSwitchboardConfig::new(temp.path().join("hosted.cfg"));
+        config
+            .set_model(ModelSlot::General, Some(hosted_route(general_ref, "chat")))
+            .unwrap();
+        if entity {
+            config
+                .set_model(
+                    ModelSlot::EntityResolution,
+                    Some(hosted_route(entity_ref, "chat")),
+                )
+                .unwrap();
+        }
+        config
+            .set_model(
+                ModelSlot::Embedding,
+                Some(hosted_embedding_route_with_normalization(
+                    "embedding-ref",
+                    "embed",
+                    EmbeddingNormalization::None,
+                )),
+            )
+            .unwrap();
+        ConfiguredRoutes::hosted_switchboard(
+            &config,
+            |_slot, route| {
+                Ok((
+                    "canonical-provider".into(),
+                    Arc::new(HostedGeneral {
+                        calls: AtomicUsize::new(0),
+                        model: route.model.clone().unwrap(),
+                    }) as Arc<dyn GeneralEndpoint>,
+                ))
+            },
+            |_slot, route| {
+                let settings = route.embedding.as_ref().unwrap();
+                Ok((
+                    "canonical-provider".into(),
+                    Arc::new(HostedEmbedding {
+                        calls: AtomicUsize::new(0),
+                        model: route.model.clone().unwrap(),
+                        dimensions: settings.dimensions,
+                        normalization: settings.normalization,
+                    }) as Arc<dyn EmbeddingEndpoint>,
+                ))
+            },
+        )
+        .unwrap()
+    }
+
+    let migrated = bind_config("chat", "chat", true).processing_route_identity();
+    let legacy = ConfiguredRoutes::hosted(
+        Arc::new(HostedGeneral {
+            calls: AtomicUsize::new(0),
+            model: "chat".into(),
+        }),
+        Arc::new(HostedEmbedding {
+            calls: AtomicUsize::new(0),
+            model: "embed".into(),
+            dimensions: 3,
+            normalization: EmbeddingNormalization::None,
+        }),
+        HostedInferenceIdentity::new(
+            "canonical-provider",
+            "chat",
+            "canonical-provider",
+            "embed",
+            3,
+            HostedEmbeddingInputSemantics::Shared,
+            EmbeddingNormalization::None,
+        )
+        .unwrap(),
+    )
+    .unwrap()
+    .processing_route_identity();
+    assert_eq!(migrated.import, legacy.import);
+    assert_eq!(migrated.live_dream, legacy.live_dream);
+    assert_eq!(migrated.entity_identity, legacy.entity_identity);
+
+    let changed_auth_scope = bind_config("chat-ref-v2", "chat", true).processing_route_identity();
+    assert_ne!(migrated.import, changed_auth_scope.import);
+    assert_ne!(migrated.entity_identity, changed_auth_scope.entity_identity);
+    let new_profile = bind_config("chat", "", false).processing_route_identity();
+    assert_ne!(new_profile.import, legacy.import);
 }

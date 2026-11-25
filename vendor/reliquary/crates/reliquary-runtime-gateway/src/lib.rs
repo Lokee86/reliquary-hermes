@@ -223,6 +223,7 @@ impl MountedOwner {
 pub struct Gateway {
     owners: Arc<RwLock<HashMap<OwnerId, MountedOwner>>>,
     owner_worker_leases: Arc<Mutex<BTreeSet<(OwnerId, u8)>>>,
+    credential_publication: Arc<RwLock<()>>,
     rel_topology: Arc<RwLock<()>>,
 }
 fn validate_principal(principal: &str) -> Result<(), GatewayError> {
@@ -323,7 +324,10 @@ impl TrustedHostAdmission {
                 gateway: gateway.clone(),
                 credentials,
             },
-            HostAdmissionControl { active },
+            HostAdmissionControl {
+                active,
+                publication: Arc::clone(&gateway.credential_publication),
+            },
         ))
     }
 }
@@ -343,6 +347,7 @@ pub struct HostAdmissionAdapter {
 
 /// Host-only revocation capability. Keep it out of request handlers.
 pub struct HostAdmissionControl {
+    publication: Arc<RwLock<()>>,
     active: HashMap<[u8; 32], Arc<AtomicBool>>,
 }
 impl HostAdmissionControl {
@@ -353,6 +358,10 @@ impl HostAdmissionControl {
             .active
             .get(&hash)
             .ok_or(GatewayError::InvalidCredential)?;
+        let _publication = self
+            .publication
+            .write()
+            .map_err(|_| GatewayError::RegistryPoisoned)?;
         active.store(false, Ordering::Release);
         Ok(())
     }
@@ -392,7 +401,9 @@ impl HostAdmissionAdapter {
 }
 
 /// A principal-scoped view. Owner authorization is checked on every access.
+#[derive(Clone)]
 pub struct Instance {
+    credential_publication: Arc<RwLock<()>>,
     owners: Arc<RwLock<HashMap<OwnerId, MountedOwner>>>,
     rel_topology: Arc<RwLock<()>>,
     principal: Arc<str>,
@@ -441,7 +452,7 @@ mod instance_native_import;
 mod instance_owner;
 mod instance_passive_retrieval;
 mod instance_rel_dependencies;
-pub use instance_passive_retrieval::{SearchMode, SearchResult};
+pub use instance_passive_retrieval::{MemoryTemporalMatch, SearchMode, SearchResult};
 mod instance_processing;
 mod live_processing;
 mod processing_stages;
@@ -461,13 +472,28 @@ pub use workflow_workers::{
 
 mod host_memory_delivery;
 mod instance_entity;
+mod instance_identity;
+pub use instance_identity::{
+    EntityIdentityInspection, IdentityComparisonState, IdentityEffectiveDecision,
+    IdentityLifecycle, IdentitySeparationControl, IdentitySeparationInspection,
+    IdentitySeparationPreview, IdentitySeparationRequest, IdentitySeparationReview,
+    IdentitySeparationState, PreparedIdentitySeparation,
+};
+mod instance_perception;
 mod instance_perception_lifecycle;
+pub use instance_perception::{PerceptionLifecycle, PerceptionRoutes};
 mod instance_vectors;
 pub use instance_vectors::{
-    ArchiveHybridHit, ArchiveHybridSearch, ArchiveLexicalIndexPublication, ArchiveVectorHit,
-    ArchiveVectorSearch, PreparedVectorPublication,
+    ArchiveHybridHit, ArchiveHybridSearch, ArchiveLexicalIndexPublication,
+    ArchiveTurnTemporalEvidence, ArchiveVectorHit, ArchiveVectorPublication, ArchiveVectorSearch,
+    PreparedVectorPublication, TemporalArchiveHitEvidence, TemporalArchiveHybridSearch,
 };
+mod instance_observation_reads;
 mod instance_retrieval;
+pub use instance_observation_reads::{
+    InspectedObservation, ObservationClaim, ObservationCursor, ObservationPage,
+    RetrievalObservation,
+};
 
 mod instance_external_source;
 
@@ -477,5 +503,6 @@ pub use host_memory_delivery::{
 pub use instance_external_source::{AuthorizedExternalLexicalIndex, ExternalHostSource};
 pub use instance_retrieval::{
     MemoryRetrievalRoute, MemoryRetrievalTurn, PreparedMemoryDelivery, RetrievalCut,
-    RetrievalMemory, RetrievalMode, RetrievalOutcome, RetrievalPreview, RetrievalSource,
+    RetrievalDeliveryOutcome, RetrievalMemory, RetrievalMode, RetrievalOutcome, RetrievalPreview,
+    RetrievalSource,
 };

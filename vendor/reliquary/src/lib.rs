@@ -15,17 +15,21 @@ mod processing;
 mod retrieval;
 
 pub use configuration::*;
+pub use reliquary_switchboard::{
+    HostedEmbeddingSettings, HostedModelRoute, HostedSwitchboardConfig,
+};
 
 pub use configured_runtime::{
-    CompatibilityProbeReference, CompatibilityProfile, ConfiguredRuntime, EmbeddingEndpoint,
+    CompatibilityProbeReference, CompatibilityProfile, ConfiguredDecisionEndpoint,
+    ConfiguredRuntime, DecisionEndpoint, DecisionEndpointError, EmbeddingEndpoint,
     EmbeddingEndpointError, EmbeddingMode, GeneralEndpoint, GeneralEndpointError,
     HostedEmbeddingInputSemantics, HostedInferenceIdentity, RuntimeEndpointFailure,
     SwitchboardEmbeddingMode, VectorNormalization,
 };
 pub use error::{ProductError, ProductErrorKind};
 pub use host::{
-    ConversationQueue, Gateway, HostAdmissionAdapter, HostAdmissionControl, HostCredentialBinding,
-    Instance, OwnerGrant, TrustedHostAdmission,
+    ConversationQueue, EntityReviewAuthority, EntityReviewSession, Gateway, HostAdmissionAdapter,
+    HostAdmissionControl, HostCredentialBinding, Instance, OwnerGrant, TrustedHostAdmission,
 };
 pub use host::{context::*, external_source::*, project_source::*};
 pub use maintenance::*;
@@ -47,8 +51,11 @@ pub use reliquary_application::{
     ManagementPage, ManagementVersions, MemoryProvenance, MemoryStatistics, MemorySummary,
     RelManagementHealth, SemanticOwnerStatistics, TranscriptTurn,
 };
-pub use reliquary_archive::{EpisodeBoundary, EpisodeId, HERMES_COPIED_SOURCE_FORMAT};
+pub use reliquary_archive::{
+    EpisodeBoundary, EpisodeId, FragmentPassage, HERMES_COPIED_SOURCE_FORMAT,
+};
 pub use reliquary_memory_core::{MemoryId, PayloadState};
+pub use reliquary_retrieval::{TemporalBasis, TemporalEvidence, TemporalFilter};
 pub use reliquary_runtime_gateway::{
     ArchiveReceipt, CapabilityRouter, ConversationSubmissionId, DurableGeneration,
     DurableGenerationCheckpoint, DurableGenerationPhase, DurableHostOperation,

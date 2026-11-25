@@ -9,6 +9,7 @@ pub use reliquary_graph::CommunityId;
 pub use reliquary_graph::GraphAdmission;
 pub use reliquary_insomnia_store::AcceptedEpisodeOrder;
 pub use reliquary_memory_core::MemoryId;
+pub use reliquary_perception_store::observation;
 pub mod model;
 pub mod records;
 pub use records::{
@@ -57,6 +58,8 @@ pub use session::{
 pub use reliquary_vector_store::VectorGeneration;
 pub use session::EntityMentionCommit;
 pub use session::MemoryAssociationCut;
+pub use session::identity_receipt::IdentityPublicationProof;
+pub use session::perception_audit::*;
 pub use session::{
     ArchiveHybridView, ArchiveLexicalIndexInput, ArchiveLexicalIndexPublication, ArchiveVectorHit,
     ArchiveVectorSearch, ArchiveVectorView, PreparedArchiveLexicalIndex,

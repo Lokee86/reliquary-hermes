@@ -39,6 +39,8 @@ pub struct DreamEvidenceStore {
     begins: BTreeMap<String, BeginRecord>,
     journal: DreamFreshnessJournal,
     initial_settlements: BTreeMap<String, InitialDreamSettlement>,
+    settled_sources: Vec<MemoryId>,
+    settlement_positions: BTreeMap<MemoryId, u64>,
     frontiers: BTreeMap<String, super::dream_frontier::FrontierRecord>,
 }
 
@@ -66,9 +68,13 @@ impl DreamEvidenceStore {
             begins: BTreeMap::new(),
             journal: DreamFreshnessJournal::new(Some(owner_uuid)),
             initial_settlements: BTreeMap::new(),
+            settled_sources: Vec::new(),
+            settlement_positions: BTreeMap::new(),
             frontiers: BTreeMap::new(),
         };
-        let mut frames = container.scan_frames().map_err(|error| error.to_string())?;
+        let mut frames = container
+            .scan_matching_frames(super::frame_selection::without_archive_or_packed)
+            .map_err(|error| error.to_string())?;
         while let Some(frame) = frames.next_frame().map_err(|error| error.to_string())? {
             let frontier = super::dream_frontier::FrontierRecord::decode(frame.payload)?;
             let payload = frontier

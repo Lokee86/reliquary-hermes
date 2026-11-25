@@ -33,6 +33,7 @@ impl Instance {
             state: Mutex::new(TurnState {
                 turn: RetrievalTurn::default(),
                 generation: 0,
+                provided_observations: BTreeSet::new(),
                 pending_use_id: None,
                 pending_profile: None,
                 handoff_checked: false,
@@ -43,6 +44,45 @@ impl Instance {
             mode,
             delivery: Mutex::new(()),
         })
+    }
+
+    /// Confirm the exact Observation revisions disclosed by an inspecting host.
+    /// This advances turn-local recall state without publishing accepted Memory use.
+    pub fn accept_inspected_observations(
+        &self,
+        turn: &MemoryRetrievalTurn,
+        observation_version: u64,
+        citations: &[ObservationCitation],
+    ) -> Result<(), GatewayError> {
+        if turn.mode != RetrievalMode::Inspect || citations.len() > MAX_AGENTIC_OBSERVATIONS {
+            return Err(GatewayError::InvalidPreparedRetrieval);
+        }
+        let _delivery = turn
+            .delivery
+            .try_lock()
+            .map_err(|_| GatewayError::HostStatusUnknown)?;
+        let mut state = turn
+            .state
+            .lock()
+            .map_err(|_| GatewayError::RegistryPoisoned)?;
+        validate_turn_binding(self, turn, turn.owner, &turn.turn_id)?;
+        self.with_reliquary(turn.owner, |rel| {
+            let current = ObservationReadCut::capture(rel);
+            if current.publication != observation_version
+                || citations.iter().any(|cite| {
+                    !current.contains(*cite) || rel.observation_citation_text(cite).is_err()
+                })
+            {
+                return Err(GatewayError::StaleRetrieval);
+            }
+            Ok(())
+        })??;
+        self.ensure_credential_active()?;
+        state
+            .provided_observations
+            .extend(citations.iter().copied());
+        state.generation = state.generation.saturating_add(1);
+        Ok(())
     }
 
     pub fn prepare_agentic_memory_delivery(
@@ -70,10 +110,27 @@ impl Instance {
         action: RetrievalAction,
         embed_query: impl FnOnce() -> Result<Option<(CompatibilityProfileId, Vec<f32>)>, GatewayError>,
     ) -> Result<RetrievalOutcome, GatewayError> {
+        self.evaluate_agentic_memory_with_filter(turn, route, action, None, embed_query)
+    }
+
+    pub fn evaluate_agentic_memory_with_filter(
+        &self,
+        turn: &MemoryRetrievalTurn,
+        route: &MemoryRetrievalRoute,
+        action: RetrievalAction,
+        query_filter: Option<TemporalFilter>,
+        embed_query: impl FnOnce() -> Result<Option<(CompatibilityProfileId, Vec<f32>)>, GatewayError>,
+    ) -> Result<RetrievalOutcome, GatewayError> {
+        if query_filter.is_some_and(|filter| {
+            !matches!(&action, RetrievalAction::Query(_))
+                || filter.start_ns >= filter.end_exclusive_ns
+        }) {
+            return Err(GatewayError::InvalidPreparedRetrieval);
+        }
         let owner = turn.owner;
         let turn_id = turn.turn_id.as_str();
         validate_turn_binding(self, turn, owner, turn_id)?;
-        let (prior, generation, prior_profile) = {
+        let (prior, generation, prior_profile, provided_observations) = {
             let state = turn
                 .state
                 .lock()
@@ -81,7 +138,12 @@ impl Instance {
             if state.pending_use_id.is_some() {
                 return Err(GatewayError::HostStatusUnknown);
             }
-            (state.turn.clone(), state.generation, state.profile)
+            (
+                state.turn.clone(),
+                state.generation,
+                state.profile,
+                state.provided_observations.clone(),
+            )
         };
         let (profile, query_vector) = match &action {
             RetrievalAction::Query(_) => match embed_query()? {
@@ -92,40 +154,72 @@ impl Instance {
         };
         validate_turn_binding(self, turn, owner, turn_id)?;
         let include_vectors = query_vector.is_some();
-        let snapshot = self.retrieval_cut_snapshot(owner, profile, include_vectors)?;
+        let (snapshot, observation_cut) =
+            self.with_reliquary(owner, |rel| -> Result<_, GatewayError> {
+                Ok((
+                    capture_memory_snapshot(rel, profile, include_vectors)?,
+                    ObservationReadCut::capture(rel),
+                ))
+            })??;
         if query_vector.is_some() && snapshot.vectors.is_empty() {
             return Err(GatewayError::RetrievalUnavailable(
                 "no current Memory vectors for the embedding profile",
             ));
         }
-        let memories = reliquary_application::agentic_memories(&snapshot);
         let authorized_route = AuthorizedDecision {
             instance: self,
             turn,
             generation,
             endpoint: route.0.as_ref(),
         };
-        let evaluation = evaluate_retrieval(
+        let offer_observations = !matches!(action, RetrievalAction::Traverse(_));
+        let evaluation = evaluate_snapshot_retrieval(
             &authorized_route,
-            owner.as_bytes(),
             &prior,
-            &memories,
-            &snapshot.active_relations,
+            &snapshot,
             action,
             query_vector.as_deref(),
+            query_filter,
         );
         authorized_route.check()?;
         let evaluation = evaluation.map_err(GatewayError::Retrieval)?;
-        let current = self
-            .retrieval_cut_snapshot(owner, profile, include_vectors)
-            .map_err(|error| match error {
-                GatewayError::RetrievalUnavailable(_) => GatewayError::StaleRetrieval,
-                other => other,
-            })?;
-        if snapshot != current {
-            return Err(GatewayError::StaleRetrieval);
-        }
-        let preview = RetrievalPreview::from_evaluation(&snapshot, profile, &evaluation)?;
+        let observations = self.with_reliquary(owner, |rel| {
+            let current = capture_memory_snapshot(rel, profile, include_vectors).map_err(
+                |error| match error {
+                    GatewayError::RetrievalUnavailable(_) => GatewayError::StaleRetrieval,
+                    other => other,
+                },
+            )?;
+            let current_cut = ObservationReadCut::capture(rel);
+            if snapshot != current
+                || (current_cut.publication.max(observation_cut.publication) > 0
+                    && observation_cut != current_cut)
+            {
+                return Err(GatewayError::StaleRetrieval);
+            }
+            Ok(if offer_observations {
+                evaluation.next.query().map_or_else(Vec::new, |query| {
+                    // The ranked shortlist is the exact set offered for delivery.
+                    rank_current_observations(
+                        rel,
+                        query,
+                        evaluation.next.temporal_filter(),
+                        &provided_observations,
+                        MAX_AGENTIC_OBSERVATIONS,
+                    )
+                    .0
+                })
+            } else {
+                Vec::new()
+            })
+        })??;
+        let preview = RetrievalPreview::from_evaluation(
+            &snapshot,
+            profile,
+            &evaluation,
+            observation_cut.publication,
+            observations,
+        )?;
         let _delivery = turn
             .delivery
             .try_lock()
@@ -138,7 +232,9 @@ impl Instance {
         if state.generation != generation || state.pending_use_id.is_some() {
             return Err(GatewayError::StaleRetrieval);
         }
-        if turn.mode == RetrievalMode::Inspect || evaluation.memories.is_empty() {
+        if turn.mode == RetrievalMode::Inspect
+            || (evaluation.memories.is_empty() && preview.observations.is_empty())
+        {
             state.turn = evaluation.next;
             state.profile = profile;
             state.generation = state.generation.saturating_add(1);
@@ -158,6 +254,7 @@ impl Instance {
             community_generation: snapshot.community.as_ref().map(|c| c.generation),
             community_graph_version: snapshot.community.as_ref().map(|c| c.graph_version),
             query: evaluation.next.query(),
+            temporal_filter: evaluation.next.temporal_filter(),
             searched_ids: evaluation
                 .next
                 .searched()
@@ -182,16 +279,17 @@ impl Instance {
                     content: &memory.body.content,
                 })
                 .collect(),
+            selected_observations: provided_observations.into_iter().collect(),
+            observations: preview.observations.iter().map(|hit| &hit.claim).collect(),
         })
         .map_err(|error| GatewayError::Retrieval(error.to_string()))?;
         let digest: [u8; 32] = Sha256::digest(&payload).into();
         let use_id = stable_memory_use_id(owner, &self.principal, turn_id, digest);
-        let selected_ids = evaluation
+        let body_bindings = evaluation
             .memories
             .iter()
-            .map(|m| m.id)
-            .collect::<BTreeSet<_>>();
-        let body_bindings = memories_for_bindings(&memories, &selected_ids);
+            .map(|m| (m.id, m.revision, m.body_id))
+            .collect();
         state.pending_use_id = Some(use_id.clone());
         state.pending_profile = profile;
         state.handoff_checked = false;

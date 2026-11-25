@@ -30,7 +30,10 @@ pub(super) fn open_common_for_owner(
         dream_admissions,
         replay_grouped_insomnia,
         reliquary_memory_core::MemoryReplayStart::Detached,
+        None,
+        &BTreeMap::new(),
     )
+    .map(|(common, _, _, _)| common)
 }
 
 pub(super) fn replay_memories(
@@ -131,7 +134,17 @@ pub(super) fn open_common_replaying(
     dream_admissions: impl IntoIterator<Item = DreamBeginAdmission>,
     replay_grouped_insomnia: bool,
     memory_start: reliquary_memory_core::MemoryReplayStart,
-) -> Result<CommonState, OwnerSessionError> {
+    identity_generation: Option<[u8; 32]>,
+    observation_archive_cuts: &BTreeMap<u64, (u64, u64)>,
+) -> Result<
+    (
+        CommonState,
+        super::identity_receipt::IdentityHistory,
+        super::identity_separation::SeparationHistory,
+        reliquary_perception_store::observation::ObservationStore,
+    ),
+    OwnerSessionError,
+> {
     if expected_owner_id != container.owner_id() {
         return Err(OwnerSessionError::Graph(GraphError::WrongOwner));
     }
@@ -218,7 +231,6 @@ pub(super) fn open_common_replaying(
                 .collect()
         },
     )?;
-    super::replay_prefix::validate_graph_prefix(container, &memories)?;
     for relation in graph.history() {
         for node in [relation.source, relation.target] {
             let exists = match node {
@@ -258,9 +270,18 @@ pub(super) fn open_common_replaying(
         &maintenance,
         &grouped_body_ids,
     )?;
+    let (identity_history, identity_separation_history, observations) =
+        super::replay_prefix::validate_graph_prefix(
+            container,
+            &memories,
+            identity_generation.map(|generation| (&perception, generation)),
+            &pruned_bodies,
+            observation_archive_cuts,
+        )?;
     memories.retain_pruned_body_fence(pruned_bodies);
     let mut dream_admissions = dream_admissions.into_iter().collect::<Vec<_>>();
-    let mut frames = container.scan_frames()?;
+    let mut frames = container
+        .scan_matching_frames(crate::records::frame_selection::without_archive_or_packed)?;
     while let Some(frame) = frames.next_frame()? {
         let frontier = crate::records::dream_frontier::FrontierRecord::decode(frame.payload)
             .map_err(OwnerSessionError::Record)?;
@@ -360,7 +381,7 @@ pub(super) fn open_common_replaying(
         &profiles,
         &memory_vectors,
     )?;
-    Ok(CommonState {
+    let common = CommonState {
         user_memory_requests,
         memories,
         perception,
@@ -374,5 +395,11 @@ pub(super) fn open_common_replaying(
         dreams,
         dream_pairs,
         dream_read_index,
-    })
+    };
+    Ok((
+        common,
+        identity_history,
+        identity_separation_history,
+        observations,
+    ))
 }

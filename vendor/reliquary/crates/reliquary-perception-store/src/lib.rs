@@ -2,22 +2,46 @@
 //!
 //! Memory IDs and byte spans are foreign references. This crate records their
 //! coordinates and caller-supplied decisions; it does not read Memory payloads
-//! or synthesize Observations.
+//! or synthesize Observations. The Observation module projects verified claims
+//! and exact evidence references admitted by the owner session.
 
 use reliquary_container::{Container, ContainerError, ContainerIdentity, FileKind};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+pub mod identity;
+pub mod identity_evidence;
+pub mod observation;
 mod retained_resolution;
 pub use retained_resolution::{
     RetainedResolutionDecision, RetainedResolutionRecord, RetainedResolutionRevision,
-    RetainedResolutionValue, RetainedUnresolvedEvidence,
+    RetainedResolutionValue, RetainedUnresolvedEvidence, retained_resolution_ordinal_in_frame,
 };
 
 const MAGIC: &[u8; 8] = b"RELPER01";
 const ENTITY_TOMBSTONE_MAGIC: &[u8; 8] = b"RELETM01";
 const ENTITY_PRUNE_MAGIC: &[u8; 8] = b"RELEPR01";
+
+fn perception_replay_frame(prefix: &[u8]) -> bool {
+    if prefix.starts_with(b"RELPUB") {
+        return match reliquary_container::decode_publication(prefix) {
+            Ok(Some(publication)) => publication.body.starts_with(b"RELEPB"),
+            _ => true,
+        };
+    }
+    [
+        MAGIC.as_slice(),
+        b"RELEPB",
+        b"RELERH01",
+        b"RELERL01",
+        b"RELRLP01",
+        ENTITY_TOMBSTONE_MAGIC,
+        ENTITY_PRUNE_MAGIC,
+    ]
+    .iter()
+    .any(|marker| prefix.starts_with(*marker))
+}
 pub const MAX_ENTITY_ALIASES: usize = 32;
 pub const MAX_ENTITY_NAME_BYTES: usize = 512;
 pub const MAX_ENTITY_KIND_BYTES: usize = 128;
@@ -43,6 +67,7 @@ pub use entity_publication::{
     ClockedEntityPublication, RetainedEntity, clocked_entity_in_frame, encode_retained_entity_body,
 };
 mod history;
+pub use history::perception_version_in_frame;
 mod relationship_codec;
 mod relationship_model;
 mod relationship_replay;
@@ -214,6 +239,21 @@ pub struct MemoryEntityResolution {
     pub revision: u32,
     pub updated_at_ns: i64,
     pub status: MemoryEntityResolutionStatus,
+}
+
+/// Source coordinates from a current resolved decision for identity evidence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedIdentityMention {
+    pub key: MemoryEntityMentionKey,
+    pub revision: u32,
+    pub retained_ordinal: Option<u64>,
+}
+
+/// An Entity or mention change that can affect owner-local evidence selection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum EntityEvidenceChange {
+    Entity(EntityId),
+    Mention(MemoryEntityMentionKey),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -552,6 +592,8 @@ pub struct PerceptionStore {
     entity_tombstones: BTreeMap<EntityId, EntityTombstone>,
     pruned_descriptions: BTreeMap<(EntityId, u64), EntityDescriptionPrune>,
     relationships: BTreeMap<RelationshipId, Relationship>,
+    #[serde(skip)]
+    local_relationship_participants: std::sync::OnceLock<BTreeMap<EntityId, Vec<RelationshipId>>>,
     relationship_history: BTreeMap<(RelationshipId, u64), Relationship>,
     relationship_versions: BTreeMap<(RelationshipId, u64), u64>,
     relationship_mutations: BTreeMap<String, (RelationshipId, u64)>,
@@ -561,8 +603,11 @@ pub struct PerceptionStore {
     relationship_version: u64,
     mutations: BTreeMap<String, (EntityId, u64)>,
     mentions: BTreeMap<MemoryEntityMentionKey, MemoryEntityResolution>,
+    #[serde(skip)]
+    resolved_mentions: std::sync::OnceLock<BTreeMap<EntityId, BTreeSet<MemoryEntityMentionKey>>>,
     mention_history: BTreeMap<(MemoryEntityMentionKey, u32), MemoryEntityResolution>,
     mention_versions: BTreeMap<(MemoryEntityMentionKey, u32), u64>,
+    evidence_changes: BTreeMap<u64, EntityEvidenceChange>,
     retained_resolution: retained_resolution::History,
 }
 
@@ -578,6 +623,7 @@ impl PerceptionStore {
             entity_tombstones: BTreeMap::new(),
             pruned_descriptions: BTreeMap::new(),
             relationships: BTreeMap::new(),
+            local_relationship_participants: Default::default(),
             relationship_history: BTreeMap::new(),
             relationship_versions: BTreeMap::new(),
             relationship_mutations: BTreeMap::new(),
@@ -587,14 +633,15 @@ impl PerceptionStore {
             relationship_version: 0,
             mutations: BTreeMap::new(),
             mentions: BTreeMap::new(),
+            resolved_mentions: Default::default(),
             mention_history: BTreeMap::new(),
             mention_versions: BTreeMap::new(),
+            evidence_changes: BTreeMap::new(),
             retained_resolution: retained_resolution::History::default(),
         };
-        let mut clock = reliquary_container::PhysicalClock::default();
-        let mut frames = container.scan_frames()?;
+        let mut frames = container.scan_clocked_matching_frames(perception_replay_frame)?;
         while let Some(frame) = frames.next_frame()? {
-            let frontier = clock.observe_frame(frame.payload)?;
+            let frontier = frame.global_version;
             if let Some(publication) = clocked_entity_in_frame(frame.payload)? {
                 store.replay_retained_entity(publication)?;
                 continue;
@@ -646,6 +693,20 @@ impl PerceptionStore {
     pub fn retained_resolution_history(&self) -> &[RetainedResolutionRecord] {
         &self.retained_resolution.records
     }
+    pub fn retained_resolution_ordinal(&self) -> Option<u64> {
+        self.retained_resolution
+            .records
+            .last()
+            .map(|row| row.source_ordinal)
+    }
+    /// Latest typed revision at the retained source cut, including a terminal revision.
+    pub fn retained_resolution_at_cut(
+        &self,
+        key: MemoryEntityMentionKey,
+        source_ordinal: u64,
+    ) -> Option<&RetainedResolutionRecord> {
+        self.retained_resolution.at_cut(key, source_ordinal)
+    }
     pub fn retained_resolution_at_head(
         &self,
         key: MemoryEntityMentionKey,
@@ -664,6 +725,13 @@ impl PerceptionStore {
     }
     pub fn entities(&self) -> impl Iterator<Item = &Entity> {
         self.entities.values()
+    }
+    /// Seek active Entities in ID order after an exclusive cursor.
+    pub fn entities_after(&self, after: Option<EntityId>) -> impl Iterator<Item = &Entity> {
+        use std::ops::Bound::{Excluded, Unbounded};
+        self.entities
+            .range((after.map_or(Unbounded, Excluded), Unbounded))
+            .map(|(_, entity)| entity)
     }
     pub fn historical_entities(&self) -> impl Iterator<Item = EntityId> + '_ {
         self.entity_tombstones.keys().copied()
@@ -735,6 +803,105 @@ impl PerceptionStore {
 
     pub fn mentions(&self) -> impl Iterator<Item = &MemoryEntityResolution> {
         self.mentions.values()
+    }
+
+    pub fn evidence_changes_after(
+        &self,
+        after: u64,
+        through: u64,
+        limit: usize,
+    ) -> impl Iterator<Item = (u64, EntityEvidenceChange)> + '_ {
+        self.evidence_changes
+            .range((std::ops::Bound::Excluded(after), std::ops::Bound::Unbounded))
+            .take_while(move |(version, _)| **version <= through)
+            .take(limit)
+            .map(|(&version, &change)| (version, change))
+    }
+
+    /// Current resolved participants anchored to this Memory. Runtime
+    /// decisions, including non-resolutions, shadow retained decisions.
+    pub fn resolved_mentions_in_memory(
+        &self,
+        memory_id: [u8; 32],
+    ) -> impl Iterator<Item = (EntityId, ResolvedIdentityMention)> {
+        let runtime = self.mentions_for_memory(memory_id).filter_map(|mention| {
+            let MemoryEntityResolutionStatus::Resolved { entity_id, .. } = mention.status else {
+                return None;
+            };
+            Some((
+                entity_id,
+                ResolvedIdentityMention {
+                    key: mention.key,
+                    revision: mention.revision,
+                    retained_ordinal: None,
+                },
+            ))
+        });
+        let retained = self
+            .retained_resolution
+            .records_for_memory(memory_id)
+            .filter_map(|row| {
+                let (mention, entity_id) = row.resolved()?;
+                if self.mentions.contains_key(&mention.key) {
+                    return None;
+                }
+                Some((
+                    entity_id,
+                    ResolvedIdentityMention {
+                        key: mention.key,
+                        revision: mention.revision,
+                        retained_ordinal: Some(row.source_ordinal),
+                    },
+                ))
+            });
+        runtime
+            .chain(retained)
+            .filter(|(id, _)| self.entities.contains_key(id))
+    }
+
+    /// Resolved mentions of an active local Entity, in mention-key order.
+    /// A runtime decision shadows the retained decision at the same key.
+    pub fn resolved_mentions_for_entity(
+        &self,
+        entity: EntityId,
+    ) -> impl Iterator<Item = ResolvedIdentityMention> {
+        let index = self.resolved_mentions.get_or_init(|| {
+            let mut index = BTreeMap::<_, BTreeSet<_>>::new();
+            for mention in self.mentions.values() {
+                if let MemoryEntityResolutionStatus::Resolved { entity_id, .. } = mention.status
+                    && self.entities.contains_key(&entity_id)
+                {
+                    index.entry(entity_id).or_default().insert(mention.key);
+                }
+            }
+            for row in self.retained_resolution.current_records() {
+                if let Some((mention, entity_id)) = row.resolved()
+                    && !self.mentions.contains_key(&mention.key)
+                    && !self.entity_tombstones.contains_key(&entity_id)
+                {
+                    index.entry(entity_id).or_default().insert(mention.key);
+                }
+            }
+            index
+        });
+        let keys = index
+            .get(&entity)
+            .filter(|_| self.entities.contains_key(&entity));
+        keys.into_iter().flatten().filter_map(|&key| {
+            let (revision, retained_ordinal) = match self.mention(key) {
+                Some(mention) => (mention.revision, None),
+                None => {
+                    let row = self.retained_resolution.current_record(key)?;
+                    let (mention, _) = row.resolved()?;
+                    (mention.revision, Some(row.source_ordinal))
+                }
+            };
+            Some(ResolvedIdentityMention {
+                key,
+                revision,
+                retained_ordinal,
+            })
+        })
     }
 
     pub fn publish_entity(
@@ -998,6 +1165,8 @@ impl PerceptionStore {
                 self.entity_versions
                     .insert((value.id, value.revision), expected);
                 self.entities.insert(value.id, value.clone());
+                self.evidence_changes
+                    .insert(expected, EntityEvidenceChange::Entity(value.id));
             }
             Record::Mention { value, .. } => {
                 validate_key(value.key)?;
@@ -1014,7 +1183,34 @@ impl PerceptionStore {
                     .insert((value.key, value.revision), value.clone());
                 self.mention_versions
                     .insert((value.key, value.revision), expected);
-                self.mentions.insert(value.key, value.clone());
+                self.evidence_changes
+                    .insert(expected, EntityEvidenceChange::Mention(value.key));
+                let previous = self.mentions.insert(value.key, value.clone());
+                if let Some(index) = self.resolved_mentions.get_mut() {
+                    let previous_target = match previous {
+                        Some(MemoryEntityResolution {
+                            status: MemoryEntityResolutionStatus::Resolved { entity_id, .. },
+                            ..
+                        }) => Some(entity_id),
+                        Some(_) => None,
+                        None => self
+                            .retained_resolution
+                            .current_record(value.key)
+                            .and_then(RetainedResolutionRecord::resolved)
+                            .map(|(_, entity_id)| entity_id),
+                    };
+                    if let Some(entity_id) = previous_target
+                        && let Some(keys) = index.get_mut(&entity_id)
+                    {
+                        keys.remove(&value.key);
+                        if keys.is_empty() {
+                            index.remove(&entity_id);
+                        }
+                    }
+                    if let MemoryEntityResolutionStatus::Resolved { entity_id, .. } = value.status {
+                        index.entry(entity_id).or_default().insert(value.key);
+                    }
+                }
             }
         }
         self.version = expected;
@@ -1044,7 +1240,12 @@ impl PerceptionStore {
             return Err(PerceptionError::CorruptRecord("Entity tombstone revision"));
         }
         self.entities.remove(&tombstone.id);
+        if let Some(index) = self.resolved_mentions.get_mut() {
+            index.remove(&tombstone.id);
+        }
         self.entity_tombstones.insert(tombstone.id, tombstone);
+        self.evidence_changes
+            .insert(expected, EntityEvidenceChange::Entity(tombstone.id));
         self.version = expected;
         Ok(())
     }
@@ -1701,6 +1902,174 @@ mod tests {
                 .is_err()
         );
         assert_eq!(container.read_frames().unwrap().len(), before);
+    }
+
+    #[test]
+    fn resolved_retained_mentions_yield_to_runtime_decisions() {
+        let path = TempFile::new();
+        let mut container = create(&path.0, 7);
+        let mut store = PerceptionStore::open(&container).unwrap();
+        let retained = store
+            .publish_entity(&mut container, draft("retained", "Retained"))
+            .unwrap();
+        let runtime = store
+            .publish_entity(&mut container, draft("runtime", "Runtime"))
+            .unwrap();
+        let key = key();
+        let global = container.reserve_version(Some(10)).unwrap();
+        let ordinal = 37u64;
+        let mut row = b"RELERH01".to_vec();
+        row.extend_from_slice(&container.owner_id());
+        row.extend_from_slice(&global.to_le_bytes());
+        row.extend_from_slice(&ordinal.to_le_bytes());
+        row.extend_from_slice(&key.memory_id);
+        row.push(key.field.tag());
+        row.extend_from_slice(&key.start_byte.to_le_bytes());
+        row.extend_from_slice(&key.end_byte.to_le_bytes());
+        row.extend_from_slice(&1u32.to_le_bytes());
+        row.extend_from_slice(&10i64.to_le_bytes());
+        row.push(1);
+        row.extend_from_slice(&retained.id.0);
+        row.push(EntityResolutionReason::NamedReferent.tag());
+        container.append(&row).unwrap();
+
+        let lookup = |store: &PerceptionStore, id| {
+            store.resolved_mentions_for_entity(id).collect::<Vec<_>>()
+        };
+        let mut store = PerceptionStore::open(&container).unwrap();
+        assert!(store.mention(key).is_none());
+        assert!(store.retained_resolution_at_cut(key, ordinal - 1).is_none());
+        assert_eq!(
+            retained_resolution_ordinal_in_frame(&row).unwrap(),
+            Some(ordinal)
+        );
+        assert_eq!(store.retained_resolution_ordinal(), Some(ordinal));
+        assert_eq!(
+            lookup(&store, retained.id),
+            vec![ResolvedIdentityMention {
+                key,
+                revision: 1,
+                retained_ordinal: Some(ordinal),
+            }]
+        );
+
+        store
+            .put_mention_resolution(
+                &mut container,
+                key,
+                0,
+                11,
+                MemoryEntityResolutionStatus::Resolved {
+                    entity_id: runtime.id,
+                    reason: EntityResolutionReason::NamedReferent,
+                },
+            )
+            .unwrap();
+        assert!(lookup(&store, retained.id).is_empty());
+        assert_eq!(
+            lookup(&store, runtime.id),
+            vec![ResolvedIdentityMention {
+                key,
+                revision: 1,
+                retained_ordinal: None,
+            }]
+        );
+        store
+            .put_mention_resolution(
+                &mut container,
+                key,
+                1,
+                12,
+                MemoryEntityResolutionStatus::Unresolved {
+                    reason: EntityResolutionReason::UserWithdrawal,
+                },
+            )
+            .unwrap();
+        assert!(lookup(&store, retained.id).is_empty());
+        assert!(lookup(&store, runtime.id).is_empty());
+
+        drop(container);
+        let container = Container::open_read_only(&path.0).unwrap();
+        let store = PerceptionStore::open(&container).unwrap();
+        assert!(lookup(&store, retained.id).is_empty());
+        assert!(lookup(&store, runtime.id).is_empty());
+        assert_eq!(
+            store
+                .retained_resolution_at_cut(key, ordinal)
+                .and_then(RetainedResolutionRecord::resolved)
+                .map(|(_, entity)| entity),
+            Some(retained.id)
+        );
+    }
+
+    #[test]
+    fn resolved_mentions_follow_reassignment_withdrawal_and_replay() {
+        let path = TempFile::new();
+        let mut container = create(&path.0, 7);
+        let mut store = PerceptionStore::open(&container).unwrap();
+        let first = store
+            .publish_entity(&mut container, draft("first", "First"))
+            .unwrap();
+        let second = store
+            .publish_entity(&mut container, draft("second", "Second"))
+            .unwrap();
+        let later = MemoryEntityMentionKey {
+            start_byte: 28,
+            end_byte: 33,
+            ..key()
+        };
+        let resolved = |entity_id| MemoryEntityResolutionStatus::Resolved {
+            entity_id,
+            reason: EntityResolutionReason::NamedReferent,
+        };
+        let keys_for = |store: &PerceptionStore, entity| {
+            store
+                .resolved_mentions_for_entity(entity)
+                .map(|mention| mention.key)
+                .collect::<Vec<_>>()
+        };
+        store
+            .put_mention_resolution(&mut container, later, 0, 20, resolved(first.id))
+            .unwrap();
+        assert_eq!(keys_for(&store, first.id), vec![later]);
+        store
+            .put_mention_resolution(&mut container, key(), 0, 21, resolved(first.id))
+            .unwrap();
+        assert_eq!(keys_for(&store, first.id), vec![key(), later]);
+
+        store
+            .put_mention_resolution(&mut container, key(), 1, 22, resolved(second.id))
+            .unwrap();
+        store
+            .put_mention_resolution(
+                &mut container,
+                later,
+                1,
+                23,
+                MemoryEntityResolutionStatus::Unresolved {
+                    reason: EntityResolutionReason::UserWithdrawal,
+                },
+            )
+            .unwrap();
+        let gone = MemoryEntityMentionKey {
+            memory_id: [22; 32],
+            ..key()
+        };
+        store
+            .put_mention_resolution(&mut container, gone, 0, 24, resolved(first.id))
+            .unwrap();
+        assert_eq!(keys_for(&store, first.id), vec![gone]);
+        store.tombstone_entity(&mut container, first.id, 1).unwrap();
+        assert!(keys_for(&store, first.id).is_empty());
+        assert_eq!(keys_for(&store, second.id), vec![key()]);
+
+        drop(container);
+        let container = Container::open_read_only(&path.0).unwrap();
+        let store = PerceptionStore::open(&container).unwrap();
+        assert!(keys_for(&store, first.id).is_empty());
+        assert_eq!(keys_for(&store, second.id), vec![key()]);
+        assert_eq!(store.mention(key()).unwrap().revision, 2);
+        assert_eq!(store.mention(later).unwrap().revision, 2);
     }
 
     #[test]

@@ -5,6 +5,8 @@ mod private_cache;
 mod suffix;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_observations;
 
 use super::{OwnerSessionError, RelSession};
 use reliquary_container::{Container, FileKind, PhysicalCheckpoint, VerifiedPrefix};
@@ -14,7 +16,7 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-const MAGIC: &[u8; 8] = b"RELCP003";
+const MAGIC: &[u8; 8] = b"RELCP007";
 const STATE_START: u64 = 16;
 const MAX_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
 const REFRESH_BYTES: u64 = 16 * 1024 * 1024;
@@ -27,6 +29,9 @@ struct Manifest {
     memory_cut: u64,
     graph_cut: u64,
     archive_cut: u64,
+    identity_cut: u64,
+    separation_cut: u64,
+    observation_cut: u64,
     state_len: u64,
 }
 
@@ -39,6 +44,9 @@ impl Manifest {
             && session.memory_version() == self.memory_cut
             && session.graph_version() == self.graph_cut
             && session.archive_version() == self.archive_cut
+            && session.identity_history.frontier() == self.identity_cut
+            && session.identity_separation_history.frontier() == self.separation_cut
+            && session.observation_publication_version() == self.observation_cut
     }
 }
 
@@ -196,7 +204,7 @@ impl WriterCheckpoint {
             .capture_checkpoint(self.prefix.as_ref())
             .map_err(io::Error::other)?;
         let parent = self.slot.parent().ok_or_else(invalid_cache)?;
-        let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+        let mut staged = private_cache::stage(parent)?;
         staged.write_all(MAGIC)?;
         staged.write_all(&[0; 8])?;
         let mut pages = PageWriter::new(
@@ -214,6 +222,9 @@ impl WriterCheckpoint {
             memory_cut: session.memory_version(),
             graph_cut: session.graph_version(),
             archive_cut: session.archive_version(),
+            identity_cut: session.identity_history.frontier(),
+            separation_cut: session.identity_separation_history.frontier(),
+            observation_cut: session.observation_publication_version(),
             state_len: state_len as u64,
         })?;
         if manifest.len() > MAX_MANIFEST_BYTES {
@@ -280,16 +291,20 @@ fn open_leased(
         && suffix::replay(&mut session, &container, &entry.manifest.physical, extent)?
     {
         container.require_extent(extent)?;
+        container.release_replay_directory();
         let refresh = slot
             .filter(|_| writable)
             .map(|slot| WriterCheckpoint::new(slot, prefix, &session));
         return Ok((container, session, refresh));
     }
+    // Full admission can replace this checkpoint. Release its file handle first.
+    drop(entry);
     if prefix.is_some() {
         container.validate_from_start()?;
     }
     let session = RelSession::open_leased_current(&container)?;
     container.require_extent(extent)?;
+    container.release_replay_directory();
 
     let refresh = slot.filter(|_| writable).map(|slot| {
         let mut writer = WriterCheckpoint::new(slot, None, &session);

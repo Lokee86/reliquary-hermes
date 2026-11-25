@@ -28,11 +28,19 @@ mod dream_empty_publication;
 mod dream_publication;
 mod dream_supersession_publication;
 mod dream_temporal;
+mod temporal_query;
+mod temporal_search;
+pub use reliquary_retrieval::{TemporalBasis, TemporalEvidence, TemporalFilter};
+pub use temporal_query::{
+    ResolvedArchiveTemporalQuery, TemporalQueryError, resolve_archive_temporal_query,
+};
+pub use temporal_search::{memory_temporal_evidence, text_temporal_evidence};
 mod dream_workflow;
 pub use conversation_workflow::{
     NativeConversationCommit, PublishedNativeTurn, commit_native_conversation_turn,
     finalize_native_episode, validate_native_conversation_commit,
 };
+pub mod entity_identity;
 mod entity_workflow;
 mod external_source_workflow;
 mod freshness_due_workflow;
@@ -42,6 +50,7 @@ mod ingest_publication;
 mod maintenance_workflow;
 mod management_workflow;
 mod perception_lifecycle_workflow;
+pub mod perception_workflow;
 pub use management_workflow::inspection;
 pub use management_workflow::{
     CommunityRecomputeReport, CommunityRenameRequest, CommunityRenameResult,
@@ -66,6 +75,7 @@ pub use native_import_workflow::settle_native_import_initial_dream;
 pub mod live_processing;
 mod native_insomnia;
 mod native_insomnia_evidence;
+pub mod observation_drafts;
 pub mod processing_plan;
 mod project_correlation_workflow;
 mod rel_reconciliation_workflow;
@@ -1065,7 +1075,7 @@ pub use external_processing::{
 mod agentic_retrieval;
 pub use agentic_retrieval::{
     AgenticMemory, RetrievalAction, RetrievalAnchorReport, RetrievalDirection, RetrievalEvaluation,
-    RetrievalRelationEvidence, evaluate_retrieval,
+    RetrievalRelationEvidence, evaluate_retrieval, evaluate_snapshot_retrieval,
 };
 pub use reliquary_retrieval::RetrievalConfig;
 pub use reliquary_retrieval::agentic::RetrievalTurn;
@@ -1075,5 +1085,11 @@ pub use reliquary_retrieval::memory_retrieval::{
 
 mod archive_search;
 mod owner_retrieval;
-pub use archive_search::{ArchiveHybridHit, ArchiveHybridSearch, rank_archive_hybrid};
-pub use owner_retrieval::{agentic_memories, rank_owner_snapshot, route_owner_snapshot};
+pub use archive_search::{
+    ArchiveHybridHit, ArchiveHybridSearch, ArchiveTurnTemporalEvidence, TemporalArchiveHitEvidence,
+    TemporalArchiveHybridSearch, rank_archive_hybrid, rank_archive_hybrid_temporal,
+};
+pub use owner_retrieval::{
+    ObservationLexicalQuery, agentic_memories, rank_owner_snapshot, retain_temporal_memories,
+    route_owner_snapshot,
+};
