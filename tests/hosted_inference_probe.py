@@ -122,7 +122,8 @@ def reply(request, perception=None, *, approve_memories=True):
         state = payload["state"]
         if state.get("operation") == "refine_query_rewrite":
             return {"version": 1, "query": state["current_query"]}
-        approved = [item["memory"] for item in state.get("candidates", [])] if approve_memories else []
+        approved = [item["memory"] for item in state.get("candidates", [])
+                    if approve_memories or (perception and item.get("content") == perception[1])]
         return {"version": 1, "approved": approved}
     if name == "memory_web_audit_v1":
         source, claim = perception

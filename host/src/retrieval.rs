@@ -22,7 +22,6 @@ use std::{
 };
 
 const MAX_TURNS: usize = 64;
-const MAX_OBSERVATIONS: usize = 8;
 const TURN_TTL: Duration = Duration::from_secs(15 * 60);
 
 type TurnKey = (String, String, String, String);
@@ -553,8 +552,7 @@ fn validate_requested_cut(
 fn validate_projection(selection: &RetrievalPreview, limit: usize) -> Result<(), HttpError> {
     if selection.truncated
         || selection.memories.iter().any(|memory| memory.truncated)
-        || selection.memories.len() > limit
-        || selection.observations.len() > MAX_OBSERVATIONS
+        || selection.memories.len() + selection.observations.len() > limit
     {
         return Err(HttpError::new(503, "retrieval_projection_exceeded", false));
     }

@@ -10,10 +10,11 @@ from .validation import (canonical, choice, decode, digest, identifier,
 
 MUTATIONS = frozenset({"snapshot_submit", "edit_memory"})
 OPERATIONS = MUTATIONS | {"memory_query", "refine_query", "traverse_graph", "owner_status", "inspect_memory"}
+MAX_RETRIEVAL_RESULTS = 50
 
 
 def _ids(value: Any, *, nonempty: bool = False) -> None:
-    values = sequence(value, 50, nonempty=nonempty)
+    values = sequence(value, MAX_RETRIEVAL_RESULTS, nonempty=nonempty)
     require(len(set(identifier(item) for item in values)) == len(values), "duplicate_id")
 
 
@@ -23,7 +24,7 @@ def _source_digests(value: Any, maximum: int) -> None:
 
 
 def _observations(value: Any) -> list:
-    observations = sequence(value, 8)
+    observations = sequence(value, MAX_RETRIEVAL_RESULTS)
     ids = set()
     for item in observations:
         o = obj(item, {"owner_id", "observation_id", "revision", "body_id", "claim",
@@ -88,7 +89,7 @@ def _arguments(operation: str, value: Any) -> None:
         keys = {"query", "limit"} | ({"search_id", "selected_ids"} if operation == "refine_query" else set())
         v = obj(value, keys)
         text(v["query"])
-        integer(v["limit"], 1, 50)
+        integer(v["limit"], 1, MAX_RETRIEVAL_RESULTS)
         if operation == "refine_query":
             identifier(v["search_id"])
             _ids(v["selected_ids"])
@@ -96,7 +97,7 @@ def _arguments(operation: str, value: Any) -> None:
         v = obj(value, {"seed_ids", "depth", "limit", "cut"})
         _ids(v["seed_ids"], nonempty=True)
         integer(v["depth"], 1, 3)
-        integer(v["limit"], 1, 50)
+        integer(v["limit"], 1, MAX_RETRIEVAL_RESULTS)
         identifier(v["cut"])
     elif operation == "owner_status":
         obj(value, set())
@@ -179,8 +180,10 @@ class Response:
             require(op != "traverse_graph" or not observations, "unexpected_observations")
             text(r["context"], 32768, blank=not observations)
             _ids(r["memory_ids"])
+            require(len(r["memory_ids"]) + len(observations) <= MAX_RETRIEVAL_RESULTS,
+                    "retrieval_result_limit")
             sources = set()
-            for item in sequence(r["provenance"], 50):
+            for item in sequence(r["provenance"], MAX_RETRIEVAL_RESULTS):
                 source = obj(item, {"memory_id", "source_snapshot_digests"})
                 memory_id = identifier(source["memory_id"])
                 require(memory_id not in sources, "duplicate_id")
@@ -218,7 +221,8 @@ class Response:
             return self
         arguments, result = decode(request.arguments_json), decode(self.result_json)
         if self.operation in {"memory_query", "refine_query", "traverse_graph"}:
-            require(len(result["memory_ids"]) <= arguments["limit"], "response_limit_mismatch")
+            count = len(result["memory_ids"]) + len(result.get("observations", []))
+            require(count <= arguments["limit"], "response_limit_mismatch")
         if self.operation == "refine_query":
             require(result["search_id"] == arguments["search_id"], "response_search_mismatch")
         if self.operation in {"traverse_graph", "inspect_memory"}:

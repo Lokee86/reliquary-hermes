@@ -66,8 +66,20 @@ def test_typed_observation_recall_preserves_exact_evidence(operation, arguments,
     if not mixed:
         result["memory_ids"] = []
         result["provenance"] = []
-    parsed = Response.parse(canonical(wire)).for_request(Request.parse(canonical(request(operation, arguments))))
+    requested = Request.parse(canonical(request(operation, {**arguments, "limit": 2 if mixed else 1})))
+    parsed = Response.parse(canonical(wire)).for_request(requested)
     assert json.loads(parsed.result_json) == result
+
+
+def test_retrieval_response_counts_memories_and_observations_together():
+    wire = response()
+    wire["result"]["observations"] = [
+        {**_observation(), "observation_id": f"{index:064x}"} for index in range(9)
+    ]
+    parsed = Response.parse(canonical(wire))
+    assert parsed.for_request(Request.parse(canonical(request(arguments={"query": "x", "limit": 10}))))
+    with pytest.raises(ContractError, match="response_limit_mismatch"):
+        parsed.for_request(Request.parse(canonical(request(arguments={"query": "x", "limit": 9}))))
 
 
 def test_derived_observation_keeps_ultimate_memory_lineage():

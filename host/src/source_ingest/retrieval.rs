@@ -2,9 +2,8 @@
 use super::*;
 use reliquary_memory::{
     InspectionItem, InspectionQuery, MemoryId, MemoryTextField, ObservationCitation,
-    ObservationMemoryLineage, ObservationSource, ObservationStanding, ObservationStatus,
-    ObservationTimeScope, ObservationValidity, RetrievalMemory, RetrievalPreview,
-    WorkspaceManagement,
+    ObservationMemoryLineage, ObservationSource, ObservationStatus, ObservationTimeScope,
+    ObservationValidity, RetrievalMemory, RetrievalPreview, WorkspaceManagement,
 };
 use std::fmt::Write;
 
@@ -131,17 +130,6 @@ impl SourceService {
             let ObservationSource::Observation(id) = claim.citation.source else {
                 return Err(PROVENANCE_UNAVAILABLE);
             };
-            if hit.standing != ObservationStanding::Current
-                || claim.citation.owner_id != owner.as_bytes()
-                || claim.support.is_empty()
-                || claim.lineage.is_empty()
-                || claim.support.iter().any(|cite| {
-                    cite.owner_id != claim.citation.owner_id
-                        || cite.history_generation != claim.citation.history_generation
-                })
-            {
-                return Err(PROVENANCE_UNAVAILABLE);
-            }
 
             let mut lineage = Vec::with_capacity(claim.lineage.len());
             for source in &claim.lineage {
