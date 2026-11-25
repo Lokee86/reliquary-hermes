@@ -24,6 +24,8 @@ def scoped_provider_key(monkeypatch, tmp_path):
     agent.__path__ = []
     secret_scope = ModuleType("agent.secret_scope")
     secret_scope.current_secret_scope_home = lambda: str(home)
+    secret_scope.current_secret_scope = lambda: values
+    secret_scope.build_profile_secret_scope = lambda profile: values if profile == home else {}
     secret_scope.get_secret = lambda name: values.get(name)
     constants = ModuleType("hermes_constants")
     constants.get_hermes_home = lambda: str(home)
@@ -57,12 +59,17 @@ def test_native_decision_requires_a_literal_route_and_scoped_credential(scoped_p
     constants.set_hermes_home_override = lambda home: home
     constants.reset_hermes_home_override = lambda home: None
     monkeypatch.setenv("JEV_API_KEY", "foreign-process-jev-key")
+    sys.modules["agent.secret_scope"].get_secret = lambda name: values.get(name, "foreign-process-jev-key")
 
     worker = HostedInferenceWorker(object(), str(home))
     assert worker._configured_native_route() is None
     values["JEV_API_KEY"] = key
     route = worker._configured_native_route()
     assert route.url == selected["decisions_url"] and route.credential_env == "JEV_API_KEY"
+    assert read_native_decision_key(home, route) == key
+    secret_scope = sys.modules["agent.secret_scope"]
+    secret_scope.current_secret_scope = lambda: None
+    secret_scope.current_secret_scope_home = lambda: None
     assert read_native_decision_key(home, route) == key
 
     other = home.parent / "other-profile"

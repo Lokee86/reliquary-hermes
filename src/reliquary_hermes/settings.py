@@ -127,7 +127,7 @@ def read_native_decision_route(home: Path) -> NativeDecisionRoute | None:
     return NativeDecisionRoute(url, credential)
 
 
-def _profile_secret(home: Path, name: str = TOKEN_VAR):
+def _profile_secret(home: Path, name: str = TOKEN_VAR, *, scoped_only: bool = False):
     """Read one secret through Hermes after fencing it to the requested profile."""
     from agent.secret_scope import current_secret_scope_home, get_secret
     from hermes_constants import get_hermes_home, get_routing_process_hermes_home
@@ -137,11 +137,21 @@ def _profile_secret(home: Path, name: str = TOKEN_VAR):
         require(profile_home(get_routing_process_hermes_home()) == home, "profile_scope_mismatch")
     active_home = scoped_home if scoped_home is not None else get_hermes_home()
     require(profile_home(active_home) == home, "profile_scope_mismatch")
-    return get_secret(name)
+    if not scoped_only:
+        return get_secret(name)
+
+    from agent.secret_scope import build_profile_secret_scope, current_secret_scope
+
+    scope = current_secret_scope()
+    if scope is None:
+        # The launch profile may start its plugin before a turn has installed a scope.
+        return build_profile_secret_scope(home).get(name)
+    key = scope.get(name)
+    return key if key is not None and get_secret(name) == key else None
 
 
 def read_native_decision_key(home: Path, route: NativeDecisionRoute) -> str:
-    key = _profile_secret(home, route.credential_env)
+    key = _profile_secret(home, route.credential_env, scoped_only=True)
     require(type(key) is str and 0 < len(key) <= 4096 and all("!" <= ch <= "~" for ch in key),
             "inference_unavailable")
     return key
