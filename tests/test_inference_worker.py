@@ -13,6 +13,7 @@ import pytest
 from reliquary_hermes.inference_worker import HostedInferenceWorker, _decode_job
 from reliquary_hermes import setup
 from reliquary_hermes import register as register_plugin
+from reliquary_hermes.settings import NativeDecisionRoute
 from reliquary_hermes.validation import canonical
 from reliquary_hermes.validation import ContractError
 from reliquary_hermes import inference_worker as worker_module
@@ -194,6 +195,54 @@ def test_worker_structured_call_preserves_schema_and_only_returns_parsed_value(t
                                          time.monotonic() + 10))
     assert result == {"status": "ok", "parsed": {"ok": True}, "provider": "openai-api",
                       "model": "gpt-test", "usage": {}}
+
+
+def test_native_decision_posts_only_the_native_contract_and_enforces_reply_budget(tmp_path, monkeypatch):
+    httpx = pytest.importorskip("httpx")
+    route = NativeDecisionRoute("https://fixture.invalid/decisions", "JEV_API_KEY")
+    credential = "test-only-profile-jev-key"
+    request = {"model": "typesafe/jev-1.13", "state": {"draft": "synthetic"},
+               "questions": {"verify": {"type": "choice", "instructions": "Check the draft.",
+                                        "criteria": {"supported": "Uses the batch evidence."}}}}
+    answer = {"answers": {"verify": {"type": "choice", "choice": "supported"}}}
+    observed = []
+
+    class ResponseStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield canonical(answer)
+
+    async def handler(call):
+        observed.append(call)
+        assert call.method == "POST" and str(call.url) == route.url
+        assert call.headers["Authorization"] == f"Bearer {credential}"
+        assert _decode_job(call.content) == request
+        return httpx.Response(200, stream=ResponseStream())
+
+    client = httpx.AsyncClient
+
+    def async_client(**kwargs):
+        assert kwargs["follow_redirects"] is False and kwargs["trust_env"] is False
+        return client(transport=httpx.MockTransport(handler), **kwargs)
+
+    def scoped_key(home, selected_route):
+        assert home == tmp_path and selected_route == route
+        return credential
+
+    monkeypatch.setattr(httpx, "AsyncClient", async_client)
+    monkeypatch.setattr(worker_module, "read_native_decision_key", scoped_key)
+    worker = HostedInferenceWorker(object(), str(tmp_path))
+    worker._native_route = route
+    result = asyncio.run(worker._execute("native_decision", {**request, "max_response_bytes": 256},
+                                         time.monotonic() + 5))
+    assert result == {"status": "ok", "parsed": answer, "model": request["model"],
+                      "provider": worker_module._native_route_id(route)}
+    assert credential.encode() not in canonical(result)
+    assert len(observed) == 1
+
+    with pytest.raises(ContractError, match="inference_invalid_response"):
+        asyncio.run(worker._execute("native_decision", {**request, "max_response_bytes": 16},
+                                    time.monotonic() + 5))
+    assert len(observed) == 2
 
 
 def test_job_manifest_download_checks_part_identity_and_exact_digest(tmp_path):

@@ -6,7 +6,8 @@ import sys
 import pytest
 
 from reliquary_hermes.client import HostClient
-from reliquary_hermes.settings import TOKEN_VAR, read_token
+from reliquary_hermes.inference_worker import HostedInferenceWorker
+from reliquary_hermes.settings import TOKEN_VAR, read_native_decision_key, read_token
 from reliquary_hermes import setup
 from reliquary_hermes.validation import ContractError
 
@@ -41,6 +42,41 @@ def test_profile_secret_uses_scoped_get_secret_and_rejects_foreign_home(scoped_p
     assert read_token(home) == values[TOKEN_VAR]
     with pytest.raises(ContractError, match="profile_scope_mismatch"):
         read_token(other_home)
+
+
+def test_native_decision_requires_a_literal_route_and_scoped_credential(scoped_provider_key, monkeypatch):
+    home, key, values = scoped_provider_key
+    config = ModuleType("hermes_cli.config")
+    selected = {"decisions_url": "https://fixture.invalid/decisions", "credential_env": "JEV_API_KEY"}
+    config.read_raw_config_readonly = lambda: {"reliquary": {"perception": selected}}
+    cli = ModuleType("hermes_cli")
+    cli.__path__ = []
+    monkeypatch.setitem(sys.modules, "hermes_cli", cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.config", config)
+    constants = sys.modules["hermes_constants"]
+    constants.set_hermes_home_override = lambda home: home
+    constants.reset_hermes_home_override = lambda home: None
+    monkeypatch.setenv("JEV_API_KEY", "foreign-process-jev-key")
+
+    worker = HostedInferenceWorker(object(), str(home))
+    assert worker._configured_native_route() is None
+    values["JEV_API_KEY"] = key
+    route = worker._configured_native_route()
+    assert route.url == selected["decisions_url"] and route.credential_env == "JEV_API_KEY"
+    assert read_native_decision_key(home, route) == key
+
+    other = home.parent / "other-profile"
+    other.mkdir()
+    with pytest.raises(ContractError, match="profile_scope_mismatch"):
+        read_native_decision_key(other, route)
+
+    selected["decisions_url"] = "http://fixture.invalid/decisions"
+    assert worker._configured_native_route() is None
+    selected["decisions_url"] = "https://fixture.invalid/decisions?token=secret"
+    assert worker._configured_native_route() is None
+    selected["decisions_url"] = "https://fixture.invalid/decisions"
+    selected["credential_env"] = TOKEN_VAR
+    assert worker._configured_native_route() is None
 
 
 def test_host_launch_never_exports_provider_credentials(scoped_provider_key, monkeypatch):

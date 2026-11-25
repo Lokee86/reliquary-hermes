@@ -2,8 +2,10 @@
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from stat import S_ISREG
 from threading import local
+from urllib.parse import urlsplit
 
 from .native_host import packaged_host_path
 from .validation import MAX_WIRE_BYTES, canonical, decode, identifier, obj, require, text
@@ -19,6 +21,12 @@ class Settings:
     profile_id: str
     principal_id: str
     binary: Path
+
+
+@dataclass(frozen=True)
+class NativeDecisionRoute:
+    url: str
+    credential_env: str
 
 
 def profile_home(value) -> Path:
@@ -91,18 +99,52 @@ def read_settings(home: Path) -> Settings:
     return Settings(state, owners["profile_id"], owners["principal_id"], binary)
 
 
-def _profile_secret(home: Path):
+def read_native_decision_route(home: Path) -> NativeDecisionRoute | None:
+    """Read literal route selectors from this Hermes profile's config.yaml."""
+    from hermes_cli.config import read_raw_config_readonly
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    scope = set_hermes_home_override(home)
+    try:
+        reliquary = read_raw_config_readonly().get("reliquary", {})
+    finally:
+        reset_hermes_home_override(scope)
+
+    if type(reliquary) is not dict or "perception" not in reliquary:
+        return None
+    route = obj(reliquary["perception"], {"decisions_url", "credential_env"})
+    url = text(route["decisions_url"], 2048)
+    credential = text(route["credential_env"], 128)
+    require(re.fullmatch(r"[A-Z][A-Z0-9_]*", credential) is not None and credential != TOKEN_VAR,
+            "invalid_native_decision_route")
+    require(not any(ch.isspace() or ord(ch) < 32 or ch in "?#\\" for ch in url),
+            "invalid_native_decision_route")
+    parsed = urlsplit(url)
+    require(bool(parsed.hostname) and parsed.username is None and parsed.password is None and
+            parsed.port != 0 and (parsed.scheme == "https" or
+            (parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "::1", "localhost"})),
+            "invalid_native_decision_route")
+    return NativeDecisionRoute(url, credential)
+
+
+def _profile_secret(home: Path, name: str = TOKEN_VAR):
     """Read one secret through Hermes after fencing it to the requested profile."""
     from agent.secret_scope import current_secret_scope_home, get_secret
     from hermes_constants import get_hermes_home, get_routing_process_hermes_home
 
-    secret = get_secret(TOKEN_VAR)
     scoped_home = current_secret_scope_home()
     if scoped_home is None:
         require(profile_home(get_routing_process_hermes_home()) == home, "profile_scope_mismatch")
     active_home = scoped_home if scoped_home is not None else get_hermes_home()
     require(profile_home(active_home) == home, "profile_scope_mismatch")
-    return secret
+    return get_secret(name)
+
+
+def read_native_decision_key(home: Path, route: NativeDecisionRoute) -> str:
+    key = _profile_secret(home, route.credential_env)
+    require(type(key) is str and 0 < len(key) <= 4096 and all("!" <= ch <= "~" for ch in key),
+            "inference_unavailable")
+    return key
 
 
 def read_token(home: Path) -> str:

@@ -1,4 +1,4 @@
-"""Profile-bound bridge from the signed host inference broker to ``ctx.llm``."""
+"""Profile-bound bridge to Hermes inference and the optional native decision route."""
 
 from __future__ import annotations
 
@@ -15,13 +15,18 @@ import time
 from typing import Any
 
 from .client import HostClient, HostUnavailable
-from .settings import profile_home, read_settings, read_token
+from .settings import (
+    NativeDecisionRoute, profile_home, read_native_decision_key, read_native_decision_route,
+    read_settings, read_token,
+)
 from .validation import ContractError, canonical, choice, digest, identifier, integer, obj, require, text
 
 logger = logging.getLogger(__name__)
 _PART_BYTES = 64 * 1024
 _MAX_JOB_BYTES = 8 * 1024 * 1024
 _MAX_PARTS = (_MAX_JOB_BYTES + _PART_BYTES - 1) // _PART_BYTES
+_NATIVE_DECISION_MODEL = "typesafe/jev-1.13"
+_MAX_NATIVE_RESPONSE_BYTES = 1024 * 1024
 _PROBE_TEXT = "Synthetic capability probe for Reliquary hosted inference."
 _PROBE_SCHEMA = {
     "type": "object", "properties": {"ready": {"type": "boolean"}},
@@ -35,19 +40,24 @@ def _field(value: Any, key: str, default: Any = None) -> Any:
 
 def _safe_error_code(error: BaseException) -> str:
     if isinstance(error, TimeoutError):
-        return "inference_deadline"
+        return "inference_timeout"
     code = getattr(error, "code", None)
     known = {"embedding_unconfigured", "embedding_unsupported", "embedding_failed", "embedding_timeout",
              "embedding_invalid_response", "inference_deadline", "inference_invalid_response",
-             "inference_identity_changed", "inference_unavailable"}
+             "inference_backpressure", "inference_identity_changed", "inference_unavailable"}
     return code if type(code) is str and code in known else "inference_failed"
 
 
-def _decode_job(raw: bytes) -> dict:
+def _native_route_id(route: NativeDecisionRoute) -> str:
+    return hashlib.sha256(canonical({"decisions_url": route.url,
+                                     "credential_env": route.credential_env})).hexdigest()
+
+
+def _decode_job(raw: bytes, error: str = "invalid_inference_request") -> dict:
     def unique(pairs):
         result = {}
         for key, value in pairs:
-            require(key not in result, "invalid_inference_request")
+            require(key not in result, error)
             result[key] = value
         return result
 
@@ -55,8 +65,8 @@ def _decode_job(raw: bytes) -> dict:
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=unique,
                            parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()))
     except (UnicodeDecodeError, ValueError, RecursionError):
-        raise ContractError("invalid_inference_request") from None
-    require(type(value) is dict, "invalid_inference_request")
+        raise ContractError(error) from None
+    require(type(value) is dict, error)
     return value
 
 
@@ -85,7 +95,7 @@ def _usage(value: Any) -> dict[str, Any]:
 
 
 class HostedInferenceWorker:
-    """A context-bound worker with no provider credentials or model overrides of its own."""
+    """Service jobs in the context of the same Hermes profile that registered the worker."""
 
     def __init__(self, llm: Any, home: str):
         self._llm = llm
@@ -96,6 +106,7 @@ class HostedInferenceWorker:
         self._client: HostClient | None = None
         self._settings = None
         self._identity: dict[str, Any] | None = None
+        self._native_route: NativeDecisionRoute | None = None
         self._lease_epoch: int | None = None
         self._active: tuple[str, str, int] | None = None
         self._bound_scope: tuple[str, str] | None = None
@@ -104,7 +115,7 @@ class HostedInferenceWorker:
         self._last_heartbeat = 0.0
         self._reported_capability_failure = False
         self._unavailable_logged = False
-        self._configuration_revision: tuple[int, int, int] | None = None
+        self._configuration_revision: tuple[int, int, int, int] | None = None
 
     def start(self) -> None:
         if self._thread is None:
@@ -203,6 +214,9 @@ class HostedInferenceWorker:
     def _bind_identity(self) -> None:
         revision = self._configuration_stamp()
         identity = asyncio.run(self._tracked_probe())
+        route = self._configured_native_route()
+        if route is not None:
+            identity["native_decision"] = {"route_id": _native_route_id(route)}
         assert self._settings is not None
         require(not self._stop.is_set(), "inference_cancelled")
         require(revision == self._configuration_stamp(), "inference_configuration_changed")
@@ -216,6 +230,7 @@ class HostedInferenceWorker:
         require(bound.get("identity") == identity, "inference_identity_mismatch")
         self._identity, self._lease_epoch, self._bound_scope = identity, epoch, scope
         self._configuration_revision = revision
+        self._native_route = route
         logger.info("Reliquary hosted inference bound: general=%r/%r embedding=%r/%r "
                     "dimensions=%d input_type_handling=%s normalization=%s",
                     identity["general"]["provider"], identity["general"]["model"],
@@ -223,13 +238,23 @@ class HostedInferenceWorker:
                     identity["embedding"]["dimensions"], identity["embedding"]["input_type_handling"],
                     identity["embedding"]["normalization"])
 
-    def _configuration_stamp(self) -> tuple[int, int, int] | None:
-        # Notice a Hermes configuration revision without reading or selecting its models.
+    def _configured_native_route(self) -> NativeDecisionRoute | None:
+        try:
+            route = read_native_decision_route(self._home)
+            if route is not None:
+                read_native_decision_key(self._home, route)
+            return route
+        except (ImportError, OSError, RuntimeError, ValueError):
+            # The optional route can wait while the ordinary Hermes routes stay available.
+            return None
+
+    def _configuration_stamp(self) -> tuple[int, int, int, int] | None:
+        # Notice Hermes configuration changes without selecting its hosted models.
         try:
             stamp = (self._home / "config.yaml").stat()
         except FileNotFoundError:
             return None
-        return stamp.st_mtime_ns, stamp.st_size, stamp.st_ino
+        return stamp.st_mtime_ns, stamp.st_ctime_ns, stamp.st_size, stamp.st_ino
 
     async def _tracked_probe(self) -> dict[str, Any]:
         self._loop = asyncio.get_running_loop()
@@ -322,6 +347,7 @@ class HostedInferenceWorker:
         client, self._client = self._client, None
         self._settings = None
         self._identity = None
+        self._native_route = None
         self._lease_epoch = None
         self._bound_scope = None
         self._last_heartbeat = 0.0
@@ -380,11 +406,16 @@ class HostedInferenceWorker:
             require(not self._stop.is_set(), "inference_cancelled")
             request = _decode_job(raw_request)
             result = asyncio.run(self._execute_with_heartbeat(job, request))
-            bound_identity = self._identity["embedding" if job["operation"] == "embed" else "general"]
+            operation = job["operation"]
+            if operation == "native_decision":
+                bound_identity = {"provider": self._identity["native_decision"]["route_id"],
+                                  "model": _NATIVE_DECISION_MODEL}
+            else:
+                bound_identity = self._identity["embedding" if operation == "embed" else "general"]
             identity_changed = (self._configuration_revision != self._configuration_stamp() or
                                 result["provider"] != bound_identity["provider"] or
                                 result["model"] != bound_identity["model"] or
-                                (job["operation"] == "embed" and result["dimensions"] != bound_identity["dimensions"]))
+                                (operation == "embed" and result["dimensions"] != bound_identity["dimensions"]))
             if identity_changed:
                 result = {"status": "error", "error_code": "inference_identity_changed"}
                 self._identity = None
@@ -441,7 +472,7 @@ class HostedInferenceWorker:
                 value["instance_id"] == instance_id,
                 "invalid_inference_claim")
         require(value["lease_epoch"] == self._lease_epoch, "inference_lease_stale")
-        operation = choice(value["operation"], {"complete_structured", "embed"})
+        operation = choice(value["operation"], {"complete_structured", "embed", "native_decision"})
         manifest = obj(value["request"], {"part_count", "total_bytes", "sha256"})
         part_count = integer(manifest["part_count"], 1, _MAX_PARTS)
         total_bytes = integer(manifest["total_bytes"], 1, _MAX_JOB_BYTES)
@@ -512,6 +543,9 @@ class HostedInferenceWorker:
                     "inference_invalid_response")
             return {"status": "ok", "parsed": _field(result, "parsed"), "provider": identifier(_field(result, "provider")),
                     "model": text(_field(result, "model"), 256), "usage": _usage(result)}
+        if operation == "native_decision":
+            return await asyncio.wait_for(self._execute_native_decision(raw, min(timeout, 30.0)),
+                                          timeout=min(timeout, 30.0))
         required = {"inputs", "input_type", "purpose"}
         allowed = required | {"dimensions"}
         require(required <= set(raw) <= allowed, "invalid_inference_request")
@@ -541,6 +575,42 @@ class HostedInferenceWorker:
         return {"status": "ok", "vectors": clean_vectors, "provider": identifier(_field(result, "provider")),
                 "model": text(_field(result, "model"), 256), "dimensions": dimensions,
                 "usage": _usage(result)}
+
+    async def _execute_native_decision(self, raw: dict, timeout: float) -> dict[str, Any]:
+        import httpx
+
+        route = self._native_route
+        require(route is not None, "inference_unavailable")
+        require(self._configuration_revision == self._configuration_stamp(), "inference_identity_changed")
+        obj(raw, {"model", "state", "questions", "max_response_bytes"})
+        require(raw["model"] == _NATIVE_DECISION_MODEL and type(raw["state"]) is dict
+                and type(raw["questions"]) is dict, "invalid_inference_request")
+        limit = integer(raw["max_response_bytes"], 1, _MAX_NATIVE_RESPONSE_BYTES)
+        request = {field: raw[field] for field in ("model", "state", "questions")}
+        key = read_native_decision_key(self._home, route)
+        response_bytes = bytearray()
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False) as client:
+                async with client.stream("POST", route.url, json=request, headers={
+                    "Authorization": f"Bearer {key}", "Accept-Encoding": "identity",
+                }) as response:
+                    if response.status_code == 429:
+                        raise ContractError("inference_backpressure")
+                    require(response.is_success, "inference_unavailable")
+                    require(response.headers.get("content-encoding", "identity") == "identity",
+                            "inference_invalid_response")
+                    async for chunk in response.aiter_raw(chunk_size=min(8192, limit + 1)):
+                        require(len(response_bytes) + len(chunk) <= limit, "inference_invalid_response")
+                        response_bytes.extend(chunk)
+        except httpx.TimeoutException:
+            raise TimeoutError from None
+        except httpx.HTTPError:
+            raise ContractError("inference_unavailable") from None
+
+        reply = _decode_job(response_bytes, "inference_invalid_response")
+        require(len(canonical(reply)) <= limit, "inference_invalid_response")
+        return {"status": "ok", "parsed": reply, "provider": _native_route_id(route),
+                "model": _NATIVE_DECISION_MODEL}
 
     def _upload_result(self, job: dict, result: dict) -> None:
         require(not self._stop.is_set(), "inference_cancelled")

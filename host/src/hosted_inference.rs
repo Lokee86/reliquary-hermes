@@ -5,9 +5,9 @@ use crate::{
     service_protocol::{decode, valid_id},
 };
 use reliquary_memory::{
-    EmbeddingEndpoint, EmbeddingEndpointError, EmbeddingNormalization, GeneralEndpoint,
-    GeneralEndpointError, HostedEmbeddingInputSemantics, HostedInferenceIdentity,
-    SwitchboardEmbeddingMode,
+    DecisionEndpoint, DecisionEndpointError, EmbeddingEndpoint, EmbeddingEndpointError,
+    EmbeddingNormalization, GeneralEndpoint, GeneralEndpointError, HostedEmbeddingInputSemantics,
+    HostedInferenceIdentity, SwitchboardEmbeddingMode,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -29,6 +29,10 @@ pub(crate) const WORKER_ERROR: &str = crate::service_http::INFERENCE_WORKER_ERRO
 
 const MAX_PENDING: usize = 4;
 const MAX_JOB_BYTES: usize = 8 * 1024 * 1024;
+const MAX_NATIVE_RESPONSE_BYTES: usize = 1024 * 1024;
+const NATIVE_RESULT_METADATA_BYTES: usize = 256;
+const NATIVE_DECISION: &str = "native_decision";
+const NATIVE_DECISION_MODEL: &str = "typesafe/jev-1.13";
 const PART_BYTES: usize = 64 * 1024;
 const MAX_EMBED_INPUTS: usize = 128;
 const MAX_EMBED_INPUT_BYTES: usize = 1024 * 1024;
@@ -44,6 +48,11 @@ struct GeneralAdapter {
     model: String,
     epoch: u64,
 }
+struct NativeDecisionAdapter {
+    broker: Broker,
+    epoch: u64,
+}
+
 struct EmbeddingAdapter {
     broker: Broker,
     model: String,
@@ -79,6 +88,7 @@ struct Identity {
     dimensions: u32,
     input_type_handling: String,
     normalization: String,
+    native_decision: Option<String>,
 }
 
 struct Job {
@@ -91,6 +101,7 @@ struct Job {
     deadline: Instant,
     request: Vec<u8>,
     request_digest: String,
+    result_limit: usize,
     result: Option<Result<Value, &'static str>>,
     cancelled: bool,
     result_manifest: Option<ResultManifest>,
@@ -116,6 +127,13 @@ struct IdentityRequest {
     service_lease_id: String,
     general: Pair,
     embedding: EmbedIdentity,
+    native_decision: Option<NativeDecisionIdentity>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeDecisionIdentity {
+    route_id: String,
 }
 
 #[derive(Deserialize)]
@@ -282,6 +300,7 @@ impl Broker {
             dimensions: request.embedding.dimensions,
             input_type_handling: request.embedding.input_type_handling,
             normalization: request.embedding.normalization,
+            native_decision: request.native_decision.map(|route| route.route_id),
         };
         let mut state = self.0.state.lock().map_err(|_| UNAVAILABLE)?;
         if state.worker_id.as_deref() == Some(request.worker_id.as_str())
@@ -408,7 +427,8 @@ impl Broker {
                 Some("inference_timeout") => "inference_timeout",
                 Some("inference_invalid_response") => "inference_invalid_response",
                 Some("inference_cancelled") => "inference_cancelled",
-                Some("inference_stale") => "inference_stale",
+                Some("inference_stale" | "inference_identity_changed") => "inference_stale",
+                Some("inference_backpressure") => "inference_backpressure",
                 Some("inference_unsupported") => "inference_unsupported",
                 Some("embedding_unavailable") => "embedding_unavailable",
                 _ => "inference_unavailable",
@@ -421,7 +441,7 @@ impl Broker {
             || request.part_count == 0
             || request.part_count > MAX_JOB_BYTES.div_ceil(PART_BYTES)
             || request.total_bytes == 0
-            || request.total_bytes > MAX_JOB_BYTES
+            || request.total_bytes > job.result_limit
             || request.part_count != part_count(request.total_bytes)
             || request.sha256.len() != 64
         {
@@ -434,6 +454,12 @@ impl Broker {
             request.model.as_deref(),
             request.dimensions,
         ) {
+            if operation == NATIVE_DECISION {
+                state.jobs.get_mut(&request.job_id).ok_or(STALE)?.result =
+                    Some(Err("inference_invalid_response"));
+                self.0.changed.notify_all();
+                return Err(STALE);
+            }
             let code = if operation == "embed" {
                 "embedding_identity_stale"
             } else {
@@ -522,6 +548,8 @@ impl Broker {
                         &value,
                     ) {
                         job.result = Some(Ok(value));
+                    } else if job.operation == NATIVE_DECISION {
+                        job.result = Some(Err("inference_invalid_response"));
                     } else {
                         job.result = Some(Err("inference_stale"));
                         stale_operation = Some(job.operation);
@@ -614,6 +642,13 @@ impl Broker {
             _ => return Err(crate::service_http::INVALID),
         };
         let mut state = self.0.state.lock().map_err(|_| UNAVAILABLE)?;
+        if state
+            .worker_id
+            .as_deref()
+            .is_some_and(|worker| worker != request.worker_id && worker_valid(&state, worker))
+        {
+            return Err(STALE);
+        }
         invalidate(&mut state);
         state.epoch = state.epoch.wrapping_add(1).max(1);
         state.identity = None;
@@ -626,6 +661,24 @@ impl Broker {
         drop(state);
         self.0.changed.notify_all();
         Ok(HttpResponse::ok(json!({"state":"accepted"})))
+    }
+
+    pub(crate) fn native_epoch(&self) -> Option<u64> {
+        let state = self.0.state.lock().ok()?;
+        let worker = state.worker_id.as_deref()?;
+        if worker_valid(&state, worker) && state.identity.as_ref()?.native_decision.is_some() {
+            Some(state.epoch)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn stop(&self) {
+        if let Ok(mut state) = self.0.state.lock() {
+            state.identity = None;
+            invalidate(&mut state);
+            self.0.changed.notify_all();
+        }
     }
 
     pub(crate) fn unavailable_code(&self) -> Option<&'static str> {
@@ -657,7 +710,13 @@ impl Broker {
 
     #[cfg(test)]
     fn invoke(&self, operation: &'static str, payload: Value) -> Result<Value, &'static str> {
-        self.invoke_bound(operation, payload, Instant::now() + JOB_TIMEOUT, None)
+        self.invoke_bound(
+            operation,
+            payload,
+            Instant::now() + JOB_TIMEOUT,
+            None,
+            MAX_JOB_BYTES,
+        )
     }
 
     fn invoke_bound(
@@ -666,6 +725,7 @@ impl Broker {
         payload: Value,
         deadline: Instant,
         expected_epoch: Option<u64>,
+        result_limit: usize,
     ) -> Result<Value, &'static str> {
         let bytes = serde_json::to_vec(&payload).map_err(|_| "inference_invalid_response")?;
         if bytes.len() > MAX_JOB_BYTES {
@@ -677,7 +737,10 @@ impl Broker {
             return Err("inference_timeout");
         }
         let mut state = self.0.state.lock().map_err(|_| "inference_unavailable")?;
-        state.identity.as_ref().ok_or("inference_unavailable")?;
+        let identity = state.identity.as_ref().ok_or("inference_unavailable")?;
+        if operation == NATIVE_DECISION && identity.native_decision.is_none() {
+            return Err("inference_unavailable");
+        }
         if expected_epoch.is_some_and(|expected| expected != state.epoch) {
             return Err("inference_stale");
         }
@@ -706,6 +769,7 @@ impl Broker {
             deadline,
             request: bytes,
             request_digest: String::new(),
+            result_limit,
             result: None,
             cancelled: false,
             result_manifest: None,
@@ -782,9 +846,20 @@ impl Broker {
             },
             epoch,
         });
-        let runtime =
+        let mut runtime =
             reliquary_memory::ConfiguredRuntime::hosted(general, embedding, hosted_identity)
                 .map_err(|_| "inference_invalid_response")?;
+        if let Some(route_id) = &request.native_decision {
+            runtime = runtime
+                .with_native_perception_decision(
+                    Arc::new(NativeDecisionAdapter {
+                        broker: self.clone(),
+                        epoch,
+                    }),
+                    route_id,
+                )
+                .map_err(|_| "inference_invalid_response")?;
+        }
         let state = self.0.state.lock().map_err(|_| "inference_unavailable")?;
         if state.identity.as_ref() != Some(&request) || state.epoch != epoch {
             return Err("inference_stale");
@@ -812,6 +887,7 @@ impl GeneralEndpoint for GeneralAdapter {
                 payload,
                 Instant::now() + JOB_TIMEOUT,
                 Some(self.epoch),
+                MAX_JOB_BYTES,
             )
             .map_err(general_error)?;
         value
@@ -820,6 +896,66 @@ impl GeneralEndpoint for GeneralAdapter {
             .ok_or(GeneralEndpointError::InvalidResponse(
                 "hosted_structured_result",
             ))
+    }
+}
+
+impl DecisionEndpoint for NativeDecisionAdapter {
+    fn model(&self) -> &str {
+        NATIVE_DECISION_MODEL
+    }
+
+    fn evaluate(&self, state: &Value, questions: &Value) -> Result<Value, DecisionEndpointError> {
+        self.evaluate_bounded(state, questions, MAX_NATIVE_RESPONSE_BYTES)
+    }
+
+    fn evaluate_bounded(
+        &self,
+        state: &Value,
+        questions: &Value,
+        max_response_bytes: usize,
+    ) -> Result<Value, DecisionEndpointError> {
+        let limit = max_response_bytes.min(MAX_NATIVE_RESPONSE_BYTES);
+        if limit == 0 {
+            return Err(DecisionEndpointError::InvalidResponse(
+                "native_decision_result_limit",
+            ));
+        }
+        let request = json!({
+            "model": NATIVE_DECISION_MODEL,
+            "state": state,
+            "questions": questions,
+            "max_response_bytes": limit,
+        });
+        let value = self
+            .broker
+            .invoke_bound(
+                NATIVE_DECISION,
+                request,
+                Instant::now() + JOB_TIMEOUT,
+                Some(self.epoch),
+                limit + NATIVE_RESULT_METADATA_BYTES,
+            )
+            .map_err(|code| match code {
+                "inference_invalid_response" => {
+                    DecisionEndpointError::InvalidResponse("native_decision_result")
+                }
+                "inference_backpressure" => DecisionEndpointError::Backpressure {
+                    message: "native decision temporarily unavailable".into(),
+                    retry_after: Some(Duration::from_secs(1)),
+                },
+                _ => DecisionEndpointError::Failure(code.into()),
+            })?;
+        let reply = value
+            .get("parsed")
+            .ok_or(DecisionEndpointError::InvalidResponse(
+                "native_decision_result",
+            ))?;
+        if serde_json::to_vec(reply).map_or(true, |bytes| bytes.len() > limit) {
+            return Err(DecisionEndpointError::InvalidResponse(
+                "native_decision_result_limit",
+            ));
+        }
+        Ok(reply.clone())
     }
 }
 
@@ -978,6 +1114,7 @@ fn append_embedding_batch(
             embedding_payload(inputs, input_type, dimensions),
             deadline,
             Some(epoch),
+            MAX_JOB_BYTES,
         )
         .map_err(embedding_error)?;
     if serde_json::to_vec(&value).map_or(true, |bytes| bytes.len() > max_response_bytes) {
@@ -1014,6 +1151,13 @@ fn safe_identity(request: &IdentityRequest) -> bool {
         && (1..=65536).contains(&request.embedding.dimensions)
         && request.embedding.input_type_handling == "shared"
         && matches!(request.embedding.normalization.as_str(), "l2" | "none")
+        && request.native_decision.as_ref().is_none_or(|route| {
+            route.route_id.len() == 64
+                && route
+                    .route_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
 }
 fn hosted_identity(identity: &Identity) -> Result<HostedInferenceIdentity, &'static str> {
     HostedInferenceIdentity::new(
@@ -1032,7 +1176,11 @@ fn hosted_identity(identity: &Identity) -> Result<HostedInferenceIdentity, &'sta
     .map_err(|_| "inference_invalid_response")
 }
 fn identity_wire(identity: &Identity) -> Value {
-    json!({"general":{"provider":identity.general_provider,"model":identity.general_model},"embedding":{"provider":identity.embedding_provider,"model":identity.embedding_model,"dimensions":identity.dimensions,"input_type_handling":identity.input_type_handling,"normalization":identity.normalization}})
+    let mut wire = json!({"general":{"provider":identity.general_provider,"model":identity.general_model},"embedding":{"provider":identity.embedding_provider,"model":identity.embedding_model,"dimensions":identity.dimensions,"input_type_handling":identity.input_type_handling,"normalization":identity.normalization}});
+    if let Some(route_id) = &identity.native_decision {
+        wire["native_decision"] = json!({"route_id": route_id});
+    }
+    wire
 }
 fn matches_identity(
     identity: &Identity,
@@ -1045,6 +1193,11 @@ fn matches_identity(
         provider == Some(identity.embedding_provider.as_str())
             && model == Some(identity.embedding_model.as_str())
             && dimensions == Some(identity.dimensions)
+    } else if operation == NATIVE_DECISION {
+        provider.is_some()
+            && provider == identity.native_decision.as_deref()
+            && model == Some(NATIVE_DECISION_MODEL)
+            && dimensions.is_none()
     } else {
         provider == Some(identity.general_provider.as_str())
             && model == Some(identity.general_model.as_str())
@@ -1303,21 +1456,28 @@ mod tests {
         let correlation = claim["correlation_id"].as_str().unwrap();
         let epoch = claim["lease_epoch"].as_u64().unwrap();
         let operation = claim["operation"].as_str().unwrap();
-        let (provider, model, dimensions): (String, String, Option<u32>) = if operation == "embed" {
-            (
-                actual["provider"]
-                    .as_str()
-                    .unwrap_or("openai-api")
-                    .to_owned(),
-                actual["model"]
-                    .as_str()
-                    .unwrap_or("text-embedding-3-small")
-                    .to_owned(),
-                actual["dimensions"].as_u64().map(|value| value as u32),
-            )
-        } else {
-            ("openai-api".to_owned(), "gpt-test".to_owned(), None)
-        };
+        let (provider, model, dimensions): (String, String, Option<u32>) =
+            if operation == NATIVE_DECISION {
+                (
+                    actual["provider"].as_str().unwrap().to_owned(),
+                    NATIVE_DECISION_MODEL.to_owned(),
+                    None,
+                )
+            } else if operation == "embed" {
+                (
+                    actual["provider"]
+                        .as_str()
+                        .unwrap_or("openai-api")
+                        .to_owned(),
+                    actual["model"]
+                        .as_str()
+                        .unwrap_or("text-embedding-3-small")
+                        .to_owned(),
+                    actual["dimensions"].as_u64().map(|value| value as u32),
+                )
+            } else {
+                ("openai-api".to_owned(), "gpt-test".to_owned(), None)
+            };
         if operation != "embed" {
             actual["provider"] = json!(provider.clone());
             actual["model"] = json!(model.clone());
@@ -1347,6 +1507,68 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    #[test]
+    fn native_decision_roundtrips_one_bounded_job_and_fences_route_replacement() {
+        let broker = Broker::new();
+        let worker = "worker-one";
+        let route = "a".repeat(64);
+        let mut body = identity_body(worker, "gpt-test");
+        body["native_decision"] = json!({"route_id":route});
+        let bound = post(&broker, IDENTITY, body.clone()).unwrap();
+        assert_eq!(
+            bound["identity"]["native_decision"],
+            body["native_decision"]
+        );
+        let epoch = bound["lease_epoch"].as_u64().unwrap();
+        broker.bind_runtime().unwrap();
+        let embedding = broker.embedding_binding().unwrap();
+        let native = Arc::new(NativeDecisionAdapter {
+            broker: broker.clone(),
+            epoch,
+        });
+        let caller = {
+            let native = Arc::clone(&native);
+            thread::spawn(move || {
+                native.evaluate_bounded(
+                    &json!({"draft":"synthetic"}),
+                    &json!({"verify":{"type":"choice"}}),
+                    512,
+                )
+            })
+        };
+        let job = claim(&broker);
+        assert_eq!(job["operation"], NATIVE_DECISION);
+        let request: Value = serde_json::from_slice(&read_request_bytes(&broker, &job)).unwrap();
+        assert_eq!(
+            request,
+            json!({
+                "model":NATIVE_DECISION_MODEL,
+                "state":{"draft":"synthetic"},
+                "questions":{"verify":{"type":"choice"}},
+                "max_response_bytes":512
+            })
+        );
+        let reply = json!({"answers":{"verify":{"type":"choice","choice":"supported"}}});
+        finish(
+            &broker,
+            &job,
+            json!({"provider":route,"parsed":reply}),
+            false,
+        );
+        assert_eq!(caller.join().unwrap().unwrap(), reply);
+        assert!(broker.0.state.lock().unwrap().queue.is_empty());
+
+        let without_native = bind(&broker, worker, "gpt-test");
+        assert_ne!(without_native, epoch);
+        assert_eq!(broker.native_epoch(), None);
+        broker.bind_runtime().unwrap();
+        assert_eq!(broker.embedding_binding().unwrap(), embedding);
+        assert!(matches!(
+            native.evaluate(&json!({}), &json!({})),
+            Err(DecisionEndpointError::Failure(_))
+        ));
     }
 
     #[test]

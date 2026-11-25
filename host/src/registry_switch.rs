@@ -55,6 +55,21 @@ impl Registry {
             return self.switch_status();
         }
 
+        // Staged management admissions must wait for the new topology to commit.
+        if self.perception_runtime.is_some() {
+            self.gateway.set_runtime(None).map_err(owner_error)?;
+        }
+        let result = self.commit_switch(next);
+        if let Some((_, runtime)) = &self.perception_runtime {
+            if self.gateway.set_runtime(Some(runtime)).is_err() {
+                self.fence();
+                return Err(RECOVERY_REQUIRED);
+            }
+        }
+        result
+    }
+
+    fn commit_switch(&mut self, next: Topology) -> Result<SwitchStatus, RegistryError> {
         let mut staged = Vec::new();
         let (mounted_rels, admissions) = match self.stage_switch(&next, &mut staged) {
             Ok(staged) => staged,

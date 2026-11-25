@@ -200,7 +200,15 @@ impl Service {
                     &self.discovery.profile_id,
                     &self.discovery.instance_id,
                     &self.discovery.lease_id,
-                    |runtime, _epoch| {
+                    |runtime, epoch| {
+                        self.registry
+                            .lock()
+                            .map_err(|_| UNAVAILABLE)?
+                            .set_perception_runtime(
+                                (self.inference.native_epoch() == Some(epoch))
+                                    .then(|| (epoch, Arc::clone(&runtime))),
+                            )
+                            .map_err(attach_error)?;
                         self.sources
                             .lock()
                             .map_err(|_| UNAVAILABLE)?
@@ -233,6 +241,13 @@ impl Service {
                 &self.discovery.instance_id,
                 &self.discovery.lease_id,
             )?;
+            if request.path == WORKER_ERROR {
+                self.registry
+                    .lock()
+                    .map_err(|_| UNAVAILABLE)?
+                    .set_perception_runtime(None)
+                    .map_err(attach_error)?;
+            }
             return Ok(response);
         }
         match request.path {
@@ -1265,6 +1280,12 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
         .map_err(|_| "loopback_unavailable")?;
     let mut next_source_resume = Instant::now() + Duration::from_secs(5);
     loop {
+        if let Ok(_binding) = service.runtime_binding.try_lock()
+            && service.inference.native_epoch().is_none()
+            && let Ok(mut registry) = service.registry.try_lock()
+        {
+            let _ = registry.set_perception_runtime(None);
+        }
         // Expiry is a liveness event, not an idle-time event. Persist fences
         // even while no client is currently talking to the host.
         if let Ok(mut runtimes) = service.runtimes.lock() {
@@ -1322,6 +1343,10 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(_) => return Err("loopback_unavailable"),
         }
+    }
+    service.inference.stop();
+    if let Ok(mut registry) = service.registry.lock() {
+        let _ = registry.set_perception_runtime(None);
     }
     drop(sender);
     for worker in workers {

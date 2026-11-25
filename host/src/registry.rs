@@ -1,8 +1,8 @@
 //! Service-owned owner topology and durable Hermes session binding.
 use reliquary_memory::{
-    Gateway, HostAdmissionAdapter, HostAdmissionControl, HostCredentialBinding, InspectionQuery,
-    Instance, MemoryListFilters, OwnerGrant, OwnerId, OwnerKind, Phylactery, ProductError,
-    ProductErrorKind, Rel, TrustedHostAdmission,
+    ConfiguredRuntime, Gateway, HostAdmissionAdapter, HostAdmissionControl, HostCredentialBinding,
+    InspectionQuery, Instance, MemoryListFilters, OwnerGrant, OwnerId, OwnerKind, Phylactery,
+    ProductError, ProductErrorKind, Rel, TrustedHostAdmission,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -12,6 +12,7 @@ use std::{
     fmt,
     fs::{File, OpenOptions, TryLockError},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 #[path = "registry_store.rs"]
@@ -159,6 +160,7 @@ pub(crate) struct OwnerStatus {
 
 pub(crate) struct Registry {
     gateway: Gateway,
+    perception_runtime: Option<(u64, Arc<ConfiguredRuntime>)>,
     admissions: Admissions,
     credential: String,
     dashboard_intents: PathBuf,
@@ -205,6 +207,7 @@ impl Registry {
         topology::publish_startup(&topology_path, &topology, write)?;
         Ok(Self {
             gateway,
+            perception_runtime: None,
             admissions,
             credential: token.to_owned(),
             dashboard_intents: state_dir.join("dashboard-mutations-v1"),
@@ -215,6 +218,22 @@ impl Registry {
             fenced: false,
             _lease: lease,
         })
+    }
+
+    pub(crate) fn set_perception_runtime(
+        &mut self,
+        runtime: Option<(u64, Arc<ConfiguredRuntime>)>,
+    ) -> Result<(), RegistryError> {
+        self.require_current()?;
+        if self.perception_runtime.as_ref().map(|(epoch, _)| *epoch)
+            != runtime.as_ref().map(|(epoch, _)| *epoch)
+        {
+            self.gateway
+                .set_runtime(runtime.as_ref().map(|(_, runtime)| runtime.as_ref()))
+                .map_err(owner_error)?;
+            self.perception_runtime = runtime;
+        }
+        Ok(())
     }
 
     pub(crate) fn dashboard_actor(&self) -> &Instance {
@@ -266,6 +285,9 @@ impl Registry {
 
     fn fence(&mut self) {
         self.fenced = true;
+        if self.perception_runtime.take().is_some() {
+            let _ = self.gateway.set_runtime(None);
+        }
         let _ = self.admissions.revoke(&self.credential);
     }
 

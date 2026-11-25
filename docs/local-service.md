@@ -20,14 +20,14 @@ Version 0.2.0 opens REL and PHY files with the retained history produced by Reli
 
 Setup and host startup may take over a minute on a large retained history. An owner open has a three-minute deadline. Setup can validate the files and start the service in one request.
 
-Hosted processing uses only the profile-bound Hermes `ctx.llm` worker. The native process receives no model credentials and does not open a model route file. See the current [installation and disclosures](../README.md).
+The profile-bound Hermes worker provides hosted inference. Model credentials stay in Hermes. See the current [installation and disclosures](../README.md).
 
 1. Install the Reliquary plugin and native host from the same revision. On Linux and macOS the catalog checkout selects a host under `plugins/reliquary/host/bundled/`. Existing profiles using the packaged path resolve the installed bundle on their next host start. Manual release archives provide the single executable in `host/`, and Windows uses the `.exe` in that directory. The runtime also accepts a separately configured host path. [Platform installation](#platform-installation)
 2. Select or create a General REL and active PHY. Either REL role accepts a verified REL 2.1 with any stored scope. Selecting an existing file keeps its original header and owner ID. New RELs for both roles report `unspecified`. A Hermes host with trusted session project attribution can select or create a dedicated REL for an active project. Stock Hermes shows saved project REL paths read-only and uses General memory for new conversations. Create Hermes projects through Projects or `hermes project create`, then refresh the list.
 3. Review the setup and connect. Hosts with project attribution show a confirmation when projects will use General memory. Setup derives profile and service identity, validates owners through the Rust host, provisions a random credential in Hermes secret storage, and checks the signed host topology before selecting the provider. Run `hermes memory setup reliquary` for headless setup.
 4. Start a Hermes session to attach the provider. Already attached sessions keep their accepted REL.
 
-Inference uses Hermes's authenticated `ctx.llm`. Install a compatible build with `embed/aembed` ([upstream PR #154202](https://github.com/NousResearch/hermes-agent/pull/154202)) and select an embedding model in Hermes's auxiliary-model picker. Chat, decisions, and embeddings use the active Hermes profile; the plugin has no provider-key field, model-route file, or second sign-in. The local service token is independent transport authentication and remains required. An older Hermes build reports `embedding_unavailable`.
+Inference uses Hermes's authenticated `ctx.llm`. Install a compatible build with `embed/aembed` ([upstream PR #154202](https://github.com/NousResearch/hermes-agent/pull/154202)) and select an embedding model in Hermes's auxiliary-model picker. Chat, ordinary decisions, and embeddings use the active Hermes profile's model settings. The local service token is independent transport authentication and remains required. An older Hermes build reports `embedding_unavailable`.
 
 For a unified directory installation, run `npm --prefix dashboard ci` and then `npm --prefix dashboard run build`. One build invocation produces the Web bundle and stylesheet and the Desktop entry from the same source tree. Install all five generated files together: `dashboard/dist/index.js`, `dashboard/dist/index.css`, `dashboard/dist/index.js.LEGAL.txt`, `desktop/plugin.js` and `desktop/plugin.js.LEGAL.txt`. Install the static `dashboard/manifest.json` and `dashboard/plugin_api.py` alongside them. Install the provider Python files from `src/reliquary_hermes/` at the root of the existing `plugins/reliquary` package with its native manifest and host pin. Place the rebuilt host in `host/`. The catalog dashboard uses the `reliquary` plugin namespace. Enable that dashboard contribution in the profile and enable Reliquary in Desktop's Capabilities → Plugins.
 
@@ -68,6 +68,21 @@ Other 64-bit GNU/Linux distributions can run the appropriate bundle with glibc 2
 
 The macOS host uses an ad-hoc signature and is distributed without Apple notarization. Use the Terminal installation steps on the release page to download and check the ZIP before extracting it with `ditto`. A browser download can require a Gatekeeper approval on first use. [Apple’s Gatekeeper guidance](https://support.apple.com/en-us/102445)
 
+### Perception decision route
+
+To enable Perception on the profile's writable RELs, add the explicit native decisions URL and the name of a credential already available in the Hermes profile's secret scope to `<hermes_home>/config.yaml`:
+
+```yaml
+reliquary:
+  perception:
+    decisions_url: https://inference.example.org/decisions
+    credential_env: JEV_API_KEY
+```
+
+Use an HTTPS endpoint that serves `typesafe/jev-1.13`. Loopback HTTP is supported for local endpoints. Store the key value in Hermes secret storage. The worker sends it as the authorization header, bounds the reply, and checks the job's lease before return. The local broker receives only the route identity, model inputs, and result. Removing or invalidating the route pauses new Perception work. Ordinary processing and recall continue on Hermes's configured routes.
+
+The worker binds Perception when the plugin starts, including when there is no active chat. It uses the registry's existing management grants and the same writer leases as the authorized General and project RELs. The selected PHY stays read-only. A worker replacement, lost heartbeat or owner switch fences ongoing work through the managed runtime and owner grants.
+
 ## Lifecycle and recovery
 
 The service takes an exclusive process lease before mounting owners. Core admits each owner once from its canonical path and holds the writer lease for each writable REL. First startup stages the mounts, checks any stored version 1 assignments against the admitted IDs, and records the accepted profile, principal, owner IDs, and paths in version 2 of `topology-v1.json`. `owners.json` supplies bootstrap configuration. On a configured restart, the accepted topology supplies the expected identities for those same mounts. Once the owners and grants are ready, the service publishes `discovery.json` atomically. An authenticated attach records the durable session route before returning its binding. Known sessions reuse their routes after restart.
@@ -98,7 +113,7 @@ The provider hands bounded, text-only Hermes egress to a context-bound worker. T
 
 Setup enables the directory plugin’s bundled observer, or the `reliquary-source-observer` entry point for a Python installation. It respects explicit plugin disables. The observer records committed deliberate archive and delete notifications even when the service is down. The next running provider worker prioritizes that terminal intent over older copies. An existing native import epoch must settle before Root can write its tombstone. The host still denies replay during that wait. A terminal fence does not schedule new extraction for a stopped import.
 
-Hosted processing exclusively uses the profile-bound inference worker's `ctx.llm`. Setup does not read or write a model configuration path. Existing `processing.json`, routes JSON, and `reliquary.cfg` files are left unchanged and are inactive for hosted inference. An unavailable or incompatible Hermes embedding route leaves work visibly pending/retryable. No credential is read from Reliquary's standalone store.
+Processing uses the profile-bound inference worker's `ctx.llm`. The optional native decision setting is used for Perception Contribution and Verify. Hosted inference takes its configuration from Hermes. An unavailable or incompatible Hermes embedding route leaves work visibly pending/retryable. No credential is read from Reliquary's standalone store.
 
 Recovery replays work that reached the outbox. If Hermes disappears without a clean detach, the host records an unclean runtime and keeps running rather than claiming the copied source is current. On reconnect, the affected source remains reconciliation-required until a supported provider-authoritative transcript snapshot proves continuity; the next normal `sync_turn(..., messages=...)` can provide that snapshot and is deduplicated by stable source IDs/timestamps. This is intentionally best-effort recovery: a Hermes event committed and then lost before callback delivery may not be exactly reconstructable. Same-session rewind and edited or ambiguous overlaps remain fenced pending authoritative reconciliation.
 
