@@ -229,7 +229,7 @@ impl Registry {
             != runtime.as_ref().map(|(epoch, _)| *epoch)
         {
             self.gateway
-                .set_runtime(runtime.as_ref().map(|(_, runtime)| runtime.as_ref()))
+                .set_perception_runtime(runtime.as_ref().map(|(_, runtime)| runtime.as_ref()))
                 .map_err(owner_error)?;
             self.perception_runtime = runtime;
         }
@@ -286,7 +286,7 @@ impl Registry {
     fn fence(&mut self) {
         self.fenced = true;
         if self.perception_runtime.take().is_some() {
-            let _ = self.gateway.set_runtime(None);
+            let _ = self.gateway.set_perception_runtime(None);
         }
         let _ = self.admissions.revoke(&self.credential);
     }

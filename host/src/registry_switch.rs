@@ -57,11 +57,13 @@ impl Registry {
 
         // Staged management admissions must wait for the new topology to commit.
         if self.perception_runtime.is_some() {
-            self.gateway.set_runtime(None).map_err(owner_error)?;
+            self.gateway
+                .set_perception_runtime(None)
+                .map_err(owner_error)?;
         }
         let result = self.commit_switch(next);
         if let Some((_, runtime)) = &self.perception_runtime {
-            if self.gateway.set_runtime(Some(runtime)).is_err() {
+            if self.gateway.set_perception_runtime(Some(runtime)).is_err() {
                 self.fence();
                 return Err(RECOVERY_REQUIRED);
             }
