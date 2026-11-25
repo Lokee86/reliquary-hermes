@@ -2,7 +2,7 @@
 use crate::{
     registry::Registry,
     runtime::RuntimeRegistry,
-    service_http::{HttpError, HttpResponse, INVALID, UNAVAILABLE, hex},
+    service_http::{HttpError, HttpResponse, INVALID, MAX_WIRE_BYTES, UNAVAILABLE, hex},
     service_protocol::{Operation, ProviderRequest},
     source_ingest::SourceService,
 };
@@ -22,6 +22,7 @@ use std::{
 };
 
 const MAX_TURNS: usize = 64;
+const MAX_OBSERVATIONS: usize = 8;
 const TURN_TTL: Duration = Duration::from_secs(15 * 60);
 
 type TurnKey = (String, String, String, String);
@@ -351,9 +352,9 @@ impl RetrievalService {
                 return Err(product_error(error));
             }
         };
-        let selection = selected.selection().clone();
-        if let Err(error) = validate_projection(&selection, request_limit(request)?)
-            .and_then(|()| validate_requested_cut(request, &selection))
+        let selection = selected.selection();
+        if let Err(error) = validate_projection(selection, request_limit(request)?)
+            .and_then(|()| validate_requested_cut(request, selection))
         {
             let _ = instance.cancel_retrieval(session);
             return Err(error);
@@ -372,66 +373,77 @@ impl RetrievalService {
                 return Err(UNAVAILABLE);
             }
         };
-        let provenance = match sources.retrieval_provenance(
+        let disclosure = match sources.retrieval_disclosure(
             instance,
             &registry,
             &mut runtimes,
             owner,
-            &selection,
+            selection,
         ) {
-            Ok(provenance) => provenance,
+            Ok(disclosure) => disclosure,
             Err(error) => {
                 let _ = instance.cancel_retrieval(session);
                 return Err(error);
             }
         };
-        let context = selection
+        let mut context = selection
             .memories
             .iter()
             .map(|memory| memory.content.as_str())
             .collect::<Vec<_>>()
             .join("\n\n");
+        for observation in &disclosure.observations {
+            observation.render(&mut context);
+        }
         if context.len() > 32768 {
             let _ = instance.cancel_retrieval(session);
             return Err(HttpError::new(503, "retrieval_projection_exceeded", false));
         }
-        let cut = cut_token(&selection)?;
+        let cut = cut_token(selection)?;
+        let ids = selection
+            .memories
+            .iter()
+            .map(|memory| memory.memory_id.clone())
+            .collect::<Vec<_>>();
+        let mut result = json!({
+            "search_id": search_id,
+            "delivery_id": prepared.stable_id(),
+            "context": context,
+            "memory_ids": ids,
+            "provenance": disclosure.provenance,
+        });
+        if !disclosure.observations.is_empty() {
+            result["observations"] = json!(disclosure.observations);
+        }
+        let response = json!({
+            "protocol_version": 1,
+            "request_id": request.retrieval_request_id(),
+            "operation": request.operation,
+            "status": "ok",
+            "revision": null,
+            "cut": cut,
+            "result": result,
+        });
+        if serde_json::to_vec(&response)
+            .map_err(|_| UNAVAILABLE)?
+            .len()
+            > MAX_WIRE_BYTES
+        {
+            let _ = instance.cancel_retrieval(session);
+            return Err(HttpError::new(503, "retrieval_projection_exceeded", false));
+        }
         if Instant::now() >= deadline {
             let _ = instance.cancel_retrieval(session);
             return Err(UNAVAILABLE);
         }
         match selected.return_selected().map_err(product_error)? {
-            ReturnOutcome::Returned {
-                delivery_id,
-                selection,
-            } => {
-                // The shim returns the same immutable Root selection checked
-                // above, after the accepted-use receipt has been recorded.
-                let ids = selection
-                    .memories
-                    .iter()
-                    .map(|memory| memory.memory_id.clone())
-                    .collect::<Vec<_>>();
-                *last_search_id = Some(search_id.clone());
-                *last_cut = Some(cut.clone());
-                *last_ids = ids.clone();
+            ReturnOutcome::Returned { delivery_id, .. } => {
+                *last_search_id = Some(search_id);
+                *last_cut = Some(cut);
+                *last_ids = ids;
                 *last_delivery_id = Some(delivery_id.to_owned());
                 completed.insert(request_fingerprint);
-                Ok(json!({
-                        "protocol_version": 1,
-                        "request_id": request.retrieval_request_id(),
-                        "operation": request.operation,
-                        "status": "ok",
-                        "revision": null,
-                        "cut": cut,
-                        "result": {
-                            "search_id": search_id,
-                            "delivery_id": delivery_id,
-                            "context": context,
-                            "memory_ids": ids,
-                            "provenance": provenance,
-                        }
-                }))
+                Ok(response)
             }
             ReturnOutcome::AlreadyRecorded => {
                 Err(HttpError::new(409, "retrieval_already_recorded", false))
@@ -542,6 +554,7 @@ fn validate_projection(selection: &RetrievalPreview, limit: usize) -> Result<(),
     if selection.truncated
         || selection.memories.iter().any(|memory| memory.truncated)
         || selection.memories.len() > limit
+        || selection.observations.len() > MAX_OBSERVATIONS
     {
         return Err(HttpError::new(503, "retrieval_projection_exceeded", false));
     }
@@ -613,6 +626,7 @@ fn product_error(error: reliquary_memory::ProductError) -> HttpError {
         ProductErrorKind::Unauthorized | ProductErrorKind::Revoked => {
             HttpError::new(403, "denied", false)
         }
+        ProductErrorKind::Stale => HttpError::new(409, "retrieval_cut_stale", false),
         ProductErrorKind::Conflict | ProductErrorKind::WriterUnavailable => {
             HttpError::new(409, "retrieval_conflict", false)
         }

@@ -302,7 +302,8 @@ class ReliquaryMemoryProvider(MemoryProvider):
             return "", None
         result = decode(response.result_json)
         context = result["context"]
-        recall = RecallStatus("Reliquary", len(result["memory_ids"])) if context else None
+        count = len(result["memory_ids"]) + len(result.get("observations", []))
+        recall = RecallStatus("Reliquary", count) if context else None
         with self._lock:
             if (self._scope_epoch != epoch or self._session_id != session_id or self._turn_id != turn_id or
                     self._recall_generation != recall_generation or

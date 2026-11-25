@@ -17,6 +17,70 @@ def _ids(value: Any, *, nonempty: bool = False) -> None:
     require(len(set(identifier(item) for item in values)) == len(values), "duplicate_id")
 
 
+def _source_digests(value: Any, maximum: int) -> None:
+    digests = [digest(d) for d in sequence(value, maximum)]
+    require(len(set(digests)) == len(digests), "duplicate_source_digest")
+
+
+def _observations(value: Any) -> list:
+    observations = sequence(value, 8)
+    ids = set()
+    for item in observations:
+        o = obj(item, {"owner_id", "observation_id", "revision", "body_id", "claim",
+                       "status", "time_scope", "validity", "evidence", "lineage"})
+        owner_id = identifier(o["owner_id"])
+        require(len(owner_id) == 32 and all(c in "0123456789abcdef" for c in owner_id),
+                "invalid_observation_owner")
+        observation_id = digest(o["observation_id"])
+        observation_key = (owner_id, observation_id)
+        require(observation_key not in ids, "duplicate_id")
+        ids.add(observation_key)
+        integer(o["revision"], 1, 2**64 - 1)
+        digest(o["body_id"])
+        text(o["claim"], 4096)
+        choice(o["status"], {"Observed", "Planned", "Requested", "Possible", "Expected"})
+        choice(o["time_scope"], {"Past", "Current", "Future", "Unspecified"})
+        if o["validity"] is not None:
+            validity = obj(o["validity"], {"start_ns", "end_ns"})
+            start, end = validity["start_ns"], validity["end_ns"]
+            for timestamp in (start, end):
+                if timestamp is not None:
+                    integer(timestamp, -(2**63), 2**63 - 1)
+            require((start is not None or end is not None)
+                    and (start is None or end is None or start < end), "invalid_observation_validity")
+
+        lineage = {}
+        for row in sequence(o["lineage"], 64, nonempty=True):
+            source = obj(row, {"memory_id", "revision", "body_id", "source_snapshot_digests"})
+            memory_id = digest(source["memory_id"])
+            require(memory_id not in lineage, "duplicate_id")
+            lineage[memory_id] = (integer(source["revision"], 1, 2**64 - 1), digest(source["body_id"]))
+            _source_digests(source["source_snapshot_digests"], 3)
+
+        citations, generations = set(), set()
+        for row in sequence(o["evidence"], 8, nonempty=True):
+            cite = obj(row, {"owner_id", "history_generation", "source_kind", "source_id",
+                            "revision", "body_id", "field", "start_byte", "end_byte"})
+            require(cite["owner_id"] == owner_id, "observation_owner_mismatch")
+            generations.add(digest(cite["history_generation"]))
+            kind = choice(cite["source_kind"], {"memory", "observation"})
+            source_id = digest(cite["source_id"])
+            revision = integer(cite["revision"], 1, 2**64 - 1)
+            body_id = digest(cite["body_id"])
+            field = choice(cite["field"], {"Title", "Content"})
+            start_byte = integer(cite["start_byte"], 0, 2**32 - 1)
+            end_byte = integer(cite["end_byte"], start_byte + 1, 2**32 - 1)
+            if kind == "memory":
+                require(lineage.get(source_id) == (revision, body_id), "observation_lineage_mismatch")
+            else:
+                require(source_id != observation_id and field == "Content", "invalid_observation_evidence")
+            citation = (kind, source_id, revision, body_id, field, start_byte, end_byte)
+            require(citation not in citations, "duplicate_observation_evidence")
+            citations.add(citation)
+        require(len(generations) == 1, "observation_generation_mismatch")
+    return observations
+
+
 def _arguments(operation: str, value: Any) -> None:
     if operation == "snapshot_submit":
         SourceSnapshot.parse(value)
@@ -105,18 +169,22 @@ class Response:
             identifier(e["code"])
             require(type(e["retryable"]) is bool, "invalid_retryable")
         elif op in {"memory_query", "refine_query", "traverse_graph"}:
-            r = obj(result, {"search_id", "delivery_id", "context", "memory_ids", "provenance"})
+            keys = {"search_id", "delivery_id", "context", "memory_ids", "provenance"}
+            if type(result) is dict and "observations" in result:
+                keys.add("observations")
+            r = obj(result, keys)
             identifier(r["search_id"])
             identifier(r["delivery_id"])
-            text(r["context"], 32768, blank=True)
+            observations = _observations(r.get("observations", []))
+            require(op != "traverse_graph" or not observations, "unexpected_observations")
+            text(r["context"], 32768, blank=not observations)
             _ids(r["memory_ids"])
             sources = set()
             for item in sequence(r["provenance"], 50):
                 source = obj(item, {"memory_id", "source_snapshot_digests"})
                 memory_id = identifier(source["memory_id"])
                 require(memory_id not in sources, "duplicate_id")
-                digests = [digest(d) for d in sequence(source["source_snapshot_digests"], 50)]
-                require(len(set(digests)) == len(digests), "duplicate_source_digest")
+                _source_digests(source["source_snapshot_digests"], 50)
                 sources.add(memory_id)
             require(sources == set(r["memory_ids"]), "provenance_mismatch")
             require(v["cut"] is not None, "missing_cut")

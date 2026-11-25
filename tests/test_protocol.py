@@ -35,6 +35,66 @@ def response(operation="memory_query", status="ok", result=None):
                 "provenance": [{"memory_id": "memory-1", "source_snapshot_digests": ["a"*64]}]}}
 
 
+def _observation():
+    return {
+        "owner_id": "1" * 32, "observation_id": "2" * 64, "revision": 1,
+        "body_id": "3" * 64, "claim": "The lantern handoff is approved.",
+        "status": "Observed", "time_scope": "Current", "validity": None,
+        "evidence": [{
+            "owner_id": "1" * 32, "history_generation": "4" * 64, "source_kind": "memory",
+            "source_id": "5" * 64, "revision": 2, "body_id": "6" * 64,
+            "field": "Content", "start_byte": 0, "end_byte": 31,
+        }],
+        "lineage": [{
+            "memory_id": "5" * 64, "revision": 2, "body_id": "6" * 64,
+            "source_snapshot_digests": ["7" * 64],
+        }],
+    }
+
+
+@pytest.mark.parametrize("operation,arguments", [
+    ("memory_query", {"query": "handoff", "limit": 1}),
+    ("refine_query", {"query": "handoff", "limit": 1, "search_id": "search-1", "selected_ids": []}),
+])
+@pytest.mark.parametrize("mixed", [False, True])
+def test_typed_observation_recall_preserves_exact_evidence(operation, arguments, mixed):
+    wire = response(operation)
+    result = wire["result"]
+    observation = _observation()
+    result["observations"] = [observation]
+    result["context"] = "Observation (Observed, Current): " + observation["claim"]
+    if not mixed:
+        result["memory_ids"] = []
+        result["provenance"] = []
+    parsed = Response.parse(canonical(wire)).for_request(Request.parse(canonical(request(operation, arguments))))
+    assert json.loads(parsed.result_json) == result
+
+
+def test_derived_observation_keeps_ultimate_memory_lineage():
+    wire = response()
+    observation = _observation()
+    observation["evidence"][0].update(source_kind="observation", source_id="a" * 64)
+    wire["result"]["observations"] = [observation]
+    parsed = Response.parse(canonical(wire))
+    assert json.loads(parsed.result_json)["observations"] == [observation]
+
+
+@pytest.mark.parametrize("change,code", [
+    (lambda o: o.update(status="Pending"), "invalid_choice"),
+    (lambda o: o.update(lineage=[]), "invalid_list"),
+    (lambda o: o["evidence"][0].update(owner_id="8" * 32), "observation_owner_mismatch"),
+    (lambda o: o["evidence"][0].update(revision=3), "observation_lineage_mismatch"),
+    (lambda o: o["evidence"][0].update(end_byte=0), "invalid_integer"),
+])
+def test_typed_observation_recall_rejects_inexact_evidence(change, code):
+    wire = response()
+    observation = _observation()
+    change(observation)
+    wire["result"]["observations"] = [observation]
+    with pytest.raises(ContractError, match=code):
+        Response.parse(canonical(wire))
+
+
 def test_request_roundtrip_is_immutable_and_has_no_authority_fields():
     wire = request()
     parsed = Request.parse(canonical(wire))

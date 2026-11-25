@@ -9,7 +9,8 @@ use reliquary_memory::{
     HostCapabilityContract, HostConnection, HostOperation, HostOperationStatus,
     HostQueueGuarantees, HostReconcileStatus, Instance, MemoryDeliveryOperation,
     MemoryDeliveryReceipt, MemoryDeliveryStatus, PreparedMemoryDelivery, ProductError,
-    ProductErrorKind, RetrievalPreview, RetrievalSession, RuntimeCapability, TrustedHostAdapter,
+    ProductErrorKind, RetrievalDeliveryOutcome, RetrievalPreview, RetrievalSession,
+    RuntimeCapability, TrustedHostAdapter,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -35,7 +36,7 @@ pub struct SelectedReturn<'a> {
     prepared: &'a PreparedMemoryDelivery,
     selection: RetrievalPreview,
     router: CapabilityRouter,
-    recorded: Mutex<bool>,
+    completed: Mutex<bool>,
 }
 
 impl<'a> SelectedReturn<'a> {
@@ -66,12 +67,12 @@ impl<'a> SelectedReturn<'a> {
             prepared,
             selection,
             router: admission.connect_runtime_host(adapter),
-            recorded: Mutex::new(false),
+            completed: Mutex::new(false),
         })
     }
 
     /// The exact Root projection bound to this prepared delivery. It remains
-    /// a candidate until `return_selected` successfully records its receipt.
+    /// a candidate until `return_selected` confirms the exact delivery.
     pub fn selection(&self) -> &RetrievalPreview {
         &self.selection
     }
@@ -80,30 +81,29 @@ impl<'a> SelectedReturn<'a> {
     /// returns status only, so a cached selection cannot be released again
     /// after its cut has changed.
     pub fn return_selected(&self) -> Result<ReturnOutcome<'_>, ProductError> {
-        let mut recorded = self.recorded.lock().map_err(|_| {
+        let mut completed = self.completed.lock().map_err(|_| {
             ProductError::new(
                 ProductErrorKind::Conflict,
                 "selected return state is unavailable",
             )
         })?;
-        if !*recorded {
+        if !*completed {
             // A pending retry may use the cached synthetic receipt and bypass
             // Gateway's initial cut check. Check the cut before retrying.
             self.instance
                 .preview_retrieval(self.session, self.prepared)?;
         }
-        let newly_recorded =
+        let outcome =
             self.instance
-                .deliver_retrieval(self.session, self.prepared, &self.router)?;
-        *recorded = true;
-        if newly_recorded {
-            Ok(ReturnOutcome::Returned {
+                .deliver_retrieval_confirmed(self.session, self.prepared, &self.router)?;
+        *completed = true;
+        Ok(match outcome {
+            RetrievalDeliveryOutcome::Confirmed { .. } => ReturnOutcome::Returned {
                 delivery_id: self.prepared.stable_id(),
                 selection: &self.selection,
-            })
-        } else {
-            Ok(ReturnOutcome::AlreadyRecorded)
-        }
+            },
+            RetrievalDeliveryOutcome::Replay => ReturnOutcome::AlreadyRecorded,
+        })
     }
 }
 

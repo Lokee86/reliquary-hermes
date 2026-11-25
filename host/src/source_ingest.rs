@@ -7,9 +7,8 @@ use crate::{
     source_wire::{Evidence, Snapshot, SourceAction, SourceRequest},
 };
 use reliquary_memory::{
-    ConfiguredRuntime, HermesCopiedSnapshot, HermesCopyScope, InspectionItem, InspectionQuery,
-    Instance, MemoryId, NativeImportPlan, NativeImportState, OwnerId, OwnerProcessingJob,
-    ProcessOptions, RetrievalMemory, RetrievalPreview, SourceAvailability, SourceTurn,
+    ConfiguredRuntime, HermesCopiedSnapshot, HermesCopyScope, Instance, NativeImportPlan,
+    NativeImportState, OwnerId, OwnerProcessingJob, ProcessOptions, SourceAvailability, SourceTurn,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -30,11 +29,7 @@ const PHY_INACTIVE: HttpError = HttpError::new(409, "source_phy_inactive", true)
 const PROVENANCE_UNAVAILABLE: HttpError =
     HttpError::new(503, "source_provenance_unavailable", true);
 
-#[derive(Serialize)]
-pub(crate) struct RetrievalProvenance {
-    memory_id: String,
-    source_snapshot_digests: Vec<String>,
-}
+mod retrieval;
 
 pub(crate) struct DashboardSourceStatus {
     pub(crate) state: &'static str,
@@ -594,102 +589,6 @@ impl SourceService {
         Ok(())
     }
 
-    pub(crate) fn retrieval_provenance(
-        &self,
-        instance: &Instance,
-        registry: &Registry,
-        runtimes: &mut RuntimeRegistry,
-        owner: OwnerId,
-        selection: &RetrievalPreview,
-    ) -> Result<Vec<RetrievalProvenance>, HttpError> {
-        let management = instance
-            .workspace_management(owner)
-            .map_err(|_| PROVENANCE_UNAVAILABLE)?;
-        let mut heads = BTreeMap::new();
-        let mut provenance = Vec::with_capacity(selection.memories.len());
-        for memory in &selection.memories {
-            let mut digests = BTreeSet::new();
-            if has_source(memory) {
-                let page = management
-                    .inspect(
-                        &InspectionQuery::Provenance {
-                            id: memory_id(&memory.memory_id)?,
-                            revision: Some(memory.revision),
-                        },
-                        None,
-                        1,
-                    )
-                    .map_err(|_| PROVENANCE_UNAVAILABLE)?;
-                let [InspectionItem::Provenance(evidence)] = page.items.as_slice() else {
-                    return Err(PROVENANCE_UNAVAILABLE);
-                };
-                if page.truncated
-                    || evidence.memory_id != memory.memory_id
-                    || evidence.body_id != memory.body_id
-                    || evidence.revision != memory.revision
-                {
-                    return Err(PROVENANCE_UNAVAILABLE);
-                }
-                match evidence.availability {
-                    SourceAvailability::Terminal => return Err(TERMINAL),
-                    SourceAvailability::Available | SourceAvailability::Direct => {}
-                    _ => return Err(PROVENANCE_UNAVAILABLE),
-                }
-                // Root resolves the original episode's turn as well as separate
-                // content and grounding references (including cross-chat adoption).
-                for turn in [
-                    &evidence.source_turn,
-                    &evidence.content_source,
-                    &evidence.grounding_source,
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    if !turn.conversation_id.starts_with("hermes-copy:") {
-                        continue;
-                    }
-                    let imported = turn
-                        .imported
-                        .as_ref()
-                        .filter(|row| row.format == "hermes-source-copied-snapshot-v1")
-                        .ok_or(PROVENANCE_UNAVAILABLE)?;
-                    let session = &imported.conversation_id;
-                    if !heads.contains_key(session) {
-                        let scope =
-                            HermesCopyScope::new(registry.profile_id().to_owned(), session.clone())
-                                .map_err(|_| PROVENANCE_UNAVAILABLE)?;
-                        if scope.conversation_id() != turn.conversation_id
-                            || self
-                                .source_owner(session)
-                                .map_err(|_| PROVENANCE_UNAVAILABLE)?
-                                .or_else(|| registry.source_owner(session, true).ok())
-                                != Some(owner)
-                        {
-                            return Err(PROVENANCE_UNAVAILABLE);
-                        }
-                        let head = self.accepted_source_head(session, runtimes)?;
-                        heads.insert(session.clone(), head);
-                    }
-                    // The authenticated Root provenance contains the original
-                    // imported turn even after later append windows advance the
-                    // bounded host head beyond that message.
-                    if imported.message_id != turn.node_id
-                        || !matches!(&turn.availability, SourceAvailability::Available)
-                    {
-                        return Err(PROVENANCE_UNAVAILABLE);
-                    }
-                    let head = heads.get(session).ok_or(PROVENANCE_UNAVAILABLE)?;
-                    digests.insert(head.wire_digest.clone());
-                }
-            }
-            provenance.push(RetrievalProvenance {
-                memory_id: memory.memory_id.clone(),
-                source_snapshot_digests: digests.into_iter().collect(),
-            });
-        }
-        Ok(provenance)
-    }
-
     pub(crate) fn has_source_head(&self, session: &str) -> Result<bool, HttpError> {
         let state = self.store.read(&self.store.path(session))?;
         Ok(state.accepted.is_some() || state.pending.is_some())
@@ -800,24 +699,6 @@ fn resumable_owner(
         return None;
     }
     Some(owner)
-}
-
-fn has_source(memory: &RetrievalMemory) -> bool {
-    memory.source.episode_id.is_some()
-        || memory.source.content_conversation_id.is_some()
-        || memory.source.grounding_conversation_id.is_some()
-}
-
-fn memory_id(value: &str) -> Result<MemoryId, HttpError> {
-    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(PROVENANCE_UNAVAILABLE);
-    }
-    let mut bytes = [0; 32];
-    for (index, byte) in bytes.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
-            .map_err(|_| PROVENANCE_UNAVAILABLE)?;
-    }
-    Ok(MemoryId(bytes))
 }
 
 fn overlap(previous: &SourceHead, snapshot: &Snapshot) -> Option<usize> {

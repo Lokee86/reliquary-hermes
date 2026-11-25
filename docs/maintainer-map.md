@@ -17,7 +17,7 @@ Route integration changes to the owning contract, implementation boundary and ve
 | Hermes-owned inference, identity and worker lifecycle | [Protocol](protocol.md) and [local service](local-service.md) | `inference_worker.py`, native inference broker, hosted Root construction, worker and isolated model/process tests |
 | Owner grants, leases and durable routing | [Local service](local-service.md) | Rust registry and registry storage, Root-backed process and registry tests |
 | Manual Hermes history and selected source delivery | [Host audit](host-audit.md) and [protocol](protocol.md) | `history.py`, `manual_delivery.py`, `outbox.py`, shared Sources UI and installed HU08 proof |
-| Copied source and retrieval return | [Protocol](protocol.md) | Source and authority DTOs, `retrieval.rs`, `retrieval_hack.rs`, provider recall and copied-source and selected-return proofs |
+| Copied source and exact Memory and Observation return | [Protocol](protocol.md) | Source and authority DTOs, `retrieval.rs`, `retrieval_hack.rs`, `source_ingest/retrieval.rs`, provider recall and signed source proofs |
 | Dashboard DTOs and mutation expectations | [Dashboard contract](ui-contract.md) | `ui_schema.py`, `ui_contract.py`, schema export and contract tests |
 | Acceptance, scope and later gates | [Verification](verification.md) | Pinned Python suite, locked offline Cargo tests and real local process witnesses |
 

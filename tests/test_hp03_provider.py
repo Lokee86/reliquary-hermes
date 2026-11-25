@@ -517,6 +517,28 @@ def test_hermes_manager_keeps_profile_workers_and_hooks_isolated(pinned_provider
         assert provider.lifecycle_status == "stopped"
 
 
+def test_prefetch_counts_observation_only_recall(pinned_provider, monkeypatch):
+    from test_protocol import _observation, response
+    from reliquary_hermes.protocol import Response
+    from reliquary_hermes.validation import canonical
+
+    observation = _observation()
+    context = "Observation (Observed, Current): " + observation["claim"]
+    returned = Response.parse(canonical(response(result={
+        "search_id": "search-1", "delivery_id": "delivery-1", "context": context,
+        "memory_ids": [], "provenance": [], "observations": [observation],
+    })))
+    provider = pinned_provider.ReliquaryMemoryProvider()
+    provider._session_id = "session-a"
+    provider._binding = SimpleNamespace(session_id="session-a")
+    provider._status = "attached"
+    client = SimpleNamespace(request=lambda raw: returned)
+    monkeypatch.setattr(provider, "_request_bytes", lambda *args, **kwargs: (client, b"", 0))
+
+    assert provider.prefetch("handoff") == context
+    assert provider.recall_status().count == 1
+
+
 def test_inflight_prefetch_discards_old_session_result(pinned_provider, monkeypatch, tmp_path):
     from agent.secret_scope import reset_secret_scope, set_secret_scope
     from reliquary_hermes.validation import canonical

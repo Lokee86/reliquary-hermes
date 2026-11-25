@@ -113,7 +113,7 @@ All four executable attestations verified at catalog candidate `ad29b22861d49a94
 
 ## Evidence covered
 
-- Strict bounded request and response DTOs reject spoofed authority, extra fields, malformed wire data and mismatched IDs, cuts or provenance. Each selected Memory has one correlated source-provenance entry.
+- Strict bounded request and response DTOs reject spoofed authority, extra fields, malformed wire data and mismatched IDs, cuts or provenance. The retrieval DTO and provider fixtures cover Observation-only context, mixed selections, and rejection of mismatched owner, lineage and evidence ranges. Each selected Memory keeps its correlated source-provenance entry. The signed native `test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart` uses `HP_INFERENCE_HERMES_CHECKOUT` and `HP03_HOST_BINARY` with a loopback model fixture.
 - Provider grants require authenticated profile and principal and a configured session REL. General and project sessions resolve independently of the active PHY. Profile/bot changes preserve the selected PHY's stable user ID. Only exact trusted attribution to that active human can route a source row to the PHY.
 - The fixture queues a bounded copy of filtered source input with exact IDs and timestamps. Bound-source import verifies scopes, digests and row attribution without treating the current speaker as the author of earlier messages. Fixture receipts express replay and revision semantics in memory.
 - Session/branch/rewind changes invalidate scoped recall. Explicit archive and delete mark the same session tombstone, stop recall and reject old or newly scoped replay. Transient invalidation rejects old source epochs after resync.
