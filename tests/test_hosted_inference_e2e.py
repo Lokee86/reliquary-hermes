@@ -83,12 +83,18 @@ def _copied_memories(client):
     return {item["title"]: item for item in reply["result"]["items"]}
 
 
-def _copied_memory_detail(client, memory):
+def _copied_memory_detail(client, memory, *, removed=False):
     topology, binding = _dashboard_binding(client, SESSION)
     reply, _ = _dashboard_exchange(client, topology, binding, "ui.memory_detail", {
         "memory_id": memory["memory_id"], "revision": memory["revision"],
     })
-    assert reply["status"] == "ok", reply
+    if removed:
+        if reply["status"] == "ok":
+            assert reply["result"]["body"]["content"] is None, reply
+        else:
+            assert reply["status"] == "unavailable", reply["result"]
+        return
+    assert reply["status"] == "ok", reply["result"]
     return reply["result"]
 
 
@@ -446,7 +452,7 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
             assert _when_ready(reader, rewind) == receipt
             assert outbox.acknowledge(rewind, receipt)
             assert outbox.next_job() is None
-            assert _copied_memory_detail(reader, withdrawn)["body"]["content"] is None
+            _copied_memory_detail(reader, withdrawn, removed=True)
             assert _copied_memory_detail(reader, memory)["body"]["content"] == source
             if cli:
                 assert _turn(cli, rel, conversation, "challenge")["content"] is None
@@ -477,11 +483,11 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
         assert outbox.acknowledge(terminal, _when_ready(reader, terminal))
         rejected = query(reader, "perception-before-deletion", paraphrase)
         assert isinstance(rejected, str) and rejected in {
-            "source_terminal", "no_recall_results", "retrieval_cut_stale",
+            "source_terminal", "no_recall_results", "retrieval_cut_stale", "unavailable",
         }, rejected
         if committed_removals:
-            assert _copied_memory_detail(reader, memory)["body"]["content"] is None
-            assert _copied_memory_detail(reader, fresh)["body"]["content"] is None
+            _copied_memory_detail(reader, memory, removed=True)
+            _copied_memory_detail(reader, fresh, removed=True)
             if cli:
                 assert all(_turn(cli, rel, conversation, uid)["content"] is None
                            for uid in ("accepted", "appended", "challenge", "fresh"))

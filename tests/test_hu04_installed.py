@@ -1,4 +1,4 @@
-"""One installed pinned-Hermes flow from conversation through dashboard and archive."""
+"""An installed Hermes flow from capture through archive, restore, and delete."""
 
 from contextlib import ExitStack, contextmanager
 from decimal import Decimal
@@ -304,9 +304,17 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
             assert db.get_session(SOURCE)["archived"] == 1
             assert [row["message_uid"] for row in db.get_messages(SOURCE)] == [row["message_uid"] for row in rows]
         queued = outbox.next_job(SOURCE, terminal_only=True)
-        assert queued is not None and queued.reason == "archive"
+        assert queued is None
         worker_command(inference_worker, "start")
         with _runtime(home, installed, RECALL, ids) as (manager, _):
+            archived = _query(manager)
+            assert archived["status"] == "ok", archived
+            assert archived["result"]["memory_ids"] == later["memory_ids"]
+            with SessionDB(home / "state.db") as db:
+                assert db.set_session_archived(SOURCE, False)
+                assert db.set_session_archived(SOURCE, True)
+                assert db.delete_session(SOURCE)
+
             def terminal_acknowledged():
                 cursor = outbox.cursor(SOURCE)
                 return cursor is not None and cursor.kind == "terminal"
@@ -317,6 +325,6 @@ def test_hu04_installed_hermes_browser_recall_restart_and_archive(
                 replay.deliver_source_job(original_job)
             denied = _query(manager)
             assert denied["status"] in {"conflict", "unavailable"}, denied
-            _dashboard_phase(primary, foreign, history_checkout, tmp_path / "archived",
+            _dashboard_phase(primary, foreign, history_checkout, tmp_path / "deleted",
                              memories[memory_id], later, archived=True)
             worker_command(inference_worker, "stop")

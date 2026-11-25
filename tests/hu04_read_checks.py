@@ -118,18 +118,13 @@ def _check_graph(client, copied, companion, expected):
     assert bounded["truncated"]
 
 
-def _check_archived_provenance(client, seed):
+def _check_deleted_provenance(client, seed):
     owner_id = seed["project_owner_id"]
-    memories = _items(
-        client, "ui.memory_list", {"limit": 128, "filters": MEMORY_FILTERS}, owner_id=owner_id,
-    )
-    archived = _seed_memory(memories, seed["archived_memory"])
-    assert archived["lifecycle"] == "active", "source tombstone altered the retained Memory"
-    provenance = client.read(
-        "ui.provenance", {"memory_id": archived["memory_id"], "revision": archived["revision"]}, owner_id=owner_id,
-    )["result"]
-    assert provenance["sources"]
-    assert all(source["kind"] == "source_unavailable" for source in provenance["sources"])
+    deleted = seed["archived_memory"]
+    provenance = client.read("ui.provenance", {
+        "memory_id": deleted["memory_id"], "revision": str(deleted["revision"]),
+    }, owner_id=owner_id)["result"]
+    assert provenance["sources"] == [{"kind": "source_unavailable", "reason": "deleted"}]
 
 
 def run_read_checks(client, seed):
@@ -178,7 +173,7 @@ def run_read_checks(client, seed):
     _check_memory(client, copied, seed["copied_memory"])
     _check_graph(client, copied, companion, seed["graph"])
     client.read("ui.community_list", {"cursor": None, "limit": 1}, status="unavailable")
-    _check_archived_provenance(client, seed)
+    _check_deleted_provenance(client, seed)
 
     # Inspection must leave the owner binding, reported Freshness and recall status unchanged.
     after = client.read("ui.memory_list", {"cursor": None, "limit": 128, "filters": MEMORY_FILTERS})
