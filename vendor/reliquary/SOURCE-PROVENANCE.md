@@ -2,14 +2,14 @@
 
 ## Purpose
 
-This source-only snapshot pins Reliquary Core at `8d0b432dafc023b31dade2c06c46b75c1ab266bf`.
+This source-only snapshot pins Reliquary Core at `91b6ea7081d4b5c2e7bf1eaab1145da345235abd`.
 The Hermes host uses the public `reliquary-memory` API for leased owner mounts.
 Core restores verified REL checkpoints, replays recent writes, and reads older history on demand.
-This revision includes same-REL Perception, hosted native decision binding, and typed Observation recall through shared hybrid retrieval.
+This revision includes same-REL Perception, hosted native decision binding, and typed Observation recall through shared hybrid retrieval, and durable source deletion and rewind.
 
 ## Overview
 
-The snapshot contains 811 Git-verified files. It includes the Cargo workspace and lock,
+The snapshot contains 813 Git-verified files. It includes the Cargo workspace and lock,
 Rust sources and tests, the referenced G4 fixture, the MPL 2.0 license, and the pinned Quinn source and licenses.
 
 Cargo resolves `lodestone-core` and `lodestone-packed` at the public Git pin

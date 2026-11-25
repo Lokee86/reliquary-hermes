@@ -99,6 +99,7 @@ pub fn evaluate_review(
             canonical.receptors = receptors(routes, &draft, reuse)?;
         }
         let frozen = read.read(|rel| {
+            work.synthesis.check_source_cut(rel)?;
             let mut capture = Capture::new(rel);
             work.fence.revalidate(&mut capture)?;
             freeze(&mut capture, canonical, &work.required, routes)
@@ -217,6 +218,25 @@ fn capture_review(
     all_current.extend(required.iter().copied());
     all_current.sort_unstable();
     all_current.dedup();
+    let mut retained = Vec::new();
+    if !unchanged {
+        for &cite in &head_draft.reviewed {
+            if all_current.len() >= MAX_DRAFT_SLICES {
+                break;
+            }
+            if all_current.contains(&cite) {
+                continue;
+            }
+            match capture.citation(cite) {
+                Ok((passage, grade)) => {
+                    retained.push(passage.audit(grade));
+                    all_current.push(cite);
+                }
+                Err(Error::Stale | Error::PendingEvidence) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+    }
     let mut alternatives = Vec::new();
     if !unchanged && all_current.len() < MAX_DRAFT_SLICES {
         let mut original = Vec::new();
@@ -248,6 +268,7 @@ fn capture_review(
     }
     prior.citations = current.iter().copied().map(audit_citation).collect();
     let mut synthesis = SynthesisInput {
+        source_removal: capture.cut.source_removal,
         binding: StageBinding {
             cut,
             proposal_id: prior_id,
@@ -278,11 +299,31 @@ fn capture_review(
             let (row, grade) = capture.citation(cite)?;
             synthesis.add(row.audit(grade))?;
         }
+        for passage in retained {
+            if let Err(Error::EvidenceLimit) = synthesis.add(passage) {
+                break;
+            }
+        }
         for alternate in alternatives {
             let (row, grade) = capture.citation(alternate.citation)?;
             if let Err(Error::EvidenceLimit) = synthesis.add(row.audit(grade)) {
                 break;
             }
+        }
+        if synthesis.proposal.profile == reliquary_perception::ObservationProfile::Relational
+            && !synthesis
+                .proposal
+                .citations
+                .iter()
+                .any(|cite| matches!(cite.source, reliquary_memory_audit::SourceId::Memory(_)))
+            && let Some(direct) = synthesis.source_slots.iter().find(|passage| {
+                matches!(
+                    passage.citation.source,
+                    reliquary_memory_audit::SourceId::Memory(_)
+                )
+            })
+        {
+            synthesis.proposal.citations.push(direct.citation);
         }
     }
     let initial_judgments = head
@@ -376,7 +417,7 @@ fn resolve(
                     current = successor;
                     continue;
                 }
-                if record.archived {
+                if record.archived || !owner.memory_is_source_eligible(current) {
                     return Ok(None);
                 }
                 if current.0 == id
@@ -489,6 +530,7 @@ fn finish(
     Ok(prepared(
         routes,
         work.synthesis.binding.cut,
+        work.synthesis.source_removal,
         operation,
         draft_id,
         current,
@@ -523,6 +565,7 @@ fn withdraw(
     Ok(prepared(
         routes,
         work.synthesis.binding.cut,
+        work.synthesis.source_removal,
         operation,
         work.prior.id,
         current,

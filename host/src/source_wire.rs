@@ -15,6 +15,7 @@ pub(crate) enum SourceAction {
     Snapshot,
     ManualSnapshot,
     Invalidate,
+    Rewind,
     Terminal,
 }
 
@@ -82,6 +83,9 @@ impl SourceRequest {
             }
             SourceAction::Invalidate
                 if value.arguments.as_object().is_some_and(|v| v.is_empty()) => {}
+            SourceAction::Rewind => {
+                RewindArguments::parse(&value)?;
+            }
             SourceAction::Terminal => {
                 let terminal: TerminalArguments =
                     serde_json::from_value(value.arguments.clone()).map_err(|_| INVALID)?;
@@ -106,6 +110,47 @@ struct SnapshotArguments {
 #[serde(deny_unknown_fields)]
 struct TerminalArguments {
     reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RewindArguments {
+    pub(crate) event_id: String,
+    pub(crate) previous_head_message_uid: Option<String>,
+    pub(crate) last_surviving_message_uid: Option<String>,
+    pub(crate) removed_message_uids: Vec<String>,
+    #[serde(default = "complete_removal")]
+    pub(crate) removed_uids_complete: bool,
+}
+
+fn complete_removal() -> bool {
+    true
+}
+
+impl RewindArguments {
+    pub(crate) fn parse(request: &SourceRequest) -> Result<Self, HttpError> {
+        let args: Self = serde_json::from_value(request.arguments.clone()).map_err(|_| INVALID)?;
+        let mut removed = BTreeSet::new();
+        if request.generation == 0
+            || !valid_id(&args.event_id)
+            || !(1..=4096).contains(&args.removed_message_uids.len())
+            || args
+                .removed_message_uids
+                .iter()
+                .any(|id| !valid_id(id) || !removed.insert(id))
+            || args
+                .last_surviving_message_uid
+                .as_ref()
+                .is_some_and(|id| !valid_id(id) || removed.contains(id))
+            || args
+                .previous_head_message_uid
+                .as_ref()
+                .is_some_and(|id| !valid_id(id))
+        {
+            return Err(INVALID);
+        }
+        Ok(args)
+    }
 }
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
@@ -165,8 +210,16 @@ impl From<Role> for HermesCopiedRole {
 
 impl Snapshot {
     pub(crate) fn parse(request: &SourceRequest) -> Result<Self, HttpError> {
+        Self::parse_arguments(&request.arguments, &request.profile_id, &request.session_id)
+    }
+
+    pub(crate) fn parse_arguments(
+        arguments: &Value,
+        profile: &str,
+        session: &str,
+    ) -> Result<Self, HttpError> {
         let arguments: SnapshotArguments =
-            serde_json::from_value(request.arguments.clone()).map_err(|_| INVALID)?;
+            serde_json::from_value(arguments.clone()).map_err(|_| INVALID)?;
         let digest = hex(&Sha256::digest(arguments.source_json.as_bytes()));
         if arguments.snapshot_digest != digest {
             return Err(INVALID);
@@ -174,8 +227,8 @@ impl Snapshot {
         // Check nested duplicate keys before taking exact timestamp lexemes.
         let _: Value = decode(arguments.source_json.as_bytes()).map_err(|_| INVALID)?;
         let view: CopiedView = serde_json::from_str(&arguments.source_json).map_err(|_| INVALID)?;
-        if view.profile_id != request.profile_id
-            || view.session_id != request.session_id
+        if view.profile_id != profile
+            || view.session_id != session
             || !(1..=128).contains(&view.messages.len())
             || view
                 .branch_id

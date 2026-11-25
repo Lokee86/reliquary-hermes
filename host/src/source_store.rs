@@ -13,7 +13,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-const MAX_STATE_BYTES: usize = 96 * 1024;
+const MAX_STATE_BYTES: usize = 384 * 1024;
 const MAX_RESUME_SCAN_ENTRIES: usize = 4096;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -25,7 +25,16 @@ pub(crate) struct SourceHead {
     pub(crate) import_id: String,
     pub(crate) branch: Option<String>,
     pub(crate) evidence: Vec<Evidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) rewind_anchor: Option<String>,
     pub(crate) receipt: Option<[u8; 32]>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PendingRewind {
+    pub(crate) request_key: String,
+    pub(crate) retained_message_uid: Option<String>,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -39,12 +48,20 @@ pub(crate) struct SourceState {
     pub(crate) phy_id: Option<OwnerId>,
     #[serde(default)]
     pub(crate) manual: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) last_rewind_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pending_rewind: Option<PendingRewind>,
     pub(crate) generation: u64,
     pub(crate) available: bool,
     pub(crate) stale: bool,
     pub(crate) terminal: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) terminal_acknowledged: bool,
     pub(crate) accepted: Option<SourceHead>,
     pub(crate) pending: Option<SourceHead>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pending_snapshot: Option<serde_json::Value>,
 }
 
 #[derive(Clone)]
@@ -252,6 +269,7 @@ mod resumable_import_tests {
                 import_id: format!("import-{session}"),
                 branch: None,
                 evidence: Vec::new(),
+                rewind_anchor: None,
                 receipt: Some([2; 32]),
             });
             state.available = true;
@@ -304,6 +322,7 @@ mod resumable_import_tests {
                 import_id: format!("import-{index}"),
                 branch: None,
                 evidence: Vec::new(),
+                rewind_anchor: None,
                 receipt: Some([2; 32]),
             });
             store.write(&path, &state).unwrap();

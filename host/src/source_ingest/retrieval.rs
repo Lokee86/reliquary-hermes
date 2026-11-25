@@ -176,7 +176,7 @@ struct SourceChecks<'a> {
     runtimes: &'a mut RuntimeRegistry,
     owner: OwnerId,
     management: WorkspaceManagement,
-    heads: BTreeMap<String, SourceHead>,
+    heads: BTreeMap<String, Option<SourceHead>>,
 }
 
 impl SourceChecks<'_> {
@@ -300,7 +300,10 @@ impl SourceChecks<'_> {
                     entry.insert(self.service.accepted_source_head(session, self.runtimes)?)
                 }
             };
-            digests.insert(head.wire_digest.clone());
+            digests.insert(head.as_ref().map_or_else(
+                || hex(&imported.source_digest),
+                |head| head.wire_digest.clone(),
+            ));
         }
         Ok(digests.into_iter().collect())
     }

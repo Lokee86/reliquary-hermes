@@ -1,8 +1,10 @@
 use super::*;
+use crate::instance_owner::RelMount;
 use reliquary_application::native_import_source::{
-    HermesCopiedSourceTurn, HermesCopyScope, NativeImportPlan, NativeImportStageError,
-    NativeImportStageResult, NativeImportStatus, native_import_status, read_hermes_archive_range,
-    read_hermes_copy_source, tombstone_hermes_copy,
+    HermesCopiedSourceTurn, HermesCopyScope, HermesCopySourceChange, HermesCopySourceChangeReceipt,
+    NativeImportPlan, NativeImportStageError, NativeImportStageResult, NativeImportStatus,
+    apply_hermes_copy_source_change, native_import_status, read_hermes_archive_range,
+    read_hermes_copy_active_message_uids, read_hermes_copy_source, tombstone_hermes_copy,
 };
 
 impl Instance {
@@ -27,18 +29,23 @@ impl Instance {
         end_node_id: &str,
         source_archive_version: u64,
     ) -> Result<Option<Vec<HermesCopiedSourceTurn>>, GatewayError> {
-        let result = self.with_reliquary(owner, |session| {
-            read_hermes_archive_range(
-                session,
-                conversation_id,
-                start_node_id,
-                end_node_id,
-                source_archive_version,
-                self.principal(),
+        self.authorize_rel_access(owner)?;
+        let mount = RelMount::capture(self, owner)?;
+        let (result, removal_version) = self.with_reliquary(owner, |session| {
+            (
+                read_hermes_archive_range(
+                    session,
+                    conversation_id,
+                    start_node_id,
+                    end_node_id,
+                    source_archive_version,
+                    self.principal(),
+                ),
+                session.archive_source_removal_version(),
             )
-        })??;
-        self.ensure_credential_active()?;
-        Ok(result)
+        })?;
+        self.recheck_archive_removal_version(owner, &mount, removal_version)?;
+        Ok(result?)
     }
 
     pub fn read_hermes_copy_source(
@@ -49,18 +56,72 @@ impl Instance {
         start_message_uid: &str,
         end_message_uid: &str,
     ) -> Result<Option<Vec<HermesCopiedSourceTurn>>, GatewayError> {
-        let result = self.with_reliquary(owner, |session| {
-            read_hermes_copy_source(
-                session,
+        self.authorize_rel_access(owner)?;
+        let mount = RelMount::capture(self, owner)?;
+        let (result, removal_version) = self.with_reliquary(owner, |session| {
+            (
+                read_hermes_copy_source(
+                    session,
+                    scope,
+                    source_sha256,
+                    start_message_uid,
+                    end_message_uid,
+                    self.principal(),
+                ),
+                session.archive_source_removal_version(),
+            )
+        })?;
+        self.recheck_archive_removal_version(owner, &mount, removal_version)?;
+        Ok(result?)
+    }
+
+    pub fn read_hermes_copy_active_message_uids(
+        &self,
+        owner: OwnerId,
+        scope: &HermesCopyScope,
+        source_sha256: [u8; 32],
+        from_leaf: usize,
+        limit: usize,
+    ) -> Result<Option<Vec<String>>, GatewayError> {
+        self.authorize_rel_access(owner)?;
+        let mount = RelMount::capture(self, owner)?;
+        let (result, removal_version) = self.with_reliquary(owner, |session| {
+            (
+                read_hermes_copy_active_message_uids(
+                    session,
+                    scope,
+                    source_sha256,
+                    from_leaf,
+                    limit,
+                    self.principal(),
+                ),
+                session.archive_source_removal_version(),
+            )
+        })?;
+        self.recheck_archive_removal_version(owner, &mount, removal_version)?;
+        Ok(result?)
+    }
+
+    pub fn apply_hermes_copy_source_change(
+        &self,
+        owner: OwnerId,
+        scope: &HermesCopyScope,
+        source_sha256: [u8; 32],
+        event_id: &str,
+        change: HermesCopySourceChange,
+    ) -> Result<HermesCopySourceChangeReceipt, GatewayError> {
+        self.with_rel_writer(owner, |writer| {
+            apply_hermes_copy_source_change(
+                writer,
                 scope,
                 source_sha256,
-                start_message_uid,
-                end_message_uid,
+                event_id,
+                change,
                 self.principal(),
+                || self.ensure_credential_active().is_ok(),
             )
-        })??;
-        self.ensure_credential_active()?;
-        Ok(result)
+        })?
+        .map_err(import_error)
     }
 
     pub fn tombstone_hermes_copy(

@@ -163,6 +163,57 @@ impl RelWriter {
             }
         }
     }
+    /// Validate the copied source proof and publish one sealed owner change.
+    pub fn publish_copied_source_change(
+        &mut self,
+        request: crate::model::CopiedSourceChangeRequest,
+    ) -> Result<crate::model::CopiedSourceChangeReceipt, OwnerSessionError> {
+        self.session.ensure_write_certain()?;
+        let lease = self.container.writer_lease_proof();
+        if lease.is_none() || lease != self.session.writer_lease_proof {
+            return Err(OwnerSessionError::ManagementStale);
+        }
+        if let Some(existing) = self.session.archive.copied_source_change(&request) {
+            return if existing.request == request {
+                Ok(existing.receipt.clone())
+            } else {
+                Err(OwnerSessionError::ManagementStale)
+            };
+        }
+        if self.session.open_native_import_id().is_some()
+            || self
+                .session
+                .copied_source_head(
+                    &request.namespace,
+                    &request.source_id,
+                    &request.conversation_id,
+                    &request.source_sha256,
+                )
+                .is_none()
+        {
+            return Err(OwnerSessionError::ManagementStale);
+        }
+        match self
+            .session
+            .archive
+            .publish_copied_source_change(&mut self.container, request)
+        {
+            Ok(receipt) => {
+                self.session.writer_lease_proof = self.container.writer_lease_proof();
+                Ok(receipt)
+            }
+            Err(reliquary_archive::ArchiveError::InvalidField(
+                "conflicting copied source change",
+            )) => Err(OwnerSessionError::ManagementStale),
+            Err(error) => {
+                if matches!(error, reliquary_archive::ArchiveError::Container(_)) {
+                    self.session.write_poisoned = true;
+                }
+                Err(error.into())
+            }
+        }
+    }
+
     /// Record an evaluated pair after the application has accepted its result.
     pub fn record_dream_pair(
         &mut self,
@@ -276,7 +327,14 @@ impl RelWriter {
                 "Insomnia worker limits",
             )));
         }
-        for order in self.session.insomnia.unqueued_orders(max_admissions) {
+        let archive = &self.session.archive;
+        let eligible = self
+            .session
+            .insomnia
+            .unqueued_orders_matching(max_admissions, |id| {
+                !archive.episode_source_removed(reliquary_archive::EpisodeId(id.0))
+            });
+        for order in eligible {
             let episode = self
                 .session
                 .archive
@@ -300,11 +358,13 @@ impl RelWriter {
             );
             self.finish_insomnia_write(queued)?;
         }
-        let claimed = self.session.insomnia.claim_next(
+        let archive = &self.session.archive;
+        let claimed = self.session.insomnia.claim_next_matching(
             &mut self.container,
             worker,
             started_at_ns,
             lease_duration_ns,
+            |id| !archive.episode_source_removed(reliquary_archive::EpisodeId(id.0)),
         );
         let Some(work) = self.finish_insomnia_write(claimed)? else {
             self.session.writer_lease_proof = self.container.writer_lease_proof();

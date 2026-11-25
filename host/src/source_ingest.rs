@@ -3,12 +3,13 @@ use crate::{
     registry::Registry,
     runtime::RuntimeRegistry,
     service_http::{HttpError, HttpResponse, INVALID, UNAVAILABLE, hex},
-    source_store::{SourceHead, SourceState, SourceStore},
-    source_wire::{Evidence, Snapshot, SourceAction, SourceRequest},
+    source_store::{PendingRewind, SourceHead, SourceState, SourceStore},
+    source_wire::{Evidence, RewindArguments, Snapshot, SourceAction, SourceRequest},
 };
 use reliquary_memory::{
-    ConfiguredRuntime, HermesCopiedSnapshot, HermesCopyScope, Instance, NativeImportPlan,
-    NativeImportState, OwnerId, OwnerProcessingJob, ProcessOptions, SourceAvailability, SourceTurn,
+    ConfiguredRuntime, HermesCopiedRole, HermesCopiedSnapshot, HermesCopyScope,
+    HermesCopySourceChange, Instance, NativeImportPlan, NativeImportState, OwnerId,
+    OwnerProcessingJob, ProcessOptions, SourceAvailability, SourceTurn,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -257,7 +258,7 @@ impl SourceService {
             &request,
             snapshot.as_ref().map(|snapshot| snapshot.digest.as_str()),
         )?;
-        let bind_embedding_identity = Some(bind_embedding_identity);
+        let mut bind_embedding_identity = Some(bind_embedding_identity);
         let path = self.store.path(&request.session_id);
         let mut state = self.store.read(&path)?;
         state.session_id = Some(request.session_id.clone());
@@ -279,17 +280,97 @@ impl SourceService {
         // Manual extensions follow the same verified source-head overlap as live snapshots.
         // Reusing a source ID with changed history fails in submit()'s continuity check.
         if request.operation == SourceAction::Terminal {
+            if request.arguments["reason"] == "archive" {
+                return Ok(receipt(&request, request.idempotency_key.clone()));
+            }
+            if state.terminal_acknowledged {
+                return Ok(receipt(&request, request.idempotency_key.clone()));
+            }
             if !state.terminal || request.generation > state.generation {
                 state.generation = state.generation.max(request.generation);
                 state.terminal = true;
                 state.available = false;
                 self.store.write(&path, &state)?;
             }
-            self.tombstone(instance, owner, &request, &mut state, &path)?;
+            self.settle_before_removal(
+                instance,
+                owner,
+                &request,
+                &mut state,
+                &path,
+                bind_embedding_identity.take(),
+            )?;
+            if let Some(accepted) = &state.accepted {
+                instance
+                    .apply_hermes_copy_source_change(
+                        owner,
+                        &scope(&request)?,
+                        accepted.native_digest,
+                        &request.idempotency_key,
+                        HermesCopySourceChange::Delete,
+                    )
+                    .map_err(|_| PENDING)?;
+            }
+            state.terminal_acknowledged = true;
+            self.store.write(&path, &state)?;
             return Ok(receipt(&request, request.idempotency_key.clone()));
         }
         if state.terminal {
             return Err(TERMINAL);
+        }
+        if request.operation == SourceAction::Rewind {
+            if state.last_rewind_key.as_deref() == Some(&request.idempotency_key)
+                || self
+                    .store
+                    .read_receipt(&path, &request.idempotency_key)?
+                    .is_some()
+            {
+                return Ok(receipt(&request, request.idempotency_key.clone()));
+            }
+            if request.generation < state.generation {
+                return Err(STALE);
+            }
+            let change = RewindArguments::parse(&request)?;
+            state.generation = request.generation;
+            // Keep the copy unavailable while the durable owner-side change is pending.
+            state.stale = true;
+            state.available = false;
+            self.store.write(&path, &state)?;
+            self.settle_before_removal(
+                instance,
+                owner,
+                &request,
+                &mut state,
+                &path,
+                bind_embedding_identity.take(),
+            )?;
+            if state.pending_rewind.is_none()
+                && let Some(head) = &state.accepted
+                && let Some(retained_message_uid) =
+                    Self::rewind_cut(instance, owner, &request, &change, head)?
+            {
+                state.pending_rewind = Some(PendingRewind {
+                    request_key: request.idempotency_key.clone(),
+                    retained_message_uid,
+                });
+                self.store.write(&path, &state)?;
+            }
+            if let Some(cut) = &state.pending_rewind {
+                if cut.request_key != request.idempotency_key {
+                    return Err(PENDING);
+                }
+                let head = state.accepted.as_mut().ok_or(UNAVAILABLE)?;
+                Self::apply_rewind(instance, owner, &request, &change.event_id, head, cut)?;
+                state.pending_rewind = None;
+            }
+            state.stale = false;
+            state.available = state.accepted.is_some();
+            state.last_rewind_key = Some(request.idempotency_key.clone());
+            self.store.write(&path, &state)?;
+            let key: [u8; 32] = Sha256::digest(request.idempotency_key.as_bytes()).into();
+            self.store
+                .write_receipt(&path, &request.idempotency_key, key)?;
+            return Ok(receipt(&request, request.idempotency_key.clone()));
         }
         if request.operation == SourceAction::Invalidate {
             if request.generation < state.generation || request.generation == 0 {
@@ -376,6 +457,38 @@ impl SourceService {
         }
         let skip = if let Some(accepted) = &state.accepted {
             let overlap = overlap(accepted, &snapshot);
+            if let Some(anchor) = accepted.rewind_anchor.as_deref() {
+                let active = instance
+                    .read_hermes_copy_source(
+                        owner,
+                        &scope(request)?,
+                        accepted.native_digest,
+                        anchor,
+                        anchor,
+                    )
+                    .map_err(|_| PENDING)?
+                    .ok_or(PENDING)?;
+                let [original] = active.as_slice() else {
+                    return Err(PENDING);
+                };
+                let matching = overlap
+                    .and_then(|length| length.checked_sub(1))
+                    .and_then(|index| snapshot.messages.get(index));
+                if matching.is_none_or(|message| {
+                    let role = match message.role {
+                        HermesCopiedRole::User => "user",
+                        HermesCopiedRole::Assistant => "assistant",
+                        HermesCopiedRole::Commentary => "commentary",
+                        HermesCopiedRole::System => "system",
+                        HermesCopiedRole::Tool => "tool",
+                    };
+                    message.content != original.archive.content
+                        || message.timestamp_ns != original.archive.timestamp_ns
+                        || role != original.archive.role
+                }) {
+                    return Err(UNRECONCILED);
+                }
+            }
             let Some(skip) = overlap else {
                 if !reconciling {
                     state.available = false;
@@ -384,7 +497,7 @@ impl SourceService {
                 }
                 return Err(UNRECONCILED);
             };
-            if accepted.wire_digest == snapshot.digest || skip == snapshot.messages.len() {
+            if skip == snapshot.messages.len() {
                 let evidence = accepted.receipt.ok_or(UNAVAILABLE)?;
                 self.store
                     .write_receipt(path, &request.idempotency_key, evidence)?;
@@ -412,19 +525,13 @@ impl SourceService {
         if self.jobs.get(&owner).is_some_and(|job| !job.is_finished()) {
             return Err(PENDING);
         }
-        let native = HermesCopiedSnapshot {
-            scope: scope(request)?,
-            branch_id: snapshot.branch.clone(),
-            source_revision: snapshot.revision,
-            messages: snapshot.messages.into_iter().skip(skip).collect(),
-        };
-        let plan = match &state.accepted {
-            Some(accepted) => {
-                NativeImportPlan::from_hermes_copy_extension(native, accepted.native_digest)
-            }
-            None => NativeImportPlan::from_hermes_copy(native),
-        }
-        .map_err(|_| INVALID)?;
+        let plan = copied_plan(
+            scope(request)?,
+            snapshot.branch.clone(),
+            snapshot.revision,
+            snapshot.messages.into_iter().skip(skip).collect(),
+            state.accepted.as_ref(),
+        )?;
         let mut candidate = SourceHead {
             wire_digest: snapshot.digest,
             request_key: request.idempotency_key.clone(),
@@ -432,6 +539,7 @@ impl SourceService {
             import_id: plan.import_id(owner),
             branch: snapshot.branch,
             evidence: snapshot.evidence,
+            rewind_anchor: None,
             receipt: None,
         };
         if state
@@ -444,6 +552,7 @@ impl SourceService {
         state.owner_id = Some(owner.to_string());
         state.phy_id = Some(binding.phy);
         state.pending = Some(candidate.clone());
+        state.pending_snapshot = Some(request.arguments.clone());
         self.store.write(path, &state)?;
         let staged = instance
             .stage_native_import(owner, plan)
@@ -458,6 +567,7 @@ impl SourceService {
         candidate.receipt = Some(staged.receipt_digest);
         state.available = true;
         state.pending = None;
+        state.pending_snapshot = None;
         state.accepted = Some(candidate);
         self.store.write(path, &state)?;
         if bind_embedding_identity
@@ -481,7 +591,10 @@ impl SourceService {
                 .native_import_status(owner, &pending.import_id)
                 .map_err(|_| UNAVAILABLE)?;
             match status {
-                None => state.pending = None,
+                None => {
+                    state.pending = None;
+                    state.pending_snapshot = None;
+                }
                 Some(status) => {
                     if status.source_key != hex(&pending.native_digest) {
                         return Err(UNAVAILABLE);
@@ -490,6 +603,7 @@ impl SourceService {
                         self.store
                             .write_receipt(path, &pending.request_key, receipt)?;
                         let mut accepted = state.pending.take().ok_or(UNAVAILABLE)?;
+                        state.pending_snapshot = None;
                         accepted.receipt = Some(receipt);
                         state.available = !state.terminal && !state.stale;
                         state.accepted = Some(accepted);
@@ -500,27 +614,135 @@ impl SourceService {
         Ok(())
     }
 
-    fn tombstone(
+    fn settle_before_removal(
         &mut self,
         instance: &Instance,
         owner: OwnerId,
         request: &SourceRequest,
         state: &mut SourceState,
         path: &Path,
+        bind_embedding_identity: Option<impl FnOnce() -> Result<(), HttpError>>,
     ) -> Result<(), HttpError> {
         if state.pending.is_some() {
             self.recover_pending(instance, owner, state, path)?;
-            if state.pending.is_some() {
-                return Err(PENDING);
+            if let Some(pending) = &state.pending {
+                let args = state.pending_snapshot.as_ref().ok_or(PENDING)?;
+                let snapshot =
+                    Snapshot::parse_arguments(args, &request.profile_id, &request.session_id)?;
+                let skip = match &state.accepted {
+                    Some(head) => overlap(head, &snapshot).ok_or(PENDING)?,
+                    None => 0,
+                };
+                let plan = copied_plan(
+                    scope(request)?,
+                    snapshot.branch,
+                    snapshot.revision,
+                    snapshot.messages.into_iter().skip(skip).collect(),
+                    state.accepted.as_ref(),
+                )?;
+                if plan.source_sha256() != pending.native_digest
+                    || plan.import_id(owner) != pending.import_id
+                {
+                    return Err(PENDING);
+                }
+                instance
+                    .stage_native_import(owner, plan)
+                    .map_err(|_| PENDING)?;
+                self.recover_pending(instance, owner, state, path)?;
             }
             self.store.write(path, state)?;
         }
-        if let Some(accepted) = &state.accepted {
-            // An already-open native epoch must settle under Root. The terminal
-            // host fence is durable even while this product operation waits.
-            instance
-                .tombstone_hermes_copy(owner, &scope(request)?, accepted.native_digest)
-                .map_err(|_| PENDING)?;
+        if let Some(accepted) = &state.accepted
+            && bind_embedding_identity.is_some_and(|bind| bind().is_ok())
+        {
+            self.schedule(instance, owner, &accepted.import_id);
+        }
+        Ok(())
+    }
+
+    /// Outer None means that the committed deletion affected only uncopied messages.
+    /// Inner None means that every copied message was removed.
+    fn rewind_cut(
+        instance: &Instance,
+        owner: OwnerId,
+        request: &SourceRequest,
+        change: &RewindArguments,
+        head: &SourceHead,
+    ) -> Result<Option<Option<String>>, HttpError> {
+        let scope = scope(request)?;
+        let removed = change
+            .removed_message_uids
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let mut from_leaf = 0;
+        loop {
+            let page = instance
+                .read_hermes_copy_active_message_uids(
+                    owner,
+                    &scope,
+                    head.native_digest,
+                    from_leaf,
+                    128,
+                )
+                .map_err(|_| PENDING)?
+                .ok_or(PENDING)?;
+            for (offset, uid) in page.iter().enumerate() {
+                if change.last_surviving_message_uid.as_ref() == Some(uid) {
+                    return Ok((from_leaf + offset > 0).then(|| Some(uid.clone())));
+                }
+                if change.removed_uids_complete && !removed.contains(uid.as_str()) {
+                    if from_leaf + offset == 0
+                        && page.iter().any(|uid| removed.contains(uid.as_str()))
+                    {
+                        return Err(PENDING);
+                    }
+                    return Ok((from_leaf + offset > 0).then(|| Some(uid.clone())));
+                }
+            }
+            if page.len() < 128 {
+                return if change.removed_uids_complete
+                    || change.last_surviving_message_uid.is_none()
+                {
+                    Ok((from_leaf + page.len() > 0).then_some(None))
+                } else {
+                    Err(PENDING)
+                };
+            }
+            from_leaf += page.len();
+        }
+    }
+
+    fn apply_rewind(
+        instance: &Instance,
+        owner: OwnerId,
+        request: &SourceRequest,
+        event_id: &str,
+        head: &mut SourceHead,
+        cut: &PendingRewind,
+    ) -> Result<(), HttpError> {
+        let receipt = instance
+            .apply_hermes_copy_source_change(
+                owner,
+                &scope(request)?,
+                head.native_digest,
+                event_id,
+                HermesCopySourceChange::Rewind {
+                    last_surviving_message_uid: cut.retained_message_uid.clone(),
+                },
+            )
+            .map_err(|_| PENDING)?;
+        head.native_digest = receipt.resulting_head_sha256.ok_or(UNAVAILABLE)?;
+        if let Some(index) = head
+            .evidence
+            .iter()
+            .position(|row| Some(&row.uid) == cut.retained_message_uid.as_ref())
+        {
+            head.evidence.truncate(index + 1);
+            head.rewind_anchor = None;
+        } else {
+            head.evidence.clear();
+            head.rewind_anchor.clone_from(&cut.retained_message_uid);
         }
         Ok(())
     }
@@ -529,22 +751,25 @@ impl SourceService {
         &self,
         session: &str,
         runtimes: &mut RuntimeRegistry,
-    ) -> Result<SourceHead, HttpError> {
+    ) -> Result<Option<SourceHead>, HttpError> {
         let state = self.store.read(&self.store.path(session))?;
-        if state.terminal {
+        if state.terminal && !state.terminal_acknowledged {
             return Err(TERMINAL);
         }
-        if state.stale
-            || runtimes
-                .has_fence("hermes", session)
-                .map_err(|_| UNAVAILABLE)?
+        if !state.terminal_acknowledged
+            && (state.stale
+                || runtimes
+                    .has_fence("hermes", session)
+                    .map_err(|_| UNAVAILABLE)?)
         {
             return Err(RECOVERY_REQUIRED);
         }
-        state
-            .accepted
-            .filter(|_| state.available)
-            .ok_or(PROVENANCE_UNAVAILABLE)
+        // This sidecar supplies a wire provenance digest and fences pending
+        // synchronization. Core decides which copied content is current.
+        if state.pending.is_some() {
+            return Err(PENDING);
+        }
+        Ok(state.accepted)
     }
 
     pub(crate) fn dashboard_provenance(
@@ -562,8 +787,7 @@ impl SourceService {
         if scope.conversation_id() != turn.conversation_id {
             return Err("unauthorized");
         }
-        let head = self
-            .accepted_source_head(session, runtimes)
+        self.accepted_source_head(session, runtimes)
             .map_err(|error| match error.code() {
                 "source_terminal" => "deleted",
                 "source_reconciliation_required" => "stale",
@@ -576,16 +800,14 @@ impl SourceService {
         if expected_owner != owner {
             return Err("unauthorized");
         }
-        // Root owns the immutable imported turn. The host's latest source head
-        // is a bounded overlap window, not an index of every older imported turn.
-        // Require the exact imported node and a live signed source head.
+        // Core resolves the exact imported node and its removal cut. The
+        // host authenticates the route and fences removal still being synced.
         if imported.format != "hermes-source-copied-snapshot-v1"
             || imported.message_id != turn.node_id
             || !matches!(&turn.availability, SourceAvailability::Available)
         {
             return Err("missing");
         }
-        let _ = head;
         Ok(())
     }
 
@@ -705,7 +927,16 @@ fn overlap(previous: &SourceHead, snapshot: &Snapshot) -> Option<usize> {
     if previous.branch != snapshot.branch {
         return None;
     }
-    let leaf = previous.evidence.last()?;
+    let Some(leaf) = previous.evidence.last() else {
+        return match previous.rewind_anchor.as_deref() {
+            Some(anchor) => snapshot
+                .evidence
+                .iter()
+                .position(|row| row.uid == anchor)
+                .map(|index| index + 1),
+            None => Some(0),
+        };
+    };
     let matched = snapshot
         .evidence
         .iter()
@@ -713,6 +944,26 @@ fn overlap(previous: &SourceHead, snapshot: &Snapshot) -> Option<usize> {
         + 1;
     let prefix: &[Evidence] = snapshot.evidence.get(..matched)?;
     previous.evidence.ends_with(prefix).then_some(matched)
+}
+
+fn copied_plan(
+    scope: HermesCopyScope,
+    branch_id: Option<String>,
+    source_revision: Option<String>,
+    messages: Vec<reliquary_memory::HermesCopiedMessage>,
+    previous: Option<&SourceHead>,
+) -> Result<NativeImportPlan, HttpError> {
+    let native = HermesCopiedSnapshot {
+        scope,
+        branch_id,
+        source_revision,
+        messages,
+    };
+    match previous {
+        Some(head) => NativeImportPlan::from_hermes_copy_extension(native, head.native_digest),
+        None => NativeImportPlan::from_hermes_copy(native),
+    }
+    .map_err(|_| INVALID)
 }
 
 fn scope(request: &SourceRequest) -> Result<HermesCopyScope, HttpError> {
@@ -724,8 +975,16 @@ fn verify_key(request: &SourceRequest, digest: Option<&str>) -> Result<(), HttpE
     let kind = match request.operation {
         SourceAction::Snapshot | SourceAction::ManualSnapshot => "snapshot",
         SourceAction::Invalidate => "invalidate",
+        SourceAction::Rewind => "rewind",
         SourceAction::Terminal => "terminal",
     };
+    let change_digest = if request.operation == SourceAction::Rewind {
+        let raw = serde_json::to_vec(&request.arguments).map_err(|_| INVALID)?;
+        Some(hex(&Sha256::digest(raw)))
+    } else {
+        None
+    };
+    let digest = change_digest.as_deref().or(digest);
     let mut parts = vec![
         json!("hermes-source-outbox-v1"),
         json!(request.profile_id),

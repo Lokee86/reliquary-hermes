@@ -691,7 +691,9 @@ impl Service {
             return Err(HttpError::new(409, "source_fence_epoch_stale", false));
         }
 
-        let terminal = request.operation == SourceAction::Terminal;
+        let source_removed = request.operation == SourceAction::Rewind
+            || (request.operation == SourceAction::Terminal
+                && request.arguments["reason"] == "delete");
         let invalidate_retrieval = !request.operation.is_snapshot();
         let reconcile = request.fence_epoch.is_some();
         let session_id = request.session_id.clone();
@@ -704,9 +706,8 @@ impl Service {
                 .clear_fence("hermes", &session_id, eligible_epoch)
                 .map_err(|_| UNAVAILABLE)?;
         }
-        // An authenticated terminal notice can settle the runtime fence once
-        // the source tombstone is durable, even if native maintenance is pending.
-        if terminal && sources.is_terminal(&session_id)? {
+        // Clear the transient fence only after the durable source change is acknowledged.
+        if source_removed && response.is_ok() {
             let current = runtimes
                 .current_fence_epoch("hermes", &session_id)
                 .map_err(runtime_error)?;

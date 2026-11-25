@@ -9,7 +9,8 @@ pub use reliquary_runtime_gateway::ArchiveVectorPublication as NativeImportArchi
 pub use source::{
     HermesCopiedAuthor, HermesCopiedEcho, HermesCopiedEchoKind, HermesCopiedMessage,
     HermesCopiedRole, HermesCopiedSnapshot, HermesCopiedSource, HermesCopiedSourceTurn,
-    HermesCopiedToolOutcome, HermesCopyScope, NativeImportCoverage, NativeImportFormat,
+    HermesCopiedToolOutcome, HermesCopyScope, HermesCopySourceChange,
+    HermesCopySourceChangeReceipt, NativeImportCoverage, NativeImportFormat,
     NativeImportParentMapping, NativeImportSourceError, NativeImportStageResult, NativeImportState,
     NativeImportStatus, NativeImportWindow,
 };
@@ -126,7 +127,8 @@ impl Instance {
         )?)
     }
 
-    /// Read an exact inclusive message range from an accepted copied receipt of this principal.
+    /// Read an exact inclusive message range from this principal's copied receipt.
+    /// A current head also admits exact ranges in its surviving ancestry.
     pub fn read_hermes_copy_source(
         &self,
         owner: OwnerId,
@@ -142,6 +144,46 @@ impl Instance {
             source_sha256,
             start_message_uid,
             end_message_uid,
+        )?)
+    }
+
+    /// Page the current copied source's stable message IDs in newest-first order.
+    /// Each page admits up to 128 IDs and checks the exact authorized head again.
+    pub fn read_hermes_copy_active_message_uids(
+        &self,
+        owner: OwnerId,
+        scope: &HermesCopyScope,
+        source_sha256: [u8; 32],
+        from_leaf: usize,
+        limit: usize,
+    ) -> Result<Option<Vec<String>>, ProductError> {
+        self.require_rel_read(owner)?;
+        Ok(self.inner.read_hermes_copy_active_message_uids(
+            owner.into(),
+            scope,
+            source_sha256,
+            from_leaf,
+            limit,
+        )?)
+    }
+
+    /// Apply one committed host deletion or rewind to an accepted copied-source head.
+    /// Retries of the same scoped host event return its original durable receipt.
+    pub fn apply_hermes_copy_source_change(
+        &self,
+        owner: OwnerId,
+        scope: &HermesCopyScope,
+        source_sha256: [u8; 32],
+        event_id: &str,
+        change: HermesCopySourceChange,
+    ) -> Result<HermesCopySourceChangeReceipt, ProductError> {
+        self.require(OwnerGrant::OperateRel(owner))?;
+        Ok(self.inner.apply_hermes_copy_source_change(
+            owner.into(),
+            scope,
+            source_sha256,
+            event_id,
+            change,
         )?)
     }
 
