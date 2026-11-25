@@ -247,7 +247,7 @@ def seed_profile(home, checkout, inference_checkout, binaries, client, cleanup):
     finally:
         if client._process is not None:
             cleanup.callback(stop, client._process)
-    outbox.terminal(PROJECT_SESSION, "archive")
+    outbox.terminal(PROJECT_SESSION, "delete")
     terminal = outbox.next_job(PROJECT_SESSION)
     assert terminal is not None and terminal.kind == "terminal"
     _deliver(outbox, client, terminal)

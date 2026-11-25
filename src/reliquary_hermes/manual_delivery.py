@@ -6,6 +6,7 @@ from time import sleep
 from .client import HostUnavailable
 from .outbox import SourceOutbox, SourceOutboxError
 from .source import SourceSnapshot
+from .source_removals import reconcile_configured_removals
 from .source_worker import SourceWorker
 from .validation import ContractError, identifier, require, sequence
 
@@ -26,7 +27,9 @@ def _outbox(settings):
 
 def ensure_manual_worker(settings, client):
     """Resume only already-confirmed jobs, using an independent client and scoped lease."""
-    if not _outbox(settings).has_pending_manual():
+    outbox = _outbox(settings)
+    reconcile_configured_removals(outbox, settings)
+    if not outbox.has_pending_manual() and not outbox.has_pending_removals():
         return
     key = (settings.state_dir, settings.profile_id, settings.principal_id)
     with _WORKERS_LOCK:
@@ -81,6 +84,7 @@ def queue_imports(settings, client, owner_id: str,
     require(len({batch[0].session_id for batch in batches}) == len(batches),
             "duplicate_manual_import")
     outbox = _outbox(settings)
+    reconcile_configured_removals(outbox, settings)
     results = {}
     current_phy = None
     for batch in batches:

@@ -1,6 +1,7 @@
 """Real registered Hermes ctx.llm, native broker, Root processing and durable replay."""
 
 from contextlib import ExitStack
+from hashlib import sha256
 from itertools import count
 import json
 import os
@@ -19,11 +20,12 @@ from reliquary_hermes import client as client_module
 from reliquary_hermes.client import HostClient, HostUnavailable
 from reliquary_hermes.outbox import SourceOutbox
 from reliquary_hermes.settings import TOKEN_VAR, save_settings
+from reliquary_hermes.source_removals import reconcile_removals
 from reliquary_hermes.validation import canonical, decode
 from test_host_client import TOKEN
 from test_hp03_host import binaries as binaries
 from test_hp03_host import config, owner, stop
-from test_hp04_host import PRINCIPAL, PROFILE, SESSION, TEXT, _queue, _when_ready
+from test_hp04_host import PRINCIPAL, PROFILE, SESSION, TEXT, _queue, _turn, _when_ready
 from test_hp05_retrieval import _dashboard_binding, _dashboard_exchange, _dashboard_status
 
 
@@ -70,6 +72,24 @@ def successful_query(client, turn, text=DEFAULT_QUERY):
     assert isinstance(result, dict) and result["memory_ids"], result
     assert result["provenance"] and result["context"]
     return result
+
+
+def _copied_memories(client):
+    topology, binding = _dashboard_binding(client, SESSION)
+    reply, _ = _dashboard_exchange(client, topology, binding, "ui.memory_list", {
+        "cursor": None, "limit": 10, "filters": {"query": "", "category": None,
+            "memory_type": None, "lifecycle": None, "community_id": None}})
+    assert reply["status"] == "ok", reply
+    return {item["title"]: item for item in reply["result"]["items"]}
+
+
+def _copied_memory_detail(client, memory):
+    topology, binding = _dashboard_binding(client, SESSION)
+    reply, _ = _dashboard_exchange(client, topology, binding, "ui.memory_detail", {
+        "memory_id": memory["memory_id"], "revision": memory["revision"],
+    })
+    assert reply["status"] == "ok", reply
+    return reply["result"]
 
 
 def test_real_hermes_hosted_inference_processing_recall_identity_and_restart(
@@ -213,14 +233,23 @@ def test_real_hermes_hosted_inference_processing_recall_identity_and_restart(
         assert not (state / "processing.json").exists() and not list(home.rglob("*.cfg"))
 
 
+@pytest.mark.parametrize("committed_removals", [False, True], ids=["legacy", "committed"])
 def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
-        tmp_path, inference_checkout, monkeypatch):
+        tmp_path, inference_checkout, monkeypatch, request, committed_removals):
     value = os.environ.get("HP03_HOST_BINARY")
     if not value:
         pytest.skip("Set HP03_HOST_BINARY to the native host built against the pinned Core")
     binary = Path(value).resolve(strict=True)
-    home = tmp_path / "hermes-profile"
-    home.mkdir()
+    cli = os.environ.get("HP03_RELIQUARY_CLI")
+    if committed_removals:
+        checkout = request.getfixturevalue("removal_checkout")
+        monkeypatch.syspath_prepend(str(checkout))
+        import hermes_state
+
+        assert Path(hermes_state.__file__).resolve().parent == checkout
+        session_db = hermes_state.SessionDB
+    home = tmp_path / "profiles" / "hermes-profile"
+    home.mkdir(parents=True)
     rel, phy = tmp_path / "general.rel", tmp_path / "active.phy"
     state = home / "reliquary"
     for role, path in (("main_rel", rel), ("active_phy", phy)):
@@ -243,7 +272,22 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
     challenge = "Lantern release excludes the amber checklist."
     monkeypatch.setitem(TEXT, "appended", distractor)
     monkeypatch.setitem(TEXT, "challenge", challenge)
+    monkeypatch.setitem(TEXT, "fresh", "The Orchid backup gets a weekly smoke test.")
     outbox = SourceOutbox(state, PROFILE, PRINCIPAL)
+    profile_key = PROFILE.encode("ascii")
+    conversation = "hermes-copy:" + sha256(b"reliquary/hermes-copied-conversation/v1\0"
+                                            + len(profile_key).to_bytes(8, "little")
+                                            + profile_key + SESSION.encode("ascii")).hexdigest()
+
+    def append_source(db, uid, position):
+        return db.append_message(SESSION, "user", TEXT[uid], message_uid=uid,
+                                 timestamp=1700000000.25 + position)
+
+    if committed_removals:
+        with session_db(home / "state.db") as db:
+            db.create_session(SESSION, source="cli")
+            append_source(db, "accepted", 0)
+            append_source(db, "appended", 1)
     query_terms = set(re.findall(r"[^\W_]+", paraphrase.casefold()))
     assert query_terms.isdisjoint(re.findall(r"[^\W_]+", f"{claim} {source}".casefold()))
 
@@ -277,11 +321,7 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
         job = _queue(outbox, ["accepted", "appended"])
         assert outbox.acknowledge(job, _when_ready(client, job))
         wait_for(lambda: client.read_source_status(SESSION)["state"] == "complete", diagnostic=diagnostic)
-        topology, binding = _dashboard_binding(client, SESSION)
-        listed, _ = _dashboard_exchange(client, topology, binding, "ui.memory_list", {
-            "cursor": None, "limit": 10, "filters": {"query": "", "category": None,
-                "memory_type": None, "lifecycle": None, "community_id": None}})
-        memory = next(item for item in listed["result"]["items"] if item["title"] == "accepted")
+        memory = _copied_memories(client)["accepted"]
         assert model["native_calls"] == []
         assert worker_command(worker, "stop")["registered"] is False
         discovery = state / "discovery.json"
@@ -346,6 +386,20 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
         mixed = successful_query(reader, "perception-mixed", paraphrase)
         assert memory["memory_id"] in mixed["memory_ids"] and mixed["observations"] == [observation]
 
+        if committed_removals:
+            with session_db(home / "state.db") as db:
+                assert db.set_session_archived(SESSION, True)
+                reconcile_removals(outbox, home)
+                assert outbox.next_job() is None
+                archived = successful_query(reader, "perception-archived", paraphrase)
+                assert memory["memory_id"] in archived["memory_ids"]
+                assert archived["observations"] == [observation]
+                assert _copied_memory_detail(reader, memory)["provenance"][0]["message_uid"] == "accepted"
+                if cli:
+                    assert _turn(cli, rel, conversation, "accepted")["availability"] == "available"
+                assert db.set_session_archived(SESSION, False)
+                challenge_row = append_source(db, "challenge", 2)
+
         # Core publishes Pending before routing the challenge to review Verify.
         # Leave that review unresolved while the same signed query retrieves a Memory.
         changed = _queue(outbox, ["accepted", "appended", "challenge"])
@@ -367,12 +421,70 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
         reader = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
         reader.attach(SESSION)
         wait_for(observation_query, diagnostic=diagnostic)
+        if committed_removals:
+            withdrawn = _copied_memories(reader)["challenge"]
+            assert _copied_memory_detail(reader, withdrawn)["provenance"][0]["message_uid"] == "challenge"
+            assert reader.prepare_retrieval(query_request("perception-before-rewind", paraphrase))
+            with session_db(home / "state.db") as db:
+                assert db.rewind_to_message(SESSION, challenge_row)["rewound_count"] == 1
+            reconcile_removals(outbox, home)
+            rewind = outbox.next_job(SESSION)
+            assert rewind.kind == "rewind"
+            assert decode(rewind.removal_json)["removed_message_uids"] == ["challenge"]
+            receipt = _when_ready(reader, rewind)
+            # Drop the acknowledgment, restart the host, and replay the exact
+            # local job. Core must return the same receipt and cut.
+            assert worker_command(worker, "stop")["registered"] is False
+            wait_for(lambda: not discovery.exists(), diagnostic=diagnostic)
+            assert worker_command(worker, "start")["registered"] is True
+            wait_for(discovery.exists, diagnostic=diagnostic)
+            reader = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
+            reader.attach(SESSION)
+            outbox = SourceOutbox(state, PROFILE, PRINCIPAL)
+            reconcile_removals(outbox, home)
+            assert outbox.next_job(SESSION) == rewind
+            assert _when_ready(reader, rewind) == receipt
+            assert outbox.acknowledge(rewind, receipt)
+            assert outbox.next_job() is None
+            assert _copied_memory_detail(reader, withdrawn)["body"]["content"] is None
+            assert _copied_memory_detail(reader, memory)["body"]["content"] == source
+            if cli:
+                assert _turn(cli, rel, conversation, "challenge")["content"] is None
+                assert _turn(cli, rel, conversation, "accepted")["content"] == source
+            model["approve_memories"] = True
+            retained = successful_query(reader, "perception-after-rewind", paraphrase)
+            assert memory["memory_id"] in retained["memory_ids"] and challenge not in retained["context"]
+            with session_db(home / "state.db") as db:
+                append_source(db, "fresh", 2)
+            extension = _queue(outbox, ["accepted", "appended", "fresh"])
+            assert outbox.acknowledge(extension, _when_ready(reader, extension))
+            wait_for(lambda: reader.read_source_status(SESSION)["state"] == "complete", diagnostic=diagnostic)
+            fresh = _copied_memories(reader)["fresh"]
+            assert _copied_memory_detail(reader, fresh)["provenance"][0]["message_uid"] == "fresh"
+            if cli:
+                assert _turn(cli, rel, conversation, "fresh")["content"] == TEXT["fresh"]
+
         assert reader.prepare_retrieval(query_request("perception-before-deletion", paraphrase))
-        outbox.terminal(SESSION, "delete")
+        if committed_removals:
+            with session_db(home / "state.db") as db:
+                assert db.set_session_archived(SESSION, True)
+                assert db.delete_session(SESSION)
+            reconcile_removals(outbox, home)
+        else:
+            outbox.terminal(SESSION, "delete")
         terminal = outbox.next_job(SESSION)
+        assert terminal.kind == "terminal" and terminal.reason == "delete"
         assert outbox.acknowledge(terminal, _when_ready(reader, terminal))
         rejected = query(reader, "perception-before-deletion", paraphrase)
-        assert rejected == "source_terminal", rejected
+        assert isinstance(rejected, str) and rejected in {
+            "source_terminal", "no_recall_results", "retrieval_cut_stale",
+        }, rejected
+        if committed_removals:
+            assert _copied_memory_detail(reader, memory)["body"]["content"] is None
+            assert _copied_memory_detail(reader, fresh)["body"]["content"] is None
+            if cli:
+                assert all(_turn(cli, rel, conversation, uid)["content"] is None
+                           for uid in ("accepted", "appended", "challenge", "fresh"))
         assert phy.read_bytes() == phy_bytes
         assert NATIVE_DECISION_KEY not in (home / "hosted-worker.log").read_text(encoding="utf-8")
         assert worker_command(worker, "stop")["registered"] is False

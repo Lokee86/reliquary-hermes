@@ -7,10 +7,12 @@ from agent.memory_provider import MemoryProvider, RecallStatus, spawn_context_th
 
 from .capture_policy import capture_cutoff, capture_eligibility
 from .client import HostClient, HostUnavailable
+from .outbox import REMOVAL_PENDING
 from .projects import routing_available
 from .settings import profile_home, profile_setup_lock, read_settings, read_token
 from .setup import cli_setup
 from .source_capture import capture_snapshot
+from .source_removals import removals_supported
 from .source_worker import SourceWorker
 from .manual_delivery import ensure_manual_worker
 from .tools import tool_schemas
@@ -70,7 +72,8 @@ class ReliquaryMemoryProvider(MemoryProvider):
     @property
     def sync_status(self):
         with self._lock:
-            return self._source.status if self._sync_status is None else self._sync_status
+            status = self._source.status if self._source is not None else None
+            return status if self._sync_status is None or status == REMOVAL_PENDING else self._sync_status
 
     @property
     def runtime_lease_id(self):
@@ -254,7 +257,10 @@ class ReliquaryMemoryProvider(MemoryProvider):
                 project_id = kwargs.get("session_project_id", project_id)
             self._queue_attach(new_session_id, project_id, check_capture=True)
         if fence:
-            source.invalidate(prior)
+            if rewound and removals_supported():
+                source.observe_committed_rewind(prior)
+            else:
+                source.invalidate(prior)
 
     def on_turn_start(self, turn_number, message, **kwargs):
         with self._lock:
@@ -293,7 +299,9 @@ class ReliquaryMemoryProvider(MemoryProvider):
                                                   request_id=prepared["request_id"] if prepared else None, current_turn=True)
         if prepared is not None:
             raw = prepared["raw"]
+        source, cut = self._source_disclosure()
         response = client.request(raw)
+        self._check_source_disclosure(source, cut)
         if response.status != "ok":
             with self._lock:
                 if (self._scope_epoch == epoch and self._session_id == session_id and
@@ -314,6 +322,16 @@ class ReliquaryMemoryProvider(MemoryProvider):
             if self._prefetch is prepared:
                 self._prefetch = None
         return context, recall
+
+    def _source_disclosure(self):
+        with self._lock:
+            source = self._source
+        return source, source.disclosure_cut() if source is not None else None
+
+    @staticmethod
+    def _check_source_disclosure(source, cut):
+        if source is not None and cut != source.disclosure_cut():
+            raise HostUnavailable(REMOVAL_PENDING)
 
     def prefetch(self, query, *, session_id=""):
         recall_generation = None
@@ -420,7 +438,9 @@ class ReliquaryMemoryProvider(MemoryProvider):
             with self._lock:
                 turn_id = self._turn_id
             client, raw, epoch = self._request_bytes(operation, args, session_id=session_id, turn_id=turn_id, current_turn=True)
+            source, cut = self._source_disclosure()
             response = client.request(raw, recall_tool=True)
+            self._check_source_disclosure(source, cut)
             with self._lock:
                 if (self._scope_epoch != epoch or self._session_id != session_id or
                         self._turn_id != turn_id or self._binding is None or

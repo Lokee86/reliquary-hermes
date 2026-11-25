@@ -1,6 +1,7 @@
 """Pinned Hermes source capture and cold lifecycle delivery evidence."""
 
 import importlib.metadata
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -8,7 +9,8 @@ import pytest
 from reliquary_hermes.outbox import SourceOutbox, SourceOutboxError
 from reliquary_hermes.source_capture import capture_snapshot
 from reliquary_hermes.source_observer import OBSERVER_NAME, on_session_delete
-from reliquary_hermes.validation import ContractError, canonical, content_digest
+from reliquary_hermes.source_removals import reconcile_removals, removals_supported
+from reliquary_hermes.validation import ContractError, canonical, content_digest, decode
 
 
 def message(uid="row-a", **changes):
@@ -55,7 +57,7 @@ def _configure_scope(home, profile_id):
     return SourceOutbox(state, profile_id, "operator")
 
 
-def test_pinned_cold_plugin_discovery_fences_committed_archive_and_delete(pinned_checkout, tmp_path, monkeypatch):
+def test_pinned_cold_plugin_discovery_fences_only_delete(pinned_checkout, tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(pinned_checkout))
     from hermes_cli.config import save_config
     from hermes_cli.plugins import get_plugin_manager
@@ -80,12 +82,12 @@ def test_pinned_cold_plugin_discovery_fences_committed_archive_and_delete(pinned
             with SessionDB(home / "state.db") as db:
                 db.create_session(session, source="cli")
                 assert (db.set_session_archived(session, True) if archive else db.delete_session(session))
-            job = outbox.next_job(session)
-            assert (job.kind, job.session_id) == ("terminal", session)
             if archive:
+                assert outbox.next_job(session).kind == "snapshot"
                 with SessionDB(home / "state.db") as db:
                     assert db.delete_session(session)
-                assert outbox.next_job(session) == job
+            job = outbox.next_job(session)
+            assert (job.kind, job.session_id, job.reason) == ("terminal", session, "delete")
             with pytest.raises(SourceOutboxError):
                 outbox.enqueue(snapshot, generation=outbox.generation(session))
         bulk = ["bulk-a", "bulk-b"]
@@ -99,6 +101,48 @@ def test_pinned_cold_plugin_discovery_fences_committed_archive_and_delete(pinned
         assert manager._discovered
         on_session_delete(session_id="other", reason="delete", profile="different-hermes-home")
         assert outbox.next_job("other") is None
+    finally:
+        reset_hermes_home_override(scope)
+
+
+def test_exact_hermes_removal_pin_replays_missed_hooks_after_restart(removal_checkout, tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(removal_checkout))
+    import hermes_state
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from hermes_cli import lifecycle
+
+    assert Path(hermes_state.__file__).resolve().parent == removal_checkout
+    assert removals_supported()
+    monkeypatch.setattr(lifecycle, "invoke_hook", lambda *args, **kwargs: None)
+    home = tmp_path / "profiles" / "affected"
+    outbox = _configure_scope(home, "mapped-profile")
+    session = "source-chat"
+    scope = set_hermes_home_override(home)
+    try:
+        with hermes_state.SessionDB(home / "state.db") as db:
+            db.create_session(session, source="cli")
+            for role in ("user", "assistant", "user"):
+                db.append_message(session, role, "same text")
+            before = db.get_messages(session)
+            outbox.enqueue(capture_snapshot("mapped-profile", session, before), generation=0)
+            assert db.set_session_archived(session, True)
+            reconcile_removals(outbox, home)
+            assert outbox.next_job(session).kind == "snapshot"
+            assert db.set_session_archived(session, False)
+            db.rewind_user_turn(session, -1)
+            assert db.delete_session(session)
+        assert outbox.next_job().kind == "snapshot"
+        reopened = SourceOutbox(home / "reliquary", "mapped-profile", "operator")
+        reconcile_removals(reopened, home)
+        rewind = reopened.next_job()
+        assert rewind.kind == "rewind"
+        args = decode(rewind.removal_json)
+        assert args["last_surviving_message_uid"] == before[1]["message_uid"]
+        assert args["removed_message_uids"] == [before[2]["message_uid"]]
+        reconcile_removals(reopened, home)
+        assert reopened.next_job() == rewind
+        assert reopened.acknowledge(rewind, "a" * 64)
+        assert reopened.next_job().reason == "delete"
     finally:
         reset_hermes_home_override(scope)
 

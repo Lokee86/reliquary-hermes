@@ -7,7 +7,8 @@ from time import monotonic
 from agent.memory_provider import spawn_context_thread
 
 from .client import HostUnavailable
-from .outbox import SourceOutbox, SourceOutboxError
+from .outbox import REMOVAL_PENDING, SourceOutbox, SourceOutboxError
+from .source_removals import reconcile_configured_removals
 from .validation import ContractError
 
 
@@ -24,7 +25,9 @@ class SourceWorker:
         self._session = None
         self._capture_allowed = False
         self._generation = None
+        self._capture_block = None
         self._fenced = set()
+        self._recheck = set()
         self._runtime_lease = None
         self._fence_epochs = {}
         self._stopped = False
@@ -49,6 +52,7 @@ class SourceWorker:
             if (self._session, self._capture_allowed) != (session_id, capture_allowed):
                 self._session, self._capture_allowed = session_id, capture_allowed
                 self._generation = None
+                self._capture_block = None
                 self._status = "source_ingestion_unavailable"
         self._wake.set()
 
@@ -68,8 +72,8 @@ class SourceWorker:
         with self._lock:
             if self._stopped or not self._capture_allowed or snapshot.session_id != self._session:
                 return
-            if self._generation or snapshot.session_id in self._fenced:
-                self._status = "source_reconciliation_required"
+            if self._capture_block is not None or snapshot.session_id in self._fenced:
+                self._status = self._capture_block or "source_reconciliation_required"
                 return
             if len(self._captures) >= 8:
                 self._status = "source_outbox_full"
@@ -78,7 +82,7 @@ class SourceWorker:
             candidate = (self._runtime_lease, epoch) if epoch is not None else (None, None)
             # Hermes may commit its session row during the first turn. If activation
             # just became possible, enqueue still checks the initial generation atomically.
-            self._captures.append((snapshot, 0, *candidate))
+            self._captures.append((snapshot, self._generation or 0, *candidate))
             self._status = "source_reconciliation_required" if epoch is not None else "source_capture_pending"
         self._wake.set()
 
@@ -96,13 +100,30 @@ class SourceWorker:
             with self._lock:
                 if self._session == session_id:
                     self._generation = generation
+                    self._capture_block = "source_reconciliation_required"
                 self._fenced.discard(session_id)
         except (OSError, SourceOutboxError, ContractError):
             self._report(session_id, "source_ingestion_unavailable")
         self._wake.set()
 
+    def observe_committed_rewind(self, session_id):
+        """The memory callback wakes replay without making the rewind flag an authority."""
+        with self._lock:
+            self._recheck.add(session_id)
+        self._wake.set()
+
     def unavailable(self, session_id):
         self._report(session_id, "source_ingestion_unavailable")
+
+    def disclosure_cut(self):
+        """Fence a selection until the native host has acknowledged known removals."""
+        try:
+            outbox = self._outbox()
+            reconcile_configured_removals(outbox, self._settings)
+            return outbox.disclosure_cut()
+        except (OSError, SourceOutboxError, ContractError) as error:
+            raise HostUnavailable(str(error) if isinstance(error, SourceOutboxError)
+                                  else "source_removal_authority_unavailable") from None
 
     def stop(self):
         with self._lock:
@@ -134,6 +155,18 @@ class SourceWorker:
             with self._lock:
                 if self._captures and self._captures[0][0] is snapshot:
                     self._captures.popleft()
+
+    def _update_capture(self, outbox, session):
+        generation, blocked = outbox.capture_state(session)
+        with self._lock:
+            if session != self._session or not self._capture_allowed or session in self._fenced:
+                return
+            if (generation, blocked) != (self._generation, self._capture_block):
+                self._status = blocked or (
+                    "source_reconciliation_required" if session in self._fence_epochs else "source_ready")
+                self._captures = deque(item for item in self._captures if
+                                       item[0].session_id != session or (item[1] == generation and not blocked))
+            self._generation, self._capture_block = generation, blocked
 
     def _deliver(self, outbox):
         for _ in range(8):
@@ -171,6 +204,9 @@ class SourceWorker:
             try:
                 receipt = self._client.deliver_source_job(job)
             except HostUnavailable as error:
+                if job.kind in {"rewind", "terminal"}:
+                    self._report(job.session_id, REMOVAL_PENDING)
+                    return
                 if job.lease_id is not None and str(error) in {
                         "source_revision_unreconciled", "source_fence_epoch_stale",
                         "source_terminal", "runtime_lease_stale"}:
@@ -180,15 +216,19 @@ class SourceWorker:
                 self._report(job.session_id, str(error))
                 return
             if outbox.acknowledge(job, receipt):
+                if job.kind in {"rewind", "terminal"}:
+                    self._update_capture(outbox, job.session_id)
                 if job.lease_id is not None:
                     with self._lock:
                         if self._fence_epochs.get(job.session_id) == job.fence_epoch:
                             self._fence_epochs.pop(job.session_id, None)
-                self._report(job.session_id, {
+                status = {
                     "snapshot": "source_accepted_durable",
                     "invalidate": "source_reconciliation_required",
                     "terminal": "source_terminal",
-                }[job.kind])
+                }.get(job.kind)
+                if status is not None:
+                    self._report(job.session_id, status)
 
     def _deliver_manual(self, outbox, job):
         client = self._client
@@ -232,7 +272,7 @@ class SourceWorker:
                 state = "unavailable"
             if state != "processing":
                 self._processing.discard(session_id)
-        if not self._processing and not outbox.has_pending_manual():
+        if not self._processing and not outbox.has_pending_manual() and not outbox.has_pending_removals():
             return False
         now = monotonic()
         if self._client.runtime_lease_id is not None and now - self._last_heartbeat >= 12:
@@ -261,14 +301,12 @@ class SourceWorker:
             try:
                 if outbox is None:
                     outbox = self._outbox()
+                reconcile_configured_removals(outbox, self._settings)
+                with self._lock:
+                    self._fenced.difference_update(self._recheck)
+                    self._recheck.clear()
                 if session is not None and capture_allowed:
-                    generation = outbox.generation(session)
-                    with self._lock:
-                        if session == self._session and self._capture_allowed and session not in self._fenced:
-                            if self._generation is None:
-                                self._status = ("source_reconciliation_required"
-                                                if generation or session in self._fence_epochs else "source_ready")
-                            self._generation = generation
+                    self._update_capture(outbox, session)
                 self._persist(outbox)
                 if not stopped:
                     self._deliver(outbox)

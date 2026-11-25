@@ -103,7 +103,7 @@ Each message has exact `message_uid`, original `role`, original epoch `timestamp
 
 The SHA-256 digest is over canonical UTF-8 JSON of `{profile_id, session_id, branch_id, source_revision, messages}`. Canonical JSON sorts keys, uses compact separators and rejects nonfinite numbers. It authenticates consistency only, not provenance or authorization. This digest covers the permitted privacy-filtered copy, not a guessed raw canonical source. `SourceSnapshot.parse` returns an untrusted shape-checked candidate. The authority marker, claimed current availability and caller-computed digest cannot prove Hermes provenance. No trusted adapter registration/source proof path exists in HP01; actual acceptance must remain unavailable until HP04 implements it.
 
-The copied snapshot's `availability` is `current`, `unavailable`, `stale` or `deleted`. Noncurrent snapshot DTOs have no messages. Terminal archive/delete transitions use the host-only lifecycle boundary below. Copied input preserves Hermes as the authority for session rename, deletion, rewind and resume.
+The copied snapshot's `availability` is `current`, `unavailable`, `stale` or `deleted`. Noncurrent snapshot DTOs have no messages. Committed deletes and rewinds use the host-only lifecycle boundary below. Copied input preserves Hermes as the authority for session rename, deletion, rewind and resume.
 
 The callback can omit branch, revision and historical author attribution. Missing metadata remains unknown. Only exact trusted source attribution to the selected human actor can route that row to the active PHY. The callback's current `turn_author` cannot select a PHY or attribute older rows. Unknown, mixed, unverified and bot-authored content routes to the bound REL. Bot-profile-to-PHY mapping is deferred.
 
@@ -123,9 +123,16 @@ A confirmed manual import uses the same copied snapshot and outbox. Hermes v1 hi
 
 `POST /v1/source` uses the same instance-bound transport proof and requires the configured profile and principal. The provider invokes this private channel from its filtered Hermes callback and the committed lifecycle observer. The profile credential authorizes this adapter. A JSON authority claim in a model-facing request conveys no source grant.
 
-The exact envelope carries `protocol_version`, `profile_id`, `principal_id`, `session_id`, integer `generation`, `idempotency_key`, `operation` and `arguments`. A snapshot sends the original canonical copied view as `source_json` and its SHA-256 as `snapshot_digest`. Invalidation sends an empty object. A terminal operation sends the committed `archive` or `delete` reason. Both reasons share one terminal identity for the logical session. The generation fences adapter work and has no meaning as a Hermes source revision.
+The exact envelope carries `protocol_version`, `profile_id`, `principal_id`, `session_id`, integer `generation`, `idempotency_key`, `operation` and `arguments`. A snapshot sends the original canonical copied view as `source_json` and its SHA-256 as `snapshot_digest`. Invalidation sends an empty object. A terminal operation sends the committed `delete` reason. Archive and restore preserve the copy. The generation fences adapter work and has no meaning as a Hermes source revision.
 
-The Hermes provider supplies its runtime `lease_id` for snapshot delivery. During crash recovery, a fresh provider transcript callback also supplies the observed `fence_epoch`. Ordinary outbox keys stay unchanged. Reconciliation attempts have a distinct durable key bound to the exact lease and epoch. Ordinary replay is fenced before receipt lookup. The recovery snapshot must prove continuity with the latest accepted head, even if an older receipt matches it. Archive and delete remain terminal throughout recovery.
+A rewind sends `event_id`, `previous_head_message_uid`, `last_surviving_message_uid`, and `removed_message_uids`.
+The two head fields can be null. A large suffix sends a bounded list with `removed_uids_complete=false`;
+the adapter prioritizes known copied heads that the host journal confirms were removed. A rewind
+increments the local generation and its idempotency key includes the digest of those exact arguments.
+The adapter records the journal cursor and pending job in one transaction, replays a source's removals
+in order, and holds capture and provider recall while an acknowledged owner cut is pending.
+
+The Hermes provider supplies its runtime `lease_id` for snapshot delivery. During crash recovery, a fresh provider transcript callback also supplies the observed `fence_epoch`. Ordinary outbox keys stay unchanged. Reconciliation attempts have a distinct durable key bound to the exact lease and epoch. Ordinary replay is fenced before receipt lookup. The recovery snapshot must prove continuity with the latest accepted head, even if an older receipt matches it. A committed deletion remains terminal throughout recovery.
 
 The service verifies the original source bytes, bounds and authenticated session route before staging through public Root. It retains the original epoch timestamp in the copied digest and converts its decimal value once to the native nanosecond field. An append requires an exact overlap with the previously accepted tail. The Root extension separately checks its completed predecessor receipt, current branch head and new logical IDs. A duplicate returns its recorded native receipt. A changed or unverifiable prefix fences the source as unreconciled.
 
@@ -135,7 +142,10 @@ A durable response binds `session_id`, `generation`, `idempotency_key` and `rece
 
 The [stable host audit](host-audit.md) pins HP04 verification to Hermes `v0.23.0` at `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19`. The source-copy, tombstone, replay and runtime recovery gates use that exact checkout.
 
-A `snapshot_submit` request carries a copied view. Source lifecycle authority belongs to the authenticated adapter. At the pinned Hermes revision the public plugin observer receives `on_session_delete` after a delete or an explicit archive commits, distinguished by the reason. HP04 must bind the event to trusted profile and logical session identity, reconcile affected source bindings before serving evidence, and handle retries or restarts without replaying stale jobs. See the [pinned host audit](host-audit.md) for the precise observer coverage.
+A `snapshot_submit` request carries a copied view. The profiled adapter obtains removal authority
+from the committed Hermes journal. Its legacy fallback accepts the positively committed delete
+hook on older hosts. The delivery scope binds the exact profile, principal, and copied session. See
+the [pinned host audit](host-audit.md) for observer coverage.
 
 Archive and delete both tombstone the corresponding copied source. An older queued import, duplicate notification, fresh local epoch or normal resync cannot revive it. Tombstones affect only the corresponding source scope. Reliquary's lifecycle rules govern derived Memories and its maintenance workflow owns pruning. Stale, rewound and temporarily unavailable sources instead require verified reconciliation. Advancing the scoped invalidation epoch rejects stale jobs and recall even after availability returns. The fixture models these decisions in memory and HP04 owns persistent lifecycle, transport and race tests.
 

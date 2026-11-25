@@ -118,7 +118,7 @@ def test_hp04_crash_before_ack_replays_exact_receipt_and_terminal_fence(tmp_path
 
         # A separate adapter can enqueue the terminal notice while the service is down.
         cold = SourceOutbox(state, PROFILE, PRINCIPAL)
-        key = cold.terminal(SESSION, "archive")
+        key = cold.terminal(SESSION, "delete")
         assert cold.terminal(SESSION, "delete") == key
         terminal = cold.next_job(SESSION)
         with pytest.raises(SourceOutboxError, match="source_terminal"):

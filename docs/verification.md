@@ -38,6 +38,14 @@ The public package's approved vendored Root baseline passed all 36 Switchboard t
 
 The signed Perception fixture `test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart` uses the native host and the exact Hermes inference checkout. It starts a disposable profile with a loopback inference fixture, verifies an Observation before a chat attaches, and checks its exact copied-source citation after a clean reopen. It exercises Observation-only, mixed, pending-review, and deleted-source returns. Set `HP03_HOST_BINARY` and `HP_INFERENCE_HERMES_CHECKOUT` and run `python -B -m pytest -q --basetemp=.pytest_tmp tests/test_hosted_inference_e2e.py -k native_jev`.
 
+The `[committed]` case also uses the exact Hermes removal checkout from the [host audit](host-audit.md).
+Set `HP_REMOVAL_HERMES_CHECKOUT` and `PYTHONPATH` to that checkout, keep
+`HP_INFERENCE_HERMES_CHECKOUT` on the inference pin. Select `-k 'native_jev and committed'`.
+The signed fixture checks recall and exact copied Memory provenance during archive, after rewind
+and receipt replay across restart, during continued capture, and after whole-chat deletion.
+Set `HP03_RELIQUARY_CLI` to the Core build paired with `HP03_HOST_BINARY` to also check the exact
+Archive turns through the CLI.
+
 On Windows, the signed Perception fixture passed in 27.54 seconds using Core `96c41a2287eac2a8b48a1a6443b339423a4a8ca3` and Hermes `168a923023a7018be3dbf66530531dd20b1834b9`. It recorded one native Verify call. Recall matched the same owner, Observation revision, Memory body and byte range, and copied snapshot digest across a fresh host instance. The host denied the delayed return with `source_terminal` after deletion and the PHY bytes matched. The 13 locked broker tests and 25 focused Python worker checks passed. The Windows package smoke used that same binary and verified a retained PHY revision, a REL write across restart, and preservation of the original PHY hash.
 
 The paraphrase case pairs `Deployment follows golden procedures.` with `The Lantern release uses an amber checklist.` through deterministic embeddings in the same accepted model space. The signed reply includes the Memory owner, ID, revision, body ID, content byte range, and copied snapshot digest. An orthogonal query receives `no_recall_results`. A new copied passage triggers a material challenge and reaches native Verify. The fixture leaves that review unresolved and sends the same paraphrase in a fresh signed turn, which returns the supporting Memory with the Observation withheld.
@@ -124,7 +132,7 @@ All four executable attestations verified at catalog candidate `ad29b22861d49a94
 - Strict bounded request and response DTOs reject spoofed authority, extra fields, malformed wire data and mismatched IDs, cuts or provenance. The retrieval DTO and provider fixtures cover Observation-only context, mixed selections, and rejection of mismatched owner, lineage and evidence ranges. Each selected Memory keeps its correlated source-provenance entry. The signed native `test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart` uses `HP_INFERENCE_HERMES_CHECKOUT` and `HP03_HOST_BINARY` with a loopback model fixture.
 - Provider grants require authenticated profile and principal and a configured session REL. General and project sessions resolve independently of the active PHY. Profile/bot changes preserve the selected PHY's stable user ID. Only exact trusted attribution to that active human can route a source row to the PHY.
 - The fixture queues a bounded copy of filtered source input with exact IDs and timestamps. Bound-source import verifies scopes, digests and row attribution without treating the current speaker as the author of earlier messages. Fixture receipts express replay and revision semantics in memory.
-- Session/branch/rewind changes invalidate scoped recall. Explicit archive and delete mark the same session tombstone, stop recall and reject old or newly scoped replay. Transient invalidation rejects old source epochs after resync.
+- Session and branch changes invalidate scoped recall. Committed delete tombstones the copied source and committed rewind retracts its suffix. Archive leaves recall available. Transient invalidation rejects old source epochs after resync.
 - The dashboard contract distinguishes candidate, selected and returned Memory sets and validates authorized REL/PHY scope, paging, cuts, tombstone state, user edits and bounded graph/provenance reads.
 - Pinned host facts, dependency boundaries and lifecycle coverage are recorded in [host audit](host-audit.md).
 

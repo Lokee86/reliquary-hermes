@@ -77,9 +77,13 @@ HU08 uses Hermes's read-only `SessionDB.get_session` for exact profile, creation
 
 `SessionDB.export_history` verifies ownership, reads the current supported transcript, applies the installed whole-transcript provider scrubber and projects the durable message UID, timestamp, role and content. It omits display-only withheld prompts and other sidecars from the result. It refuses unsupported lineage, missing identity, and histories beyond the verified bound. The public text redactor alone lacks the provider's learned-secret behavior across rows.
 
-The Reliquary effect for a deliberate archive and a delete is the same copied-source tombstone. HP04 owns durable delivery, profile and source binding, catch-up after missed events, and the fence that prevents older queued copies from reviving a source. The pinned observer runs in-process and can fail open. A host notification alone supplies no durable Reliquary checkpoint.
-
-Hermes' reversible idle auto-archive and unarchive remain silent in the stable observer and stay outside the v1 tombstone policy.
+The committed removal authority is audited at Hermes `4f1bf621049ebbf811ed4a3b1cc444c910db5d0f`.
+Its profile-local `SessionDB.committed_transcript_removals` journal records explicit delete and rewind
+in the transcript transaction. A rewind names the stored logical message UIDs and surviving anchor.
+The `on_transcript_removal` hook wakes the observer after commit. The adapter also replays the
+journal on restart and before copying, so a missed callback cannot lose a committed removal.
+Archive and restore retain the copied knowledge. On the older host, the adapter accepts only
+an explicit `reason="delete"` from the legacy post-commit hook.
 
 ## Plugin discovery and actual commands
 

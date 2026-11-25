@@ -10,7 +10,7 @@ Persistent, inspectable memory for Hermes, with source provenance and a relation
 
 - Recall relevant Memories automatically or through `memory_query`, `refine_query`, and `traverse_graph` in Hermes' memory toolset.
 - Browse, search, inspect, edit, and connect Memories in the web dashboard. Explore communities as regions within one relationship graph, with bounded loading, display controls, animation, and saved views.
-- Capture eligible new conversations after enrollment, or explicitly review and import selected existing sessions. Preserve source identity, archive/delete fences, and recovery state.
+- Capture eligible new conversations after enrollment, or explicitly review and import selected existing sessions. Preserve source identity and synchronize committed deletes and rewinds.
 - Keep General and dedicated project REL routing separate when Hermes provides trusted project attribution.
 
 ## Overview and installation
@@ -43,7 +43,7 @@ Project-specific routing and automatic source capture are capability-gated. Host
 - **Files:** reads and writes the explicitly selected REL files, reads the selected PHY, and maintains owner configuration, source copies, queue/recovery data, graph caches, and service coordination files under the active Hermes profile's `reliquary` directory. It does not query Hermes' transcript database directly; permitted history comes through Hermes APIs. The private inference broker has no durable plaintext prompt cache.
 - **Processes and local network:** launches `reliquary-hermes-host` (`reliquary-hermes-host.exe` on Windows) with `--state-dir <profile directory>` as a long-running background process. It binds authenticated HTTP to `127.0.0.1` on an ephemeral port. Setup may launch the same host for validation or creation, or a transient Python/Tk native file chooser on Windows. Native builds run Cargo/Rust and access their package registries. No shell is launched for agent tools.
 - **Provider network:** Processing, retrieval, and optional Perception send bounded queries, source excerpts, and Memory content through the profile's authenticated inference routes and can incur provider charges. A dedicated profile-bound worker services the signed local broker while no chat turn is active. Readiness probes use synthetic text only. The native child receives only the local service token through stdin; it receives no model-provider credentials.
-- **Lifecycle:** the service shares one profile's owner leases and persists queued source copies. Clean detach stops it after its last runtime lease; unresolved crash fences can keep it running for reconciliation. Archive/delete notifications produce terminal source fences. See [recovery and backups](docs/local-service.md).
+- **Lifecycle:** the service shares one profile's owner leases and persists queued source copies. A committed delete tombstones the copy and a rewind retracts the affected suffix. Archive and restore keep the copied knowledge available. See [recovery and backups](docs/local-service.md).
 - **Telemetry:** the plugin includes no telemetry or usage reporting. Hermes' own opt-in metrics are controlled by Hermes.
 
 ## Development and verification

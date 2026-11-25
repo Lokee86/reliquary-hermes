@@ -193,7 +193,7 @@ def test_host_restart_during_reconciliation_advances_fence_epoch(tmp_path, binar
         first.add_runtime_scope(archived)
         outbox.enqueue(capture_snapshot(PROFILE, archived, messages), generation=0)
         archived_copy = outbox.next_job(archived)
-        outbox.terminal(archived, "archive")
+        outbox.terminal(archived, "delete")
         terminal = outbox.next_job(archived)
         assert outbox.acknowledge(terminal, first.deliver_source_job(terminal))
 

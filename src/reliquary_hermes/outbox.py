@@ -9,7 +9,7 @@ import stat
 import time
 
 from .source import SourceSnapshot
-from .validation import MAX_WIRE_BYTES, canonical, choice, content_digest, decode, identifier, integer, require, sequence
+from .validation import MAX_WIRE_BYTES, canonical, choice, content_digest, decode, identifier, integer, obj, require, sequence
 
 
 BACKPRESSURE = "source_outbox_full"
@@ -17,6 +17,8 @@ STALE = "source_generation_stale"
 TERMINAL = "source_terminal"
 UNAVAILABLE = "source_outbox_unavailable"
 MAX_TERMINAL_BATCH = 4096
+MAX_REWIND_UIDS = 4096
+REMOVAL_PENDING = "source_removal_pending"
 _MAX_GENERATION = (1 << 63) - 1
 _MAX_SNAPSHOT_BYTES = MAX_WIRE_BYTES - 4096
 _MAX_PENDING = 64
@@ -55,6 +57,7 @@ class SourceJob:
     fence_epoch: int | None = None
     manual_owner_id: str | None = None
     manual_phy_id: str | None = None
+    removal_json: bytes | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -77,7 +80,7 @@ _SCHEMA = (
     """CREATE TABLE source_jobs (
         sequence INTEGER PRIMARY KEY, key TEXT NOT NULL UNIQUE,
         profile TEXT NOT NULL, principal TEXT NOT NULL, session TEXT NOT NULL,
-        generation INTEGER NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('snapshot', 'invalidate', 'terminal')),
+        generation INTEGER NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('snapshot', 'invalidate', 'terminal', 'rewind')),
         reason TEXT, payload BLOB, snapshot_digest TEXT, last_message_uid TEXT, receipt TEXT,
         lease_id TEXT, fence_epoch INTEGER, manual_owner_id TEXT, manual_phy_id TEXT,
         manual_attempts INTEGER NOT NULL DEFAULT 0, manual_error TEXT, manual_retry_at REAL,
@@ -87,7 +90,43 @@ _SCHEMA = (
         WHERE receipt IS NULL""",
     """CREATE INDEX source_jobs_accepted ON source_jobs(profile, principal, session, sequence)
         WHERE receipt IS NOT NULL""",
+    """CREATE TABLE source_removal_cursor (
+        profile TEXT NOT NULL, principal TEXT NOT NULL, sequence INTEGER NOT NULL, event_id TEXT NOT NULL,
+        PRIMARY KEY(profile, principal)
+    ) WITHOUT ROWID""",
 )
+
+
+def _upgrade_removal_queue(db):
+    db.execute("DROP INDEX source_jobs_pending")
+    db.execute("DROP INDEX source_jobs_accepted")
+    db.execute("ALTER TABLE source_jobs RENAME TO source_jobs_legacy")
+    db.execute(_SCHEMA[1])
+    columns = ", ".join(column["name"] for column in db.execute("PRAGMA table_info(source_jobs)"))
+    db.execute(f"INSERT INTO source_jobs({columns}) SELECT {columns} FROM source_jobs_legacy")
+    db.execute("DROP TABLE source_jobs_legacy")
+    for statement in _SCHEMA[2:]:
+        db.execute(statement)
+    db.execute("PRAGMA user_version = 6")
+
+
+def rewind_arguments(value):
+    fields = {"event_id", "previous_head_message_uid", "last_surviving_message_uid", "removed_message_uids"}
+    if "removed_uids_complete" in value:
+        fields.add("removed_uids_complete")
+        require(value["removed_uids_complete"] is False, "invalid_source_rewind")
+    obj(value, fields)
+    identifier(value["event_id"])
+    for field in ("previous_head_message_uid", "last_surviving_message_uid"):
+        if value[field] is not None:
+            identifier(value[field])
+    removed = sequence(value["removed_message_uids"], MAX_REWIND_UIDS, nonempty=True)
+    for uid in removed:
+        identifier(uid)
+    require(len(set(removed)) == len(removed) and value["last_surviving_message_uid"] not in removed,
+            "invalid_source_rewind")
+    require(len(canonical(value)) <= _MAX_SNAPSHOT_BYTES, "source_wire_limit")
+    return value
 
 
 class SourceOutbox:
@@ -121,8 +160,8 @@ class SourceOutbox:
                 for statement in _SCHEMA:
                     db.execute(statement)
                 db.execute(f"PRAGMA application_id = {_APPLICATION_ID}")
-                db.execute("PRAGMA user_version = 5")
-            elif application != _APPLICATION_ID or not 1 <= version <= 5:
+                db.execute("PRAGMA user_version = 6")
+            elif application != _APPLICATION_ID or not 1 <= version <= 6:
                 raise SourceOutboxError(UNAVAILABLE)
             elif version < 5:
                 if version == 1:
@@ -137,7 +176,8 @@ class SourceOutbox:
                 # NULL preserves the original outbox key. The host resolves
                 # legacy jobs against the profile's pinned initial PHY.
                 db.execute("ALTER TABLE source_jobs ADD COLUMN manual_phy_id TEXT")
-                db.execute("PRAGMA user_version = 5")
+            if 1 <= version < 6:
+                _upgrade_removal_queue(db)
 
     @contextmanager
     def _transaction(self, *, write=False):
@@ -184,6 +224,66 @@ class SourceOutbox:
         with self._transaction() as db:
             return self._state(db, identifier(session_id))[0]
 
+    def _pending_removal(self, db, session_id):
+        return db.execute("""SELECT 1 FROM source_jobs WHERE profile=? AND principal=? AND session=?
+                             AND kind IN ('rewind', 'terminal') AND receipt IS NULL LIMIT 1""",
+                          (*self._scope, session_id)).fetchone() is not None
+
+    def has_pending_removals(self) -> bool:
+        with self._transaction() as db:
+            return self._has_pending_removals(db)
+
+    def _has_pending_removals(self, db):
+        return db.execute("""SELECT 1 FROM source_jobs WHERE profile=? AND principal=?
+                             AND (kind='rewind' OR (kind='terminal' AND reason='delete'))
+                             AND receipt IS NULL LIMIT 1""", self._scope).fetchone() is not None
+
+    def disclosure_cut(self):
+        with self._transaction() as db:
+            if self._has_pending_removals(db):
+                raise SourceOutboxError(REMOVAL_PENDING)
+            local = db.execute("""SELECT COALESCE(MAX(sequence), 0) FROM source_jobs
+                                WHERE profile=? AND principal=? AND (kind='rewind' OR
+                                (kind='terminal' AND reason='delete'))""", self._scope).fetchone()[0]
+            return self._removal_cursor(db), local
+
+    def quarantined_archive_sessions(self):
+        with self._transaction() as db:
+            return [row[0] for row in db.execute(
+                """SELECT session FROM source_jobs WHERE profile=? AND principal=? AND kind='terminal'
+                   AND reason='archive' AND receipt IS NULL""", self._scope)]
+
+    def _release_legacy_archive(self, db, session):
+        # An acknowledged archive may already have tombstoned a copy. Only
+        # pending legacy archive rows can be cleared by current authority.
+        deleted = db.execute("""DELETE FROM source_jobs WHERE profile=? AND principal=? AND session=?
+                                AND kind='terminal' AND reason='archive' AND receipt IS NULL""",
+                             (*self._scope, session)).rowcount
+        if deleted:
+            db.execute("""UPDATE source_state SET terminal_reason=NULL WHERE profile=? AND principal=?
+                          AND session=? AND terminal_reason='archive'""", (*self._scope, session))
+        return bool(deleted)
+
+    def release_legacy_archives(self, live_sessions):
+        if live_sessions:
+            with self._transaction(write=True) as db:
+                for session in live_sessions:
+                    self._release_legacy_archive(db, session)
+
+    def capture_state(self, session_id):
+        """Return the generation plus any local fence against automatic copying."""
+        session = identifier(session_id)
+        with self._transaction() as db:
+            generation, terminal = self._state(db, session)
+            if self._pending_removal(db, session):
+                return generation, REMOVAL_PENDING
+            if terminal is not None:
+                return generation, TERMINAL
+            rewound = db.execute("""SELECT 1 FROM source_jobs WHERE profile=? AND principal=? AND session=?
+                                    AND generation=? AND kind='rewind' AND receipt IS NOT NULL LIMIT 1""",
+                                 (*self._scope, session, generation)).fetchone()
+            return generation, "source_reconciliation_required" if generation and rewound is None else None
+
     def enqueue(self, snapshot: SourceSnapshot, *, generation: int, lease_id: str | None = None,
                 fence_epoch: int | None = None) -> str:
         """Persist a current snapshot for an exact adapter generation."""
@@ -203,6 +303,8 @@ class SourceOutbox:
             current, terminal = self._state(db, session)
             if terminal is not None:
                 raise SourceOutboxError(TERMINAL)
+            if self._pending_removal(db, session):
+                raise SourceOutboxError(REMOVAL_PENDING)
             if current != generation:
                 raise SourceOutboxError(STALE)
             if db.execute("SELECT 1 FROM source_jobs WHERE key=?", (key,)).fetchone():
@@ -278,6 +380,8 @@ class SourceOutbox:
             current, terminal = self._state(db, session)
             if terminal is not None:
                 raise SourceOutboxError(TERMINAL)
+            if self._pending_removal(db, session):
+                raise SourceOutboxError(REMOVAL_PENDING)
             if current != generation:
                 raise SourceOutboxError(STALE)
             prior = db.execute(
@@ -364,20 +468,28 @@ class SourceOutbox:
                 "retryable": _manual_retryable(failed) if failed else False,
                 "status": "failed" if failed else "staged" if complete else "queued"}
 
-    def _fence(self, db, session_id, generation, kind, reason=None):
+    def _fence(self, db, session_id, generation, kind, reason=None, *, arguments=None):
         self._ensure_state(db, session_id)
         db.execute(
             "UPDATE source_state SET generation=?, terminal_reason=? WHERE profile=? AND principal=? AND session=?",
             (generation, reason, *self._scope, session_id),
         )
         db.execute(
-            "DELETE FROM source_jobs WHERE profile=? AND principal=? AND session=? AND receipt IS NULL",
+            """DELETE FROM source_jobs WHERE profile=? AND principal=? AND session=? AND receipt IS NULL
+               AND kind NOT IN ('rewind', 'terminal')""",
             (*self._scope, session_id),
         )
-        key = self._key(kind, session_id, generation)
+        if arguments is None:
+            key = self._key(kind, session_id, generation)
+            payload = last_uid = None
+        else:
+            key = self._key(kind, session_id, generation, content_digest(arguments))
+            payload = canonical(arguments)
+            last_uid = arguments["last_surviving_message_uid"]
         db.execute(
-            "INSERT INTO source_jobs(key, profile, principal, session, generation, kind, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (key, *self._scope, session_id, generation, kind, reason),
+            """INSERT INTO source_jobs(key, profile, principal, session, generation, kind, reason,
+               payload, last_message_uid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (key, *self._scope, session_id, generation, kind, reason, payload, last_uid),
         )
         return key
 
@@ -402,20 +514,82 @@ class SourceOutbox:
         """Commit every terminal fence from one Hermes lifecycle notice together."""
         sessions = [identifier(value) for value in sequence(session_ids, MAX_TERMINAL_BATCH, nonempty=True)]
         require(len(sessions) == len(set(sessions)), "invalid_terminal_sessions")
-        choice(reason, {"archive", "delete"})
+        choice(reason, {"delete"})
         keys = []
         with self._transaction(write=True) as db:
             for session in sessions:
                 generation, terminal = self._state(db, session)
+                if terminal == "archive" and self._release_legacy_archive(db, session):
+                    terminal = None
                 key = (self._key("terminal", session, generation) if terminal is not None else
                        self._fence(db, session, generation, "terminal", reason))
                 keys.append(key)
         return tuple(keys)
 
+    def _removal_cursor(self, db):
+        row = db.execute("SELECT sequence, event_id FROM source_removal_cursor WHERE profile=? AND principal=?",
+                         self._scope).fetchone()
+        return (0, None) if row is None else tuple(row)
+
+    def removal_cursor(self):
+        with self._transaction() as db:
+            return self._removal_cursor(db)
+
+    def apply_committed_removals(self, receipts):
+        """Advance the host cursor and persist all new fences in the same transaction."""
+        with self._transaction(write=True) as db:
+            cursor, last_id = self._removal_cursor(db)
+            for notice in sequence(receipts, 128):
+                sequence_id = integer(notice["sequence"], 1, _MAX_GENERATION)
+                event_id = identifier(notice["event_id"])
+                if sequence_id <= cursor:
+                    require(sequence_id < cursor or event_id == last_id, "source_removal_stream_changed")
+                    continue
+                session = identifier(notice["session_id"])
+                generation, terminal = self._state(db, session)
+                kind = choice(notice["kind"], {"rewind", "delete"})
+                if terminal == "archive" and self._release_legacy_archive(db, session):
+                    terminal = None
+                if terminal is None:
+                    if kind == "delete":
+                        self._fence(db, session, generation, "terminal", "delete")
+                    else:
+                        self._rewind(db, session, generation, notice)
+                cursor, last_id = sequence_id, event_id
+            if last_id is not None:
+                db.execute("""INSERT INTO source_removal_cursor VALUES (?, ?, ?, ?)
+                              ON CONFLICT(profile, principal) DO UPDATE SET sequence=excluded.sequence,
+                              event_id=excluded.event_id""", (*self._scope, cursor, last_id))
+
+    def _rewind(self, db, session, generation, notice):
+        if generation == _MAX_GENERATION:
+            raise SourceOutboxError(UNAVAILABLE)
+        arguments = {field: notice[field] for field in (
+            "event_id", "previous_head_message_uid", "last_surviving_message_uid", "removed_message_uids",
+        )}
+        removed = arguments["removed_message_uids"]
+        require(type(removed) is list and bool(removed), "invalid_source_rewind")
+        if len(removed) > MAX_REWIND_UIDS or len(canonical(arguments)) > _MAX_SNAPSHOT_BYTES:
+            # Keep verified tails of copied and possibly in-flight windows before
+            # evicting stale work. Native still validates each destination's head.
+            tails = db.execute("""SELECT last_message_uid FROM source_jobs
+                                  WHERE profile=? AND principal=? AND session=? AND kind='snapshot'
+                                  ORDER BY sequence DESC""", (*self._scope, session))
+            eligible = set(removed)
+            trusted_tails = dict.fromkeys(uid for (uid,) in tails if uid in eligible)
+            trusted_tails.update(dict.fromkeys(reversed(removed[-MAX_REWIND_UIDS:])))
+            # The longest permitted UID still fits the signed envelope at this cap.
+            selected = set(list(trusted_tails)[:min(MAX_REWIND_UIDS, _MAX_SNAPSHOT_BYTES // 132)])
+            arguments["removed_message_uids"] = [uid for uid in removed if uid in selected]
+            arguments["removed_uids_complete"] = False
+        arguments = rewind_arguments(arguments)
+        self._fence(db, session, generation + 1, "rewind", arguments=arguments)
+
     def next_job(self, session_id: str | None = None, *, terminal_only: bool = False,
                  fence_only: bool = False, runtime_scope: bool = False,
                  runtime_lease_id: str | None = None, manual_only: bool = False) -> SourceJob | None:
-        query = "SELECT * FROM source_jobs WHERE profile=? AND principal=? AND receipt IS NULL"
+        query = ("SELECT * FROM source_jobs WHERE profile=? AND principal=? AND receipt IS NULL"
+                 " AND NOT (kind='terminal' AND reason='archive')")
         bindings = self._scope
         if manual_only:
             query += (" AND manual_owner_id IS NOT NULL AND kind='snapshot'"
@@ -431,9 +605,12 @@ class SourceOutbox:
         else:
             query += " AND manual_owner_id IS NULL"
         if terminal_only:
-            query += " AND kind='terminal'"
+            query += (" AND kind='terminal' AND NOT EXISTS (SELECT 1 FROM source_jobs earlier"
+                      " WHERE earlier.profile=source_jobs.profile AND earlier.principal=source_jobs.principal"
+                      " AND earlier.session=source_jobs.session AND earlier.sequence<source_jobs.sequence"
+                      " AND earlier.kind='rewind' AND earlier.receipt IS NULL)")
         elif fence_only:
-            query += " AND kind IN ('terminal', 'invalidate')"
+            query += " AND kind IN ('terminal', 'rewind', 'invalidate')"
         if session_id is not None:
             query += " AND session=?"
             bindings = (*bindings, identifier(session_id))
@@ -443,7 +620,7 @@ class SourceOutbox:
             else:
                 query += " AND (lease_id IS NULL OR lease_id=?)"
                 bindings = (*bindings, identifier(runtime_lease_id))
-        query += " ORDER BY CASE kind WHEN 'terminal' THEN 0 WHEN 'invalidate' THEN 1 ELSE 2 END, " \
+        query += " ORDER BY CASE kind WHEN 'terminal' THEN 0 WHEN 'rewind' THEN 0 WHEN 'invalidate' THEN 1 ELSE 2 END, " \
                  "CASE WHEN lease_id IS NOT NULL THEN 0 ELSE 1 END, sequence LIMIT 1"
         with self._transaction() as db:
             row = db.execute(query, bindings).fetchone()
@@ -472,19 +649,23 @@ class SourceOutbox:
             if manual_owner is not None:
                 manual_owner = identifier(manual_owner)
                 require(kind == "snapshot", "invalid_source_job")
-            require(row["key"] == self._key(kind, session, generation, row["snapshot_digest"],
+            job_digest = (content_digest(rewind_arguments(decode(payload))) if kind == "rewind"
+                          else row["snapshot_digest"])
+            require(row["key"] == self._key(kind, session, generation, job_digest,
                                             lease_id if fence_epoch is not None else None,
                                             fence_epoch, manual_owner, manual_phy), "invalid_source_job")
         except ValueError:
             raise SourceOutboxError(UNAVAILABLE) from None
-        return SourceJob(kind, row["key"], session, generation, snapshot, payload, row["reason"], self._scope,
-                         lease_id, fence_epoch, manual_owner, manual_phy)
+        return SourceJob(kind, row["key"], session, generation, snapshot,
+                         payload if kind == "snapshot" else None, row["reason"], self._scope,
+                         lease_id, fence_epoch, manual_owner, manual_phy, payload if kind == "rewind" else None)
 
     def _job_receipt(self, db, job):
-        if job._scope != self._scope:
+        if job._scope != self._scope or (job.kind == "terminal" and job.reason == "archive"):
             return None
         generation, terminal = self._state(db, job.session_id)
-        if generation != job.generation or (terminal is not None) != (job.kind == "terminal"):
+        if job.kind != "rewind" and (generation != job.generation or
+                                     (terminal is not None) != (job.kind == "terminal")):
             return None
         return db.execute(
             "SELECT receipt FROM source_jobs WHERE key=? AND profile=? AND principal=? AND session=? AND generation=? AND kind=?",

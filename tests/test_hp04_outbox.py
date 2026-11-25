@@ -85,7 +85,7 @@ def test_invalidation_fences_older_work_and_coalesces_pending_fences(tmp_path):
     assert recovered.cursor(source.session_id).idempotency_key == current.idempotency_key
 
 
-def test_archive_and_delete_share_a_permanent_terminal_fence(tmp_path):
+def test_delete_has_a_permanent_terminal_fence(tmp_path):
     feed = queue(tmp_path)
     source = snapshot()
     feed.enqueue(source, generation=0)
@@ -93,12 +93,12 @@ def test_archive_and_delete_share_a_permanent_terminal_fence(tmp_path):
     feed.invalidate(source.session_id)
     feed.enqueue(snapshot("session-b"), generation=0)
     feed.invalidate("session-c")
-    key = feed.terminal(source.session_id, "archive")
+    key = feed.terminal(source.session_id, "delete")
 
     recovered = queue(tmp_path)
     assert recovered.terminal(source.session_id, "delete") == key
     job = recovered.next_job()
-    assert (job.kind, job.session_id, job.reason, job.idempotency_key) == ("terminal", "session-a", "archive", key)
+    assert (job.kind, job.session_id, job.reason, job.idempotency_key) == ("terminal", "session-a", "delete", key)
     assert not recovered.acknowledge(pending, RECEIPT)
     assert recovered.acknowledge(job, RECEIPT)
     assert recovered.next_job().kind == "invalidate"
@@ -162,8 +162,101 @@ def test_failed_bulk_terminal_commit_leaves_all_original_jobs_pending(tmp_path, 
     assert [reopened.next_job(session) for session in sessions] == original
 
     keys = reopened.terminal_many(sessions, "delete")
-    assert keys == tuple(reopened.terminal(session, "archive") for session in sessions)
+    assert keys == tuple(reopened.terminal(session, "delete") for session in sessions)
     assert [reopened.next_job(session).kind for session in sessions] == ["terminal", "terminal"]
+
+
+def removal(sequence_id, kind="rewind", session="session-a", *, removed=None):
+    event = {"sequence": sequence_id, "event_id": f"event-{sequence_id}", "session_id": session, "kind": kind}
+    if kind == "rewind":
+        identities = ["message-b"] if removed is None else removed
+        event.update(last_surviving_message_uid="message-a", previous_head_message_uid=identities[-1],
+                     removed_message_uids=identities)
+    return event
+
+
+def test_removal_cursor_and_ordered_jobs_survive_reopen_until_ack(tmp_path):
+    feed = queue(tmp_path)
+    source = snapshot()
+    feed.enqueue(source, generation=0)
+    stale = feed.next_job()
+    before = feed.disclosure_cut()
+    rewind = removal(1)
+    feed.apply_committed_removals([rewind])
+    first = feed.next_job(fence_only=True)
+    assert not feed.is_current(stale)
+    assert feed.capture_state(source.session_id) == (1, outbox.REMOVAL_PENDING)
+    with pytest.raises(SourceOutboxError, match=outbox.REMOVAL_PENDING):
+        feed.disclosure_cut()
+    with pytest.raises(SourceOutboxError, match=outbox.REMOVAL_PENDING):
+        feed.enqueue(source, generation=1)
+
+    recovered = queue(tmp_path)
+    newer = removal(2, removed=["message-c"])
+    deleted = removal(3, "delete")
+    recovered.apply_committed_removals([rewind, newer, deleted])
+    assert recovered.removal_cursor() == (3, "event-3")
+    assert recovered.next_job(fence_only=True) == first
+    assert recovered.next_job(terminal_only=True) is None
+    arguments = decode(first.removal_json)
+    assert first.idempotency_key == content_digest([
+        "hermes-source-outbox-v1", "profile-a", "principal-a", source.session_id, "rewind", 1,
+        content_digest(arguments),
+    ])
+    assert recovered.acknowledge(first, RECEIPT)
+    second = recovered.next_job(fence_only=True)
+    assert decode(second.removal_json)["event_id"] == "event-2"
+    assert recovered.acknowledge(second, RECEIPT)
+    terminal = recovered.next_job(fence_only=True)
+    assert (terminal.kind, terminal.reason) == ("terminal", "delete")
+    assert recovered.acknowledge(terminal, RECEIPT)
+    assert recovered.next_job(fence_only=True) is None
+    assert recovered.disclosure_cut() != before
+
+
+def test_accepted_rewind_resumes_copy_and_bounded_proof_keeps_prior_tail(tmp_path):
+    feed = queue(tmp_path)
+    head = snapshot(uid="old-copied-tail")
+    feed.enqueue(head, generation=0)
+    assert feed.acknowledge(feed.next_job(), RECEIPT)
+    later = [f"row-{index}" for index in range(outbox.MAX_REWIND_UIDS + 1)]
+    feed.apply_committed_removals([removal(1, removed=["old-copied-tail", *later])])
+    pending = feed.next_job()
+    proof = decode(pending.removal_json)
+    assert proof["removed_uids_complete"] is False
+    assert proof["removed_message_uids"][0] == "old-copied-tail"
+    assert proof["removed_message_uids"][-1] == proof["previous_head_message_uid"]
+    assert feed.acknowledge(pending, RECEIPT)
+    assert feed.capture_state(head.session_id) == (1, None)
+    assert feed.cursor(head.session_id).last_message_uid == "message-a"
+    assert feed.enqueue(snapshot(uid="new-tail"), generation=1)
+
+
+def test_legacy_archive_queue_migration_keeps_only_acknowledged_tombstones(tmp_path):
+    path = tmp_path / "source-outbox-v1.sqlite3"
+    path.touch(mode=0o600)
+    with closing(sqlite3.connect(path)) as db:
+        db.execute(f"PRAGMA application_id={outbox._APPLICATION_ID}")
+        db.execute("PRAGMA user_version=5")
+        for statement in outbox._SCHEMA[:-1]:
+            db.execute(statement.replace(", 'rewind'", ""))
+        scope = ("profile-a", "principal-a")
+        for session, receipt in (("undelivered", None), ("acknowledged", RECEIPT)):
+            db.execute("INSERT INTO source_state VALUES (?, ?, ?, 0, 'archive')", (*scope, session))
+            key = content_digest(["hermes-source-outbox-v1", *scope, session, "terminal", 0, None])
+            db.execute("""INSERT INTO source_jobs(key, profile, principal, session, generation, kind, reason, receipt)
+                          VALUES (?, ?, ?, ?, 0, 'terminal', 'archive', ?)""", (key, *scope, session, receipt))
+        db.commit()
+    feed = queue(tmp_path)
+    assert feed.next_job() is None
+    assert feed.capture_state("undelivered") == (0, outbox.REMOVAL_PENDING)
+    assert feed.capture_state("acknowledged") == (0, TERMINAL)
+    assert feed.quarantined_archive_sessions() == ["undelivered"]
+    feed.release_legacy_archives(["undelivered", "acknowledged"])
+    assert feed.capture_state("undelivered") == (0, None)
+    assert feed.capture_state("acknowledged") == (0, TERMINAL)
+    feed.apply_committed_removals([removal(1, "delete", "undelivered")])
+    assert feed.next_job().reason == "delete"
 
 
 def test_foreign_database_fails_closed(tmp_path):
@@ -270,6 +363,7 @@ def test_v4_pending_manual_import_reopens_with_its_legacy_key(tmp_path):
     key = feed.enqueue_manual(selected, owner_id="rel-a")
     with closing(sqlite3.connect(tmp_path / "source-outbox-v1.sqlite3")) as db:
         db.execute("ALTER TABLE source_jobs DROP COLUMN manual_phy_id")
+        db.execute("DROP TABLE source_removal_cursor")
         db.execute("PRAGMA user_version = 4")
         db.commit()
 

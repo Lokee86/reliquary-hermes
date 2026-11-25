@@ -567,7 +567,13 @@ class HostClient:
             arguments = {"snapshot_digest": job.snapshot.snapshot_digest,
                          "source_json": canonical(view).decode("utf-8")}
         elif job.kind == "terminal":
+            if job.reason != "delete":
+                raise HostUnavailable("source_removal_authority_unavailable")
             arguments = {"reason": job.reason}
+        elif job.kind == "rewind":
+            from .outbox import rewind_arguments
+
+            arguments = rewind_arguments(decode(job.removal_json))
         envelope_value = {"protocol_version": 1, "profile_id": self._profile_id,
                               "principal_id": self._principal_id, "session_id": job.session_id,
                               "generation": job.generation, "idempotency_key": job.idempotency_key,
