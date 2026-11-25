@@ -230,8 +230,7 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
             owner_id = report["owner_id"]
     phy_bytes = phy.read_bytes()
     config(state, rel, phy, profile=PROFILE)
-    save_settings(home, {"profile_id": PROFILE, "principal_id": PRINCIPAL,
-        "main_rel": str(rel), "active_phy": str(phy), "binary": str(binary)})
+    (state / "provider.json").write_bytes(canonical({"binary": str(binary)}))
     (home / ".env").write_text(f"{TOKEN_VAR}={TOKEN}\nJEV_API_KEY={NATIVE_DECISION_KEY}\n", encoding="utf-8")
     source = TEXT["accepted"]
     claim = "The Lantern release uses an amber checklist."
@@ -320,9 +319,7 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
         terminal = outbox.next_job(SESSION)
         assert outbox.acknowledge(terminal, _when_ready(reader, terminal))
         rejected = query(reader, "perception-before-deletion")
-        assert isinstance(rejected, str) and rejected in {
-            "no_recall_results", "retrieval_cut_stale", "source_provenance_unavailable",
-        }, rejected
+        assert rejected == "source_terminal", rejected
         assert phy.read_bytes() == phy_bytes
         assert NATIVE_DECISION_KEY not in (home / "hosted-worker.log").read_text(encoding="utf-8")
         assert worker_command(worker, "stop")["registered"] is False
