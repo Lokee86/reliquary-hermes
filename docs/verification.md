@@ -46,6 +46,21 @@ and receipt replay across restart, during continued capture, and after whole-cha
 Set `HP03_RELIQUARY_CLI` to the Core build paired with `HP03_HOST_BINARY` to also check the exact
 Archive turns through the CLI.
 
+On November 24, 2026, the signed Windows variants passed with Core
+`91b6ea7081d4b5c2e7bf1eaab1145da345235abd`, Hermes removal authority
+`4f1bf621049ebbf811ed4a3b1cc444c910db5d0f`, and Hermes inference
+`168a923023a7018be3dbf66530531dd20b1834b9`. The committed case passed in 74.35 seconds.
+It kept recall during archive, withheld the rewind acknowledgment across host restart, received
+the same signed receipt on retry, and verified the withdrawn and surviving Memory bodies through
+the signed dashboard. The next capture produced a new Memory at the acknowledged source head.
+An explicit delete after re-archive prevented disclosure from the prepared selection. The legacy
+delete case passed in 63.27 seconds. Both cases preserved the disposable PHY bytes.
+
+The focused plugin run against the removal pin passed 47 tests, with two legacy-pin tests skipped.
+The broader Python run against the legacy pin passed 437 tests, with 34 platform- or fixture-dependent
+skips. The upstream Hermes authority passed all 16 repository checks and the focused transaction,
+rewind, profile, and retry suites.
+
 On Windows, the signed Perception fixture passed in 27.54 seconds using Core `96c41a2287eac2a8b48a1a6443b339423a4a8ca3` and Hermes `168a923023a7018be3dbf66530531dd20b1834b9`. It recorded one native Verify call. Recall matched the same owner, Observation revision, Memory body and byte range, and copied snapshot digest across a fresh host instance. The host denied the delayed return with `source_terminal` after deletion and the PHY bytes matched. The 13 locked broker tests and 25 focused Python worker checks passed. The Windows package smoke used that same binary and verified a retained PHY revision, a REL write across restart, and preservation of the original PHY hash.
 
 The paraphrase case pairs `Deployment follows golden procedures.` with `The Lantern release uses an amber checklist.` through deterministic embeddings in the same accepted model space. The signed reply includes the Memory owner, ID, revision, body ID, content byte range, and copied snapshot digest. An orthogonal query receives `no_recall_results`. A new copied passage triggers a material challenge and reaches native Verify. The fixture leaves that review unresolved and sends the same paraphrase in a fresh signed turn, which returns the supporting Memory with the Observation withheld.
