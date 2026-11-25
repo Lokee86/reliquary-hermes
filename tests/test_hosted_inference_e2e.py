@@ -278,7 +278,8 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
     challenge = "Lantern release excludes the amber checklist."
     monkeypatch.setitem(TEXT, "appended", distractor)
     monkeypatch.setitem(TEXT, "challenge", challenge)
-    monkeypatch.setitem(TEXT, "fresh", "The Orchid backup gets a weekly smoke test.")
+    # The fixture grounds the named tool at the start of every copied row.
+    monkeypatch.setitem(TEXT, "fresh", "Lantern requires a weekly smoke test for Orchid backups.")
     outbox = SourceOutbox(state, PROFILE, PRINCIPAL)
     profile_key = PROFILE.encode("ascii")
     conversation = "hermes-copy:" + sha256(b"reliquary/hermes-copied-conversation/v1\0"
@@ -464,8 +465,12 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
                 append_source(db, "fresh", 2)
             extension = _queue(outbox, ["accepted", "appended", "fresh"])
             assert outbox.acknowledge(extension, _when_ready(reader, extension))
-            wait_for(lambda: reader.read_source_status(SESSION)["state"] == "complete", diagnostic=diagnostic)
-            fresh = _copied_memories(reader)["fresh"]
+            def extension_settled():
+                status = reader.read_source_status(SESSION)
+                return status["state"] == "complete" and status["snapshot_digest"] == extension.snapshot.snapshot_digest
+
+            wait_for(extension_settled, diagnostic=diagnostic)
+            fresh = wait_for(lambda: _copied_memories(reader).get("fresh"), diagnostic=diagnostic)
             assert _copied_memory_detail(reader, fresh)["provenance"][0]["message_uid"] == "fresh"
             if cli:
                 assert _turn(cli, rel, conversation, "fresh")["content"] == TEXT["fresh"]
