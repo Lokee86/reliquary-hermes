@@ -1,13 +1,18 @@
 """Real registered Hermes ctx.llm, native broker, Root processing and durable replay."""
 
 from contextlib import ExitStack
+from itertools import count
 import json
+import os
+from pathlib import Path
 import subprocess
 from shutil import copyfile
 from time import monotonic, sleep
 
+import pytest
+
 from hosted_hermes_worker import configure_hermes, start_hermes_worker, worker_command
-from hosted_inference_probe import hosted_model
+from hosted_inference_probe import NATIVE_DECISION_KEY, hosted_model
 from reliquary_hermes import client as client_module
 from reliquary_hermes.client import HostClient, HostUnavailable
 from reliquary_hermes.outbox import SourceOutbox
@@ -40,13 +45,16 @@ def audit(home):
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
-def query(client, turn):
-    raw = canonical({"protocol_version": 1, "request_id": "query-" + turn,
+def query_request(turn):
+    return canonical({"protocol_version": 1, "request_id": "query-" + turn,
         "operation": "memory_query", "profile_id": PROFILE, "principal_id": PRINCIPAL,
         "session_id": SESSION, "turn_id": turn, "expected_revision": None,
         "idempotency_key": None, "arguments": {"query": "amber checklist", "limit": 10}})
+
+
+def query(client, turn):
     try:
-        response = client.request(raw, recall_tool=True)
+        response = client.request(query_request(turn), recall_tool=True)
     except HostUnavailable as error:
         return str(error)
     if response.status != "ok":
@@ -200,3 +208,122 @@ def test_real_hermes_hosted_inference_processing_recall_identity_and_restart(
         assert _dashboard_status(restarted, SESSION)["accepted_source_cursor"] == job.snapshot.snapshot_digest
         assert restarted.deliver_source_job(job) == receipt
         assert not (state / "processing.json").exists() and not list(home.rglob("*.cfg"))
+
+
+def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
+        tmp_path, inference_checkout, monkeypatch):
+    value = os.environ.get("HP03_HOST_BINARY")
+    if not value:
+        pytest.skip("Set HP03_HOST_BINARY to the native host built against the pinned Core")
+    binary = Path(value).resolve(strict=True)
+    home = tmp_path / "hermes-profile"
+    home.mkdir()
+    rel, phy = tmp_path / "general.rel", tmp_path / "active.phy"
+    state = home / "reliquary"
+    for role, path in (("main_rel", rel), ("active_phy", phy)):
+        created = subprocess.run([str(binary), "setup-create", "--state-dir", str(state)],
+            input=canonical({"role": role, "path": str(path)}), capture_output=True, timeout=10)
+        assert created.returncode == 0, created.stderr
+        report = decode(created.stdout)
+        assert report["accepted"] and report["opened"]
+        if role == "main_rel":
+            owner_id = report["owner_id"]
+    phy_bytes = phy.read_bytes()
+    config(state, rel, phy, profile=PROFILE)
+    save_settings(home, {"profile_id": PROFILE, "principal_id": PRINCIPAL,
+        "main_rel": str(rel), "active_phy": str(phy), "binary": str(binary)})
+    (home / ".env").write_text(f"{TOKEN_VAR}={TOKEN}\nJEV_API_KEY={NATIVE_DECISION_KEY}\n", encoding="utf-8")
+    source = TEXT["accepted"]
+    claim = "The Lantern release uses an amber checklist."
+    monkeypatch.setitem(TEXT, "appended", "Lantern records backup evidence separately.")
+    outbox = SourceOutbox(state, PROFILE, PRINCIPAL)
+
+    with hosted_model(2, perception=(source, claim)) as (url, model), ExitStack() as cleanup:
+        client = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
+        cleanup.callback(lambda: stop(client._process) if client._process is not None else None)
+        client.attach(SESSION)
+        worker = start_hermes_worker(home, inference_checkout, url, cleanup)
+        def diagnostic():
+            log = (home / "hosted-worker.log").read_text(encoding="utf-8", errors="replace")
+            return log, model["calls"], model["errors"]
+
+        job = _queue(outbox, ["accepted", "appended"])
+        assert outbox.acknowledge(job, _when_ready(client, job))
+        wait_for(lambda: client.read_source_status(SESSION)["state"] == "complete", diagnostic=diagnostic)
+        topology, binding = _dashboard_binding(client, SESSION)
+        listed, _ = _dashboard_exchange(client, topology, binding, "ui.memory_list", {
+            "cursor": None, "limit": 10, "filters": {"query": "", "category": None,
+                "memory_type": None, "lifecycle": None, "community_id": None}})
+        memory = next(item for item in listed["result"]["items"] if item["title"] == "accepted")
+        assert model["native_calls"] == []
+        assert worker_command(worker, "stop")["registered"] is False
+        discovery = state / "discovery.json"
+        wait_for(lambda: not discovery.exists(), diagnostic=diagnostic)
+
+        # The plugin starts the configured host and verifies a claim from the
+        # settled copied source before any session attaches or asks for recall.
+        selection = home / "config.yaml"
+        with selection.open("a", encoding="utf-8") as config_file:
+            config_file.write("reliquary:\n  perception:\n"
+                              f"    decisions_url: {url}/decisions\n"
+                              "    credential_env: JEV_API_KEY\n")
+        assert worker_command(worker, "start")["registered"] is True
+        wait_for(lambda: any(call["state"].get("claim") == claim for call in model["native_calls"]),
+                 diagnostic=diagnostic)
+
+        # An empty approved Memory selection must still deliver the exact
+        # Observation and its evidence, with the same identity after a clean reopen.
+        model["approve_memories"] = False
+        turns = count()
+        reader = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
+        reader.attach(SESSION)
+
+        def observation_query():
+            result = query(reader, f"perception-{next(turns)}")
+            return result if isinstance(result, dict) and result.get("observations") else None
+
+        before = wait_for(observation_query, diagnostic=diagnostic)
+        [observation] = before["observations"]
+        first_instance = reader._read_discovery().instance_id
+        assert before["memory_ids"] == []
+        assert observation["owner_id"] == owner_id and observation["claim"] == claim
+        assert observation["revision"] == 1
+        assert observation["status"] == "Observed" and observation["time_scope"] == "Current"
+        assert claim in before["context"]
+        [evidence] = observation["evidence"]
+        [lineage] = observation["lineage"]
+        assert evidence["owner_id"] == owner_id and evidence["source_kind"] == "memory"
+        assert evidence["source_id"] == lineage["memory_id"] == memory["memory_id"]
+        assert evidence["revision"] == lineage["revision"] == int(memory["revision"])
+        assert evidence["body_id"] == lineage["body_id"] == memory["body_id"]
+        assert evidence["field"] == "Content"
+        assert (evidence["start_byte"], evidence["end_byte"]) == (0, len(source.encode("utf-8")))
+        assert lineage["source_snapshot_digests"] == [job.snapshot.snapshot_digest]
+
+        assert worker_command(worker, "stop")["registered"] is False
+        wait_for(lambda: not discovery.exists(), diagnostic=diagnostic)
+        assert worker_command(worker, "start")["registered"] is True
+        wait_for(discovery.exists, diagnostic=diagnostic)
+        reader = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
+        reader.attach(SESSION)
+        assert reader._read_discovery().instance_id != first_instance
+        after = wait_for(observation_query, diagnostic=diagnostic)
+        assert after["memory_ids"] == [] and after["observations"] == [observation]
+        assert sum(call["state"].get("claim") == claim for call in model["native_calls"]) == 1
+
+        model["approve_memories"] = True
+        mixed = successful_query(reader, "perception-mixed")
+        assert memory["memory_id"] in mixed["memory_ids"] and mixed["observations"] == [observation]
+        model["approve_memories"] = False
+        assert reader.prepare_retrieval(query_request("perception-before-deletion"))
+        outbox.terminal(SESSION, "delete")
+        terminal = outbox.next_job(SESSION)
+        assert outbox.acknowledge(terminal, _when_ready(reader, terminal))
+        rejected = query(reader, "perception-before-deletion")
+        assert isinstance(rejected, str) and rejected in {
+            "no_recall_results", "retrieval_cut_stale", "source_provenance_unavailable",
+        }, rejected
+        assert phy.read_bytes() == phy_bytes
+        assert NATIVE_DECISION_KEY not in (home / "hosted-worker.log").read_text(encoding="utf-8")
+        assert worker_command(worker, "stop")["registered"] is False
+        wait_for(lambda: not discovery.exists(), diagnostic=diagnostic)

@@ -10,13 +10,19 @@ from reliquary_hermes.validation import canonical
 from test_hp04_host import _fixture_reply
 
 
+NATIVE_DECISION_KEY = "synthetic-profile-jev-key"
+
+
 @contextmanager
-def hosted_model(dimensions):
-    state = {"calls": [], "errors": [], "revoked": False, "large_reply": False}
+def hosted_model(dimensions, *, perception=None):
+    state = {"calls": [], "errors": [], "revoked": False, "large_reply": False,
+             "native_calls": [], "approve_memories": True}
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
-            if self.headers.get("Authorization") != "Bearer synthetic-hosted-inference-key":
+            native = self.path == "/decisions"
+            key = NATIVE_DECISION_KEY if native else "synthetic-hosted-inference-key"
+            if self.headers.get("Authorization") != f"Bearer {key}":
                 self.send_error(401)
                 return
             if state["revoked"]:
@@ -25,20 +31,26 @@ def hosted_model(dimensions):
             else:
                 try:
                     raw = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                    request = decode_hermes_sdk_request(raw)
-                    assert self.path.endswith(("/chat/completions", "/embeddings"))
-                    name = request.get("schema_name", "embed")
-                    state["calls"].append({"schema_name": name, "model": request["model"]})
-                    if name == "embed":
-                        assert request["dimensions"] == dimensions
-                        result = {"model": request["model"], "data": [
-                            {"index": index, "embedding": [0.12345678901234567] * dimensions}
-                            for index in range(len(request["inputs"]))]}
+                    if native:
+                        assert perception is not None
+                        body = canonical(native_reply(raw))
+                        state["native_calls"].append(raw)
                     else:
-                        result = {"choices": [{"message": {"content": json.dumps(reply(request))}}],
-                                  "model": request["model"]}
-                    body = canonical(result)
-                    state["large_reply"] |= name == "embed" and len(body) > 256 * 1024
+                        assert self.path.endswith(("/chat/completions", "/embeddings"))
+                        request = decode_hermes_sdk_request(raw)
+                        name = request.get("schema_name", "embed")
+                        state["calls"].append({"schema_name": name, "model": request["model"]})
+                        if name == "embed":
+                            assert request["dimensions"] == dimensions
+                            result = {"model": request["model"], "data": [
+                                {"index": index, "embedding": [0.12345678901234567] * dimensions}
+                                for index in range(len(request["inputs"]))]}
+                        else:
+                            answer = reply(request, perception, approve_memories=state["approve_memories"])
+                            result = {"choices": [{"message": {"content": json.dumps(answer)}}],
+                                      "model": request["model"]}
+                        body = canonical(result)
+                        state["large_reply"] |= name == "embed" and len(body) > 256 * 1024
                     self.send_response(200)
                 except (AssertionError, KeyError, TypeError, ValueError) as error:
                     state["errors"].append(type(error).__name__ + ": " + str(error))
@@ -66,7 +78,27 @@ def hosted_model(dimensions):
     assert not state["errors"], state["errors"]
 
 
-def reply(request):
+def native_reply(request):
+    assert set(request) == {"model", "state", "questions"}
+    assert request["model"] == "typesafe/jev-1.13"
+    questions = request["questions"]
+    replies = {}
+    for key, question in questions.items():
+        assert question["type"] == "choice"
+        if key == "verify":
+            choice = "stands_as_written"
+        elif key.endswith("-time"):
+            choice = "change_to_ongoing_claim"
+        elif key.endswith("-scope"):
+            choice = "overlapping_scope"
+        else:
+            choice = "no_material_effect"
+        assert choice in question["criteria"]
+        replies[key] = {"type": "choice", "choice": choice}
+    return {"answers": replies}
+
+
+def reply(request, perception=None, *, approve_memories=True):
     name, schema = request["schema_name"], request["schema"]
     payload = request["payload"] or {}
     if name == "reliquary_readiness":
@@ -90,7 +122,24 @@ def reply(request):
         state = payload["state"]
         if state.get("operation") == "refine_query_rewrite":
             return {"version": 1, "query": state["current_query"]}
-        return {"version": 1, "approved": [item["memory"] for item in state.get("candidates", [])]}
+        approved = [item["memory"] for item in state.get("candidates", [])] if approve_memories else []
+        return {"version": 1, "approved": approved}
+    if name == "memory_web_audit_v1":
+        source, claim = perception
+        candidates = [{"proposition": claim, "status": "observed", "time_scope": "current",
+                       "source_slots": [row["slot"]], "participants": []}
+                      for row in payload["sources"] if row["kind"] == "memory" and row["text"] == source]
+        return {"ego": {"candidates": [], "lookups": []},
+                "perception": {"candidates": candidates, "lookups": []}}
+    if name == "observation_synthesis_v1":
+        proposal = payload["proposal"]
+        draft = {"proposition": proposal["proposition"], "status": proposal["status"],
+                 "time_scope": proposal["time_scope"], "source_slots": payload["proposal_sources"],
+                 "participants": payload["proposal_participants"]}
+        return {"draft": draft, "duplicate_slot": None}
+    if name == "observation_receptors_v1":
+        return {"support": ["checklist steps for release"], "challenge": ["release checklist exclusion"],
+                "qualification": ["changes to the checklist"], "other": ["updates to release"]}
     if name == "dream_pair_classification":
         # Default Root policy verifies duplicate proposals, so this fixture
         # exercises both Dream consumers through their normal workflow.

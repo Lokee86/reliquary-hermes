@@ -36,6 +36,8 @@ One repository-tool gate remains unavailable in the environment: installed Pitlo
 
 The public package's approved vendored Root baseline passed all 36 Switchboard tests with locked offline dependencies. Its two development-only Lodestone references now use the already approved local source subset; no additional dependency source or lockfile changes were needed. The packaged native host separately passed the same 124 tests with one existing scale characterization ignored.
 
+The signed Perception fixture `test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart` uses the native host and the exact Hermes inference checkout. It starts the profile against an offline endpoint, verifies an Observation before a chat attaches, checks its copied-source evidence after a clean reopen, and exercises Observation-only, mixed, and deleted-source returns. Set `HP03_HOST_BINARY` and `HP_INFERENCE_HERMES_CHECKOUT` and run `python -B -m pytest -q --basetemp=.pytest_tmp tests/test_hosted_inference_e2e.py -k native_jev`.
+
 For the real inference fixture, set `HP_INFERENCE_HERMES_CHECKOUT` to the exact upstream inference revision. Keep `HP01_HERMES_CHECKOUT` on the independent audited history/ABC baseline. Use a disposable patched Hermes history checkout for `HU08_HERMES_INSTALLED_CHECKOUT`; never use a live profile as test state. Set `HP03_HOST_BINARY` and `HP03_RELIQUARY_CLI` to binaries built against the same isolated Root source. All temporary owner copies, logs, and caches stay in the worktrees; pytest uses `.pytest/_tmp`.
 
 HP01 verifies the pinned Hermes interfaces and the Python provider, owner routing and copied-source fixtures. HP02 verifies the selected-return bridge, copied-source import and dashboard product operations through the public Root API.
@@ -77,7 +79,7 @@ The locked native suite passed 126 tests with one graph scale characterization i
 
 The checkpoint-enabled host used Core `33f32b2d0d7d6e55a9ca817d4ff4ac735f2ff5df`. The source audit verified 712 files against that commit. The Core workspace, detached consumer, and native host manifests resolved with locked offline dependencies. The Lodestone and Lore revisions remain exact Git pins.
 
-The Perception host candidate uses Core `f9882b9e10a449ed1ffb56bda86dd0566b384cc3`. The source audit compared the 809-file exported inventory with that revision. [Core source provenance](../vendor/reliquary/SOURCE-PROVENANCE.md)
+The Perception host candidate uses Core `96c41a2287eac2a8b48a1a6443b339423a4a8ca3`. The source audit compared the 809-file exported inventory with that revision. [Core source provenance](../vendor/reliquary/SOURCE-PROVENANCE.md)
 
 Use the optimized native host for configured-startup measurements. Start each disposable profile once to create the checkpoint and warm the file cache. Measure signed attach in three fresh host processes and close each through the signed runtime detach. Record the median attach time and peak startup working set, and confirm that the checkpoint and owner bytes match across the read-only samples. Check a separate REL write by reopening it after a forced restart.
 
