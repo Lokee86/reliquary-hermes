@@ -14,7 +14,7 @@ NATIVE_DECISION_KEY = "synthetic-profile-jev-key"
 
 
 @contextmanager
-def hosted_model(dimensions, *, perception=None):
+def hosted_model(dimensions, *, perception=None, embed=None, decide=None):
     state = {"calls": [], "errors": [], "revoked": False, "large_reply": False,
              "native_calls": [], "approve_memories": True}
 
@@ -33,8 +33,8 @@ def hosted_model(dimensions, *, perception=None):
                     raw = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                     if native:
                         assert perception is not None
-                        body = canonical(native_reply(raw))
                         state["native_calls"].append(raw)
+                        body = canonical((decide or native_reply)(raw))
                     else:
                         assert self.path.endswith(("/chat/completions", "/embeddings"))
                         request = decode_hermes_sdk_request(raw)
@@ -43,8 +43,9 @@ def hosted_model(dimensions, *, perception=None):
                         if name == "embed":
                             assert request["dimensions"] == dimensions
                             result = {"model": request["model"], "data": [
-                                {"index": index, "embedding": [0.12345678901234567] * dimensions}
-                                for index in range(len(request["inputs"]))]}
+                                {"index": index, "embedding": (
+                                    embed(text) if embed else [0.12345678901234567] * dimensions)}
+                                for index, text in enumerate(request["inputs"])]}
                         else:
                             answer = reply(request, perception, approve_memories=state["approve_memories"])
                             result = {"choices": [{"message": {"content": json.dumps(answer)}}],
@@ -78,7 +79,7 @@ def hosted_model(dimensions, *, perception=None):
     assert not state["errors"], state["errors"]
 
 
-def native_reply(request):
+def native_reply(request, *, challenge=None):
     assert set(request) == {"model", "state", "questions"}
     assert request["model"] == "typesafe/jev-1.13"
     questions = request["questions"]
@@ -91,6 +92,8 @@ def native_reply(request):
             choice = "change_to_ongoing_claim"
         elif key.endswith("-scope"):
             choice = "overlapping_scope"
+        elif challenge and request["state"].get("evidence_hits", {}).get(key) == challenge:
+            choice = "material_challenge"
         else:
             choice = "no_material_effect"
         assert choice in question["criteria"]
@@ -142,6 +145,8 @@ def reply(request, perception=None, *, approve_memories=True):
         return {"support": ["checklist steps for release"], "challenge": ["release checklist exclusion"],
                 "qualification": ["changes to the checklist"], "other": ["updates to release"]}
     if name == "dream_pair_classification":
+        if perception:
+            return {"relation": "none", "direction": "none", "evidence": []}
         # Default Root policy verifies duplicate proposals, so this fixture
         # exercises both Dream consumers through their normal workflow.
         return {"relation": "duplicate_of", "direction": "undirected",

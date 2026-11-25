@@ -5,14 +5,16 @@ from itertools import count
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 from shutil import copyfile
+from threading import Event
 from time import monotonic, sleep
 
 import pytest
 
 from hosted_hermes_worker import configure_hermes, start_hermes_worker, worker_command
-from hosted_inference_probe import NATIVE_DECISION_KEY, hosted_model
+from hosted_inference_probe import NATIVE_DECISION_KEY, hosted_model, native_reply
 from reliquary_hermes import client as client_module
 from reliquary_hermes.client import HostClient, HostUnavailable
 from reliquary_hermes.outbox import SourceOutbox
@@ -26,6 +28,7 @@ from test_hp05_retrieval import _dashboard_binding, _dashboard_exchange, _dashbo
 
 
 DIMENSIONS = 20000
+DEFAULT_QUERY = "amber checklist"
 
 
 def wait_for(predicate, *, seconds=40, diagnostic=lambda: ""):
@@ -45,16 +48,16 @@ def audit(home):
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
-def query_request(turn):
+def query_request(turn, text=DEFAULT_QUERY):
     return canonical({"protocol_version": 1, "request_id": "query-" + turn,
         "operation": "memory_query", "profile_id": PROFILE, "principal_id": PRINCIPAL,
         "session_id": SESSION, "turn_id": turn, "expected_revision": None,
-        "idempotency_key": None, "arguments": {"query": "amber checklist", "limit": 10}})
+        "idempotency_key": None, "arguments": {"query": text, "limit": 10}})
 
 
-def query(client, turn):
+def query(client, turn, text=DEFAULT_QUERY):
     try:
-        response = client.request(query_request(turn), recall_tool=True)
+        response = client.request(query_request(turn, text), recall_tool=True)
     except HostUnavailable as error:
         return str(error)
     if response.status != "ok":
@@ -62,8 +65,8 @@ def query(client, turn):
     return decode(response.result_json)
 
 
-def successful_query(client, turn):
-    result = query(client, turn)
+def successful_query(client, turn, text=DEFAULT_QUERY):
+    result = query(client, turn, text)
     assert isinstance(result, dict) and result["memory_ids"], result
     assert result["provenance"] and result["context"]
     return result
@@ -234,17 +237,42 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
     (home / ".env").write_text(f"{TOKEN_VAR}={TOKEN}\nJEV_API_KEY={NATIVE_DECISION_KEY}\n", encoding="utf-8")
     source = TEXT["accepted"]
     claim = "The Lantern release uses an amber checklist."
-    monkeypatch.setitem(TEXT, "appended", "Lantern records backup evidence separately.")
+    paraphrase = "Deployment follows golden procedures."
+    distractor = "Lantern records backup evidence separately."
+    unrelated_query = "Maritime forecast"
+    challenge = "Lantern release excludes the amber checklist."
+    monkeypatch.setitem(TEXT, "appended", distractor)
+    monkeypatch.setitem(TEXT, "challenge", challenge)
     outbox = SourceOutbox(state, PROFILE, PRINCIPAL)
+    query_terms = set(re.findall(r"[^\W_]+", paraphrase.casefold()))
+    assert query_terms.isdisjoint(re.findall(r"[^\W_]+", f"{claim} {source}".casefold()))
 
-    with hosted_model(2, perception=(source, claim)) as (url, model), ExitStack() as cleanup:
+    embedded = set()
+
+    def embed(text):
+        embedded.add(text)
+        return [0.0, 1.0] if text == unrelated_query else [1.0, 0.0]
+
+    review_requested = Event()
+    defer_review = True
+
+    def decide(request):
+        decision = native_reply(request, challenge=challenge)
+        state = request["state"]
+        if (defer_review and "verify" in request["questions"] and state["claim"] == claim
+                and any(row["text"] == challenge for row in state["backcheck_hits"])):
+            review_requested.set()
+            return {"answers": {}}
+        return decision
+
+    with hosted_model(2, perception=(source, claim), embed=embed, decide=decide) as (url, model), ExitStack() as cleanup:
         client = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
         cleanup.callback(lambda: stop(client._process) if client._process is not None else None)
         client.attach(SESSION)
         worker = start_hermes_worker(home, inference_checkout, url, cleanup)
         def diagnostic():
             log = (home / "hosted-worker.log").read_text(encoding="utf-8", errors="replace")
-            return log, model["calls"], model["errors"]
+            return log, model["calls"], model["native_calls"], model["errors"]
 
         job = _queue(outbox, ["accepted", "appended"])
         assert outbox.acknowledge(job, _when_ready(client, job))
@@ -278,7 +306,7 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
         reader.attach(SESSION)
 
         def observation_query():
-            result = query(reader, f"perception-{next(turns)}")
+            result = query(reader, f"perception-{next(turns)}", paraphrase)
             return result if isinstance(result, dict) and result.get("observations") else None
 
         before = wait_for(observation_query, diagnostic=diagnostic)
@@ -298,6 +326,8 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
         assert evidence["field"] == "Content"
         assert (evidence["start_byte"], evidence["end_byte"]) == (0, len(source.encode("utf-8")))
         assert lineage["source_snapshot_digests"] == [job.snapshot.snapshot_digest]
+        citation = f"memory {owner_id}/{memory['memory_id']} revision {memory['revision']}"
+        assert f"{citation}, Content bytes 0–{len(source.encode('utf-8'))}" in before["context"]
 
         assert worker_command(worker, "stop")["registered"] is False
         wait_for(lambda: not discovery.exists(), diagnostic=diagnostic)
@@ -311,14 +341,37 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
         assert sum(call["state"].get("claim") == claim for call in model["native_calls"]) == 1
 
         model["approve_memories"] = True
-        mixed = successful_query(reader, "perception-mixed")
+        assert query(reader, "perception-unrelated", unrelated_query) == "no_recall_results"
+        assert {claim, paraphrase, unrelated_query} <= embedded
+        mixed = successful_query(reader, "perception-mixed", paraphrase)
         assert memory["memory_id"] in mixed["memory_ids"] and mixed["observations"] == [observation]
+
+        # Core publishes Pending before routing the challenge to review Verify.
+        # Leave that review unresolved while the same signed query retrieves a Memory.
+        changed = _queue(outbox, ["accepted", "appended", "challenge"])
+        assert outbox.acknowledge(changed, _when_ready(reader, changed))
+        wait_for(review_requested.is_set, diagnostic=diagnostic)
+        assert any(call["state"].get("existing_observation") == claim
+            and challenge in call["state"]["evidence_hits"].values() for call in model["native_calls"])
+        pending = successful_query(reader, "perception-pending-review", paraphrase)
+        assert memory["memory_id"] in pending["memory_ids"]
+        assert not pending.get("observations") and claim not in pending["context"]
+
+        # Retry the review in a fresh host before testing a delayed disclosure.
+        defer_review = False
         model["approve_memories"] = False
-        assert reader.prepare_retrieval(query_request("perception-before-deletion"))
+        assert worker_command(worker, "stop")["registered"] is False
+        wait_for(lambda: not discovery.exists(), diagnostic=diagnostic)
+        assert worker_command(worker, "start")["registered"] is True
+        wait_for(discovery.exists, diagnostic=diagnostic)
+        reader = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
+        reader.attach(SESSION)
+        wait_for(observation_query, diagnostic=diagnostic)
+        assert reader.prepare_retrieval(query_request("perception-before-deletion", paraphrase))
         outbox.terminal(SESSION, "delete")
         terminal = outbox.next_job(SESSION)
         assert outbox.acknowledge(terminal, _when_ready(reader, terminal))
-        rejected = query(reader, "perception-before-deletion")
+        rejected = query(reader, "perception-before-deletion", paraphrase)
         assert rejected == "source_terminal", rejected
         assert phy.read_bytes() == phy_bytes
         assert NATIVE_DECISION_KEY not in (home / "hosted-worker.log").read_text(encoding="utf-8")
