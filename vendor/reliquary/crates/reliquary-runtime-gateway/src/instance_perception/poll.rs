@@ -199,7 +199,7 @@ fn prepare(rel: &RelSession, state: &mut WorkerState) -> Result<TickInput, Owner
         state.review_exhausted = true;
     }
     let mut progress = PerceptionAuditProgress::decode(&row.bytes)?;
-    let advance = progress.advance(rel)?;
+    let advance = progress.advance_scheduled(rel, &mut state.recurring_audit_first)?;
     Ok(TickInput::Audit {
         previous: row.fingerprint,
         progress,
@@ -411,7 +411,7 @@ fn proposals(
     state: &mut WorkerState,
     cut: &PerceptionSourceCut,
     memory_profile: Option<CompatibilityProfileId>,
-    candidates: Vec<reliquary_application::perception_workflow::ProposedClaim>,
+    candidates: Vec<reliquary_application::perception_workflow::ObservationProposal>,
 ) -> Result<(Vec<PreparedObservation>, Vec<ObservationOperation>), GatewayError> {
     let routes = draft_routes(owner.routes, memory_profile);
     let mut drafts = Vec::new();

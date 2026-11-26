@@ -128,18 +128,17 @@ def reply(request, perception=None, *, approve_memories=True):
         approved = [item["memory"] for item in state.get("candidates", [])
                     if approve_memories or (perception and item.get("content") == perception[1])]
         return {"version": 1, "approved": approved}
-    if name == "memory_web_audit_v1":
+    if name == "memory_web_audit_v2":
         source, claim = perception
-        candidates = [{"proposition": claim, "status": "observed", "time_scope": "current",
-                       "source_slots": [row["slot"]], "participants": []}
+        candidates = [{"proposition": claim, "source_slots": [row["slot"]], "participant_slots": []}
                       for row in payload["sources"] if row["kind"] == "memory" and row["text"] == source]
         return {"ego": {"candidates": [], "lookups": []},
                 "perception": {"candidates": candidates, "lookups": []}}
-    if name == "observation_synthesis_v1":
+    if name == "observation_synthesis_v2":
         proposal = payload["proposal"]
-        draft = {"proposition": proposal["proposition"], "status": proposal["status"],
-                 "time_scope": proposal["time_scope"], "source_slots": payload["proposal_sources"],
-                 "participants": payload["proposal_participants"]}
+        draft = {"proposition": proposal["proposition"], "status": "observed",
+                 "time_scope": "current", "source_slots": payload["proposal_sources"],
+                 "participants": []}
         return {"draft": draft, "duplicate_slot": None}
     if name == "observation_receptors_v1":
         return {"support": ["checklist steps for release"], "challenge": ["release checklist exclusion"],
