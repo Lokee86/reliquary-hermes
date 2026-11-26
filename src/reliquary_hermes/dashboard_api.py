@@ -33,6 +33,10 @@ _SETUP_ERRORS = {
     "unsupported_bundled_host": (503, "runtime_unavailable"),
     "missing_bundled_host": (503, "runtime_unavailable"),
     "preflight_unavailable": (503, "preflight_unavailable"),
+    "embedding_path_outside_profile": (400, "embedding_path_outside_profile"),
+    "embedding_unconfigured": (422, "embedding_unconfigured"),
+    "embedding_config_invalid": (422, "embedding_config_invalid"),
+    "embedding_credentials_unavailable": (422, "embedding_credentials_unavailable"),
     "service_restart_required": (409, "service_restart_required"),
     "source_capture_setup_required": (503, "source_capture_setup_required"),
     "managed_setup": (403, "managed_setup"),
@@ -385,7 +389,7 @@ async def _setup_request(request: Request, operation: str, *read_args):
     home = _host_home(request)
     args = (home, *read_args)
     kwargs = {}
-    if operation in {"validate", "apply", "create"}:
+    if operation in {"validate", "apply", "create", "configure_embedding"}:
         if not _same_origin(request):
             raise HTTPException(status_code=403, detail="same_origin_required")
         content_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
@@ -393,13 +397,16 @@ async def _setup_request(request: Request, operation: str, *read_args):
             raise HTTPException(status_code=415, detail="setup_json_required")
         try:
             candidate = decode(await _read_bounded_body(request, limit=_SETUP_BODY_BYTES, error="setup_request_too_large"))
-            if operation != "create":
+            if operation in {"validate", "apply"}:
                 fields = _SETUP_FIELDS | {"switch_review"} if operation == "apply" else _SETUP_FIELDS
                 require(set(candidate) <= fields, "invalid_setup_candidate")
+            elif operation == "configure_embedding":
+                require(set(candidate) == {"config_path"}, "invalid_setup_candidate")
         except ContractError:
             raise HTTPException(status_code=400, detail="invalid_setup_request") from None
         args = (home, candidate)
-        kwargs = {} if operation == "create" else {"project_aware": True}
+        if operation in {"validate", "apply"}:
+            kwargs = {"project_aware": True}
 
     try:
         from . import setup
@@ -450,6 +457,11 @@ async def setup_pick_path(request: Request):
     if await run_in_threadpool(_local_dialogs_available, request):
         result = await setup_dialog.choose(mode, request.is_disconnected)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/setup-v1/embedding")
+async def setup_embedding(request: Request):
+    return await _setup_request(request, "configure_embedding")
 
 
 @router.post("/setup-v1/create")

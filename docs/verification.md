@@ -2,6 +2,29 @@
 
 ## Purpose
 
+Record reproducible checks for the standalone provider, native host, and dashboard.
+
+## Overview
+
+### Stock Hermes native embedding target
+
+The stock smoke uses Hermes v0.23.4 at `8fc0374447313e276f6b9a2764bfc750190c966a`. It runs the real completion facade with disposable profiles, synthetic HTTP providers, and copied or fresh REL and PHY files. Capture stages a durable receipt before Switchboard is configured. The tests check processing and recall after configuration and restart, typed query and document requests, exact receipt replay, and the original identity marker after key rotation. The mismatch and unbound cases exercise the embedding owner guard. Two concurrent profiles use independent configuration files and embedding credentials. [Host audit](host-audit.md#current-stock-hermes-target)
+
+Set `HP_INFERENCE_HERMES_CHECKOUT` to that stock checkout, `HP03_HOST_BINARY` to the rebuilt native host, and `HP03_RELIQUARY_CLI` to the CLI from the vendored Core revision, v0.2.2 at `9961f1bc1677b64f3ed97d608387aa3927093497`. The CLI provisions disposable owners and configuration, and verifies Archive turns after the native host releases its writer lease. Set `HP01_HERMES_CHECKOUT` to the independent historical ABC revision for the broader Python suite. The committed rewind case uses `HP_REMOVAL_HERMES_CHECKOUT` and `PYTHONPATH` pointing at the audited transcript-removal build in a separate pytest process. [Configuration and recovery](local-service.md#native-switchboard-embedding-route)
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
+$env:PYTHONDONTWRITEBYTECODE = '1'
+python -B -m pytest -q --basetemp=.pytest_tmp
+cargo test --manifest-path host/Cargo.toml --locked --offline -j 1 -- --test-threads=1
+```
+
+The Windows packaging smoke exercises the source-build script and an installed host on disposable profile data. The catalog publication workflow owns exact-source verification of the four Linux and macOS binaries and their attestations. [Native release packages](#native-release-packages)
+
+### Historical evidence
+
+The following release preparation and hosted-embedding-extension results predate the stock/native split. They are retained as historical evidence, not current acceptance results or a requirement to install the Hermes embedding extension.
+
 ### Catalog release preparation, 2026-11-11
 
 The first complete Windows test compilation at `140a6356dc970dc5326af1d98cb9b01ac7efff48` passed 104 native tests, with one ignored large synthetic characterization. That native source is identical to `20d398459a91de3b67eb6cee12bd325f1a304c56`. The workflow was stopped after 40 minutes during its separate full-release recompilation; no release artifact or attestation is claimed for that run. The replacement workflow builds and tests one shared release profile at CI-only optimization level 1 with two compiler jobs, separate step limits, and cache saving after trusted failed builds. The local production source-build script retains the default full-release profile. The final artifact and attestation remain separate release gates recorded in the PR.
@@ -14,11 +37,7 @@ The first public Native host run at source commit `d04ddf716524a7028c0f7f09036ff
 
 The rights holder then approved publishing the four required Lodestone source/license files. The follow-up package includes only that subset, verifies its pinned Git blobs, records its original hashes, and changes Root to a local path dependency. Cargo metadata with `--locked --offline --no-deps` passes. Full offline dependency resolution stops on an uncached public crate; the public workflow supplies the clean native build gate. Python dependencies are declared in `plugin.yaml`, and test tooling uses `pytest.ini`. Without a root Python project, Hermes PM synthesizes a small dependency member instead of copying the nested native source tree into its Python workspace or hashing future native build caches, avoiding Windows path-length failures and unnecessary rebuilds of the Python environment.
 
-Record reproducible checks for the standalone provider and dashboard contracts.
-
-## Overview
-
-### Hosted inference migration gate
+### Historical hosted inference migration gate
 
 The upstream `ctx.llm.embed/aembed` PR is [Hermes #154202](https://github.com/NousResearch/hermes-agent/pull/154202), pinned at `168a923023a7018be3dbf66530531dd20b1834b9`. Its facade/transport tests passed 83 cases, plugin task/picker tests passed 47, and auxiliary-client/credential regression tests passed 229 (359 distinct tests). All 16 Hermes repository checks passed. Tests use synthetic loopback providers and isolated profile credentials; no live provider or Memory corpus was probed.
 
@@ -67,7 +86,7 @@ The paraphrase case pairs `Deployment follows golden procedures.` with `The Lant
 
 The updated Windows fixture passed in 55.02 seconds with Core `8d0b432dafc023b31dade2c06c46b75c1ab266bf` and Hermes `168a923023a7018be3dbf66530531dd20b1834b9`. The same run completed review after a fresh host start, preserved the delayed `source_terminal` disclosure fence, and confirmed the disposable PHY bytes matched. The run log is `.test-temp/native-jev-paraphrase-review-distinct.log`.
 
-For the real inference fixture, set `HP_INFERENCE_HERMES_CHECKOUT` to the exact upstream inference revision. Keep `HP01_HERMES_CHECKOUT` on the independent audited history/ABC baseline. Use a disposable patched Hermes history checkout for `HU08_HERMES_INSTALLED_CHECKOUT`; never use a live profile as test state. Set `HP03_HOST_BINARY` and `HP03_RELIQUARY_CLI` to binaries built against the same isolated Root source. All temporary owner copies, logs, and caches stay in the worktrees; pytest uses `.pytest/_tmp`.
+For the historical extension-era inference fixture, set `HP_INFERENCE_HERMES_CHECKOUT` to its exact inference revision. Keep `HP01_HERMES_CHECKOUT` on the independent audited history/ABC baseline. Use a disposable patched Hermes history checkout for `HU08_HERMES_INSTALLED_CHECKOUT`; never use a live profile as test state. Set `HP03_HOST_BINARY` and `HP03_RELIQUARY_CLI` to binaries built against the same isolated Root source. These are historical fixture requirements, not the stock/native acceptance matrix above. Keep all temporary owner copies, logs, and caches in the assigned worktree; current pytest runs use `.pytest_tmp`.
 
 HP01 verifies the pinned Hermes interfaces and the Python provider, owner routing and copied-source fixtures. HP02 verifies the selected-return bridge, copied-source import and dashboard product operations through the public Root API.
 
@@ -80,11 +99,11 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 $env:PYTHONDONTWRITEBYTECODE='1'
 $env:HP01_HERMES_CHECKOUT='C:\!bin\workspace\hermes-agent-reliquary-hp01-v023'
 $env:PYTHONPATH=$env:HP01_HERMES_CHECKOUT
-python -B -m pytest -q --basetemp .pytest/_tmp
+python -B -m pytest -q --basetemp=.pytest_tmp
 git diff --check
 ```
 
-The checkout must be at the exact SHA in [host audit](host-audit.md). It supplies `agent.memory_provider` during test collection. Without `HP01_HERMES_CHECKOUT`, checkout-based probes skip explicitly. The Python suite uses deterministic inputs and keeps pytest state in this worktree. The shared documentation checker and commit comparison commands are in the [documentation policy](documentation-policy.md).
+The historical HP01 checkout in this example uses v0.23.0 and supplies `agent.memory_provider` during test collection. Without `HP01_HERMES_CHECKOUT`, checkout-based probes skip explicitly. The Python suite uses deterministic inputs and keeps pytest state in this worktree. Run the stock/native gate above separately on Hermes v0.23.4. [Host audit](host-audit.md) · [Documentation checker and commit comparison](documentation-policy.md)
 
 ## Scope-free REL setup and restart
 

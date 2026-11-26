@@ -20,6 +20,10 @@ this source snapshot.
 
 The pinned Core release's `quinn-proto` 0.11.13 carries the upstream fix for `GHSA-4w2j-m93h-cj5j`. The patch keeps the version required by Lore. [Upstream Quinn fix](https://github.com/quinn-rs/quinn/commit/fed0321a9a672819662caab37f5662f1ad91308e)
 
+### Local native embedding development delta
+
+The integration adds a narrow Switchboard resolver for the selected embedding slot and protected API key. The endpoint retains query and document input modes and bounds the batch deadline. The public runtime exposes the route identity and supports the Hermes host's per-owner Perception guard. The integration tests cover the selected credential, native endpoint, and owner bindings. [Verification](../../docs/verification.md#stock-hermes-native-embedding-target)
+
 ## Related docs
 
 - [Integration verification](../../docs/verification.md)

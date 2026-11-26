@@ -10,6 +10,10 @@ const errorMessages: Record<string, string> = {
   managed_setup: "This profile is managed and cannot change local setup.",
   service_restart_required: "Stop the running Reliquary service for this profile and try connecting again.",
   source_capture_setup_required: "Check this profile's Reliquary capture enrollment file and try again.",
+  embedding_unconfigured: "Choose a Reliquary configuration with an embedding route.",
+  embedding_config_invalid: "Check that this profile's Reliquary configuration file has a valid embedding route.",
+  embedding_credentials_unavailable: "Check the embedding credential in the OS credential store.",
+  embedding_path_outside_profile: "Choose a Reliquary configuration file inside this Hermes profile.",
   owner_already_exists: "A file already exists at this path. Select it or choose another destination.",
   owner_created_unverified: "Reliquary created the file but could not verify it. Use Select to check it.",
   unknown_hermes_project: "Refresh the Hermes projects list and try again.",
@@ -62,6 +66,8 @@ export function Setup({ host, status, readOnly, onConnected }: {
   const { Button, Input } = host.controls;
   const [main, setMain] = useState(status.defaults.main_rel ?? "");
   const [phy, setPhy] = useState(status.defaults.active_phy ?? "");
+  const [embeddingPath, setEmbeddingPath] = useState("");
+  const [embeddingSaved, setEmbeddingSaved] = useState(false);
   const [projects, setProjects] = useState(status.defaults.projects);
   const [inventory, setInventory] = useState<SetupProjectInventory | null>(null);
   const [inventoryError, setInventoryError] = useState(false);
@@ -225,8 +231,7 @@ export function Setup({ host, status, readOnly, onConnected }: {
       {readOnly && <p role="note" className="knowledge-muted">{readOnly}</p>}
       <p className="knowledge-muted">{status.runtime_detected ? "Reliquary runtime detected" : "Reliquary runtime unavailable"}</p>
       {!webDialogs && !host.pickOpenPath && <p role="note" className="knowledge-muted">Native file dialogs are unavailable for this connection.</p>}
-      <p className="knowledge-muted">Choose the General REL and active PHY used by this Hermes profile. Hermes supplies model inference and authentication.</p>
-      <p className="knowledge-muted">Select an embedding model in Hermes before processing sources or using semantic recall.</p>
+      <p className="knowledge-muted">Choose the General REL and active PHY used by this Hermes profile.</p>
       <Button type="button" className="add-scope warlock-workflow-toggle" aria-expanded={manual} disabled={busy || !!confirm}
         onClick={() => setManual(value => !value)}>{manual ? "Hide manual paths" : "Enter path manually"}</Button>
       {status.configured && <p className="knowledge-muted">Existing sessions keep their accepted memory routes.</p>}
@@ -262,6 +267,38 @@ export function Setup({ host, status, readOnly, onConnected }: {
               {status.configured ? "Review changes" : "Review and connect"}
             </Button>
           </div>}
+        </fieldset>
+      </form>
+      <form onSubmit={event => {
+        event.preventDefault();
+        if (!canWrite) return;
+        void run(async signal => {
+          const result = await post("embedding", { config_path: embeddingPath.trim() }, signal) as {
+            embedding_error?: string | null;
+          };
+          signal.throwIfAborted();
+          if (result?.embedding_error !== null) throw new Error("invalid_setup_response");
+          setEmbeddingPath("");
+          setEmbeddingSaved(true);
+        });
+      }}>
+        <fieldset disabled={busy || !!confirm}>
+          <section className="knowledge-memory-row warlock-setup-row" aria-label="Embeddings">
+            <div>
+              <strong>Embeddings</strong>
+              <p role="status">{embeddingSaved
+                ? status.configured ? "Saved. Restart this profile's Reliquary service to load the route." : "Embedding configuration saved."
+                : status.embedding_error ? errorMessages[status.embedding_error] ?? "Embedding setup is unavailable."
+                  : "Embedding route configured."}</p>
+              {canWrite && <>
+                <label className="warlock-setup-path">Profile-local Reliquary config path
+                  <Input value={embeddingPath} onChange={event => setEmbeddingPath(event.currentTarget.value)}
+                    autoComplete="off" maxLength={4096} />
+                </label>
+                <Button type="submit" disabled={!validLocalPath(embeddingPath.trim())}>Save embedding config</Button>
+              </>}
+            </div>
+          </section>
         </fieldset>
       </form>
     </main>

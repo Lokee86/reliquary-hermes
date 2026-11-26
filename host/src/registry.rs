@@ -220,6 +220,16 @@ impl Registry {
         })
     }
 
+    pub(crate) fn set_perception_owner_guard(
+        &self,
+        guard: Arc<dyn Fn(OwnerId) -> bool + Send + Sync>,
+    ) -> Result<(), RegistryError> {
+        self.require_current()?;
+        self.gateway
+            .set_perception_owner_guard(guard)
+            .map_err(owner_error)
+    }
+
     pub(crate) fn set_perception_runtime(
         &mut self,
         runtime: Option<(u64, Arc<ConfiguredRuntime>)>,

@@ -77,6 +77,11 @@ impl EmbeddingBindingStore {
         }
     }
 
+    /// Background work requires persisted evidence, even for an empty owner.
+    pub(crate) fn matches_owner(&self, owner: OwnerId, expected: &EmbeddingBinding) -> bool {
+        matches!(read_marker(&self.path(owner)), Ok(Some(actual)) if &actual == expected)
+    }
+
     pub(crate) fn status_owner(
         &self,
         owner: OwnerId,
@@ -169,6 +174,41 @@ mod tests {
             input_type_handling: "shared".into(),
             normalization: "none".into(),
         }
+    }
+
+    #[test]
+    fn background_guard_requires_current_persisted_evidence_and_fails_closed() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = EmbeddingBindingStore::open(temp.path()).unwrap();
+        let owner = "00000000000000000000000000000006".parse().unwrap();
+        let other = "00000000000000000000000000000007".parse().unwrap();
+        let expected = binding("model-a");
+        assert!(!store.matches_owner(owner, &expected));
+        store.ensure_owner(owner, &expected, || Ok(false)).unwrap();
+        assert!(store.matches_owner(owner, &expected));
+        assert!(!store.matches_owner(other, &expected));
+        assert!(!store.matches_owner(owner, &binding("model-b")));
+        let mut changed = expected.clone();
+        changed.dimensions += 1;
+        assert!(!store.matches_owner(owner, &changed));
+        changed = expected.clone();
+        changed.provider = "another-provider".into();
+        assert!(!store.matches_owner(owner, &changed));
+        changed = expected.clone();
+        changed.input_type_handling = "separate".into();
+        assert!(!store.matches_owner(owner, &changed));
+        changed = expected.clone();
+        changed.normalization = "l2".into();
+        assert!(!store.matches_owner(owner, &changed));
+        fs::remove_file(store.path(owner)).unwrap();
+        assert!(!store.matches_owner(owner, &expected));
+        fs::write(store.path(owner), b"not a marker").unwrap();
+        assert!(!store.matches_owner(owner, &expected));
+        fs::write(store.path(owner), vec![b' '; MAX_BYTES as usize + 1]).unwrap();
+        assert!(!store.matches_owner(owner, &expected));
+        fs::remove_file(store.path(owner)).unwrap();
+        fs::create_dir(store.path(owner)).unwrap();
+        assert!(!store.matches_owner(owner, &expected));
     }
 
     #[test]

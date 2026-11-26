@@ -237,6 +237,7 @@ export interface SetupStatus {
   configured: boolean;
   runtime_detected: boolean;
   capture_status?: "unavailable" | "enrolled" | "setup_required";
+  embedding_error?: string | null;
   desktop_native_mutations: boolean;
   local_dialogs_available: boolean;
   owner_generation?: number;

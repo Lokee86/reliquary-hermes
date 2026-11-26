@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The catalog package retains the signed wire protocol and profile-fenced Hermes secret reads for its local transport token. Model inference uses the registered plugin's `ctx.llm` in a separate context-bound worker. The native process receives no model credentials. The unified root entry registers the worker, provider and `on_session_delete` hook. See [current installation and disclosure](../README.md).
+The package retains the signed wire protocol and profile-fenced Hermes secret reads for its local transport token. For the stock Hermes v0.23.4 target, ordinary/structured completions use the registered plugin's `ctx.llm` in a separate context-bound worker; embeddings use an explicitly selected native Reliquary Switchboard route. The native process reads only that route's protected embedding credential locally; endpoint secrets never cross the broker. The unified root entry registers the worker, provider and `on_session_delete` hook. See [current installation and disclosure](../README.md). This target awaits assembled verification; historical evidence is scoped separately in [verification](verification.md#stock-hermes-native-embedding-target).
 
 Freeze the bounded HP01 transport, copied-source and server-owned authority DTOs for the standalone integration.
 
@@ -13,14 +13,17 @@ The Python DTOs define the provider boundary. The HP03 Rust host authenticates a
 ## Transport and authentication
 
 The signed source-status response includes nullable `embedding_error` metadata.
-An unavailable or incompatible embedding identity is reported without removing
-the accepted import receipt. The worker logs the actual bound general and
-embedding provider/model, dimensions, input semantics and normalization at INFO
-level; it does not log prompts, source content or authentication material.
+An unavailable or incompatible embedding route/identity is reported without removing
+the accepted import receipt. Startup configuration failures use the safe codes
+`embedding_unconfigured`, `embedding_config_invalid`, and
+`embedding_credentials_unavailable`. Source staging and inspection remain available;
+semantic work stays pending or unavailable. Diagnostics must not reflect endpoint
+secrets, prompts, source content, or authentication material.
 
-Embedding batches also respect Hermes's facade limits of 128 inputs and one MiB
-of UTF-8 input per call. The adapter splits larger batches and restores their
-original order; a single oversized input is rejected without truncation.
+Embedding bounds belong to the native Switchboard endpoint, not Hermes's facade
+or multipart broker. `ConfiguredEmbeddingEndpoint` sends bounded native requests
+with distinct `search_query` and `search_document` modes and validates returned
+dimensions and normalization. No embedding request/result vectors use the broker.
 
 The Rust service listens on `127.0.0.1` and publishes a literal loopback HTTP endpoint. Discovery pins `endpoint`, `instance_id`, `profile_id`, `protocol_version`, `hermes_revision` and `lease_id`. The client rejects other profiles or versions, non-loopback addresses, DNS hostnames, userinfo, route paths, query parameters and fragments.
 
@@ -40,15 +43,19 @@ An ambiguous discovery probe reports unavailable. A missing discovery file or li
 
 The private `/v1/inference/*` control operations extend the same signed loopback service. They use its existing profile, principal, instance, service lease, nonce, Host/Origin checks, and response proof. They are not browser APIs or model endpoints. No provider credential crosses this protocol.
 
-A dedicated profile-bound worker holds the registered plugin's `ctx.llm`. It registers a synthetic-probe identity containing the actually resolved general provider/model and embedding provider/model/dimensions/input handling/normalization. Root's hosted constructor binds that identity to the existing General, Decision, and Embedding contracts; the existing general-to-decision adapter retains decision-schema validation. Worker and host reject results from a different identity or epoch before publication. Credential refresh does not itself change the identity. A changed embedding space uses the existing compatibility/reprocessing path.
+A dedicated profile-bound worker holds the registered plugin's `ctx.llm`. Its identity handshake requires `protocol_version=2` and contains the actually resolved general completion provider/model plus the optional native Perception route identity, not a Hermes embedding identity. The host binds the existing General/Decision contracts to that worker and the Embedding contract directly to native Switchboard. The existing general-to-decision adapter retains schema validation. Worker and host reject results from a different identity or epoch before publication. This worker version is separate from the unchanged version-one provider/discovery envelopes below; mixed worker/native versions must fail closed.
 
-The broker supports identity, heartbeat, claim, request-part, result-start, result-part, cancel, and worker-error operations. Jobs carry bounded deadlines and correlation IDs. Requests and results use 64-KiB raw parts with an exact part count, byte count, ordering, and SHA-256 digest; base64 parts remain below the existing 256-KiB JSON wire limit. Large embedding batches are segmented and reassembled in order. The broker bounds total job bytes and pending jobs and returns typed backpressure instead of truncating results. It retains no durable plaintext prompt cache.
+The native host resolves `<hermes_home>/reliquary/processing.json` with exactly `{"config_path": "<absolute CVCFG path>"}` once at startup. Existing pointers outside the profile are permitted; new Setup/CLI selections must resolve inside the active profile. Switchboard's `ResolvedEmbeddingRoute::from_path` loads only the explicit embedding slot and referenced encrypted API key using its existing OS-store lifecycle. Its `OpenAiReady` transport sends `input_type=search_query` or `search_document` directly to the selected service. The broker receives neither endpoint secrets nor embedding vectors. Restart the host after setup or key repair/rotation.
 
-Admission reserves capacity among the four HTTP workers for claim/result control requests. Model work runs without holding the SourceService, Registry, or Retrieval service locks. A worker exit, expired deadline, profile/instance/lease change, host restart, or changed model identity invalidates pending work and rejects late responses. An absent embedding API reports `embedding_unavailable`; there is no standalone-credential fallback. The worker owns a scope-free integration runtime lease and can process work without an active chat turn.
+Durable per-owner evidence binds provider/endpoint hash, model, dimensions, query/document modes and normalization. Key bytes are not identity, so credential rotation alone does not change the space. Preserve immutable `embedding-identities-v1/` markers and source/processing receipts. Existing vectors without verified evidence report `embedding_identity_unbound`; incompatible evidence reports `embedding_identity_stale`. Synthetic probe similarity cannot establish compatibility. Without a verified match, explicitly replay authorized sources into a new REL through the normal import/owner workflow; do not reset markers, receipts, or vectors in the old REL.
+
+The broker supports identity, heartbeat, claim, request-part, result-start, result-part, cancel, and worker-error operations for completion and optional Perception work only. Jobs carry bounded deadlines and correlation IDs. Requests and results use 64-KiB raw parts with an exact part count, byte count, ordering, and SHA-256 digest; base64 parts remain below the existing 256-KiB JSON wire limit. The broker bounds total job bytes and pending jobs and returns typed backpressure instead of truncating results. It retains no durable plaintext prompt cache. Embedding jobs and vectors are not broker operations.
+
+Admission reserves capacity among the four HTTP workers for claim/result control requests. Model work runs without holding the SourceService, Registry, or Retrieval service locks. A worker exit, expired deadline, profile/instance/lease change, host restart, or changed model identity invalidates pending work and rejects late responses. No Hermes embedding API or credential fallback is consulted: native embedding configuration is explicit. The worker owns a scope-free integration runtime lease and can process work without an active chat turn. The optional Perception route and its Hermes-scoped credential handling remain unchanged. [Perception configuration](local-service.md#perception-decision-route)
 
 ## Profile setup
 
-The profile-scoped setup API is under the Reliquary dashboard plugin namespace. It provides `GET /setup-v1/status`, `GET /setup-v1/projects`, `POST /setup-v1/dialog`, `POST /setup-v1/create`, `POST /setup-v1/validate`, and `POST /setup-v1/apply`. The Hermes request scope selects the profile, including when the profile has no `owners.json`. Status reports `configured`, `runtime_detected`, `local_dialogs_available`, and current owner defaults. The validate and apply body contains `main_rel`, `active_phy`, and optional `projects` keyed by project ID. Mutations require same-origin browser admission or the Hermes-verified local Desktop grant. The JSON body limit is 64 KiB. Inference selection belongs to Hermes, so setup contains no model configuration path or provider secret.
+The profile-scoped setup API is under the Reliquary dashboard plugin namespace. It provides `GET /setup-v1/status`, `GET /setup-v1/projects`, `POST /setup-v1/dialog`, `POST /setup-v1/create`, `POST /setup-v1/validate`, and `POST /setup-v1/apply`. The Hermes request scope selects the profile, including when the profile has no `owners.json`. Status reports `configured`, `runtime_detected`, `local_dialogs_available`, current owner defaults and a safe embedding status. The owner validate and apply body contains `main_rel`, `active_phy`, and optional `projects` keyed by project ID. Embedding selection uses the separate admitted `POST /setup-v1/embedding` operation taking exactly `{"config_path": "<existing absolute profile-local CVCFG>"}`, not a route or key payload; it validates the CVCFG and persists the pointer. Mutations require same-origin browser admission or the Hermes-verified local Desktop grant. The JSON body limit is 64 KiB. Selection does not provision credentials or hot-reload a running host. [Setup usage](local-service.md#native-switchboard-embedding-route)
 
 Project inventory comes from the profile’s Hermes registry. The response includes stable IDs, display names and the host routing capability. Validation checks changed assignments against active projects. The local dialog accepts a JSON object with only `mode` (`open_rel`, `open_phy`, `save_rel`, or `save_phy`). An authenticated same-origin request must also pass the Windows local-interactive check. The reply contains `status` (`selected`, `cancelled`, or `unavailable`) and an absolute `path` only when selected. It is a candidate for the normal setup operation. Create accepts an owner kind and new path, and a verified active project ID for a dedicated REL. The setup service locks the profile while the Rust host creates the owner through public Root and verifies the resulting file. It returns the selected path and owner metadata. Creating either REL role returns `scope: "unspecified"`. PHY creation returns a null scope.
 
