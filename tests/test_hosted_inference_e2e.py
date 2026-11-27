@@ -504,7 +504,7 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
 
 @pytest.mark.parametrize("pending", [False, True])
 def test_native_active_phy_observation_uses_ordinary_mixed_recall(
-        tmp_path, inference_checkout, pending):
+        tmp_path, inference_checkout, monkeypatch, pending):
     directory = os.environ.get("HP_PHY_RECALL_FIXTURE_DIR")
     if not directory:
         pytest.skip("Set HP_PHY_RECALL_FIXTURE_DIR to the disposable Core mixed-recall fixture")
@@ -513,6 +513,7 @@ def test_native_active_phy_observation_uses_ordinary_mixed_recall(
     if not host:
         pytest.skip("Set HP03_HOST_BINARY for native host recall verification")
     binary = Path(host).resolve(strict=True)
+    monkeypatch.syspath_prepend(str(inference_checkout))
     rel, phy = tmp_path / "mixed.rel", tmp_path / "active.phy"
     copyfile(fixture / "mixed.rel", rel)
     copyfile(fixture / ("pending.phy" if pending else "current.phy"), phy)
