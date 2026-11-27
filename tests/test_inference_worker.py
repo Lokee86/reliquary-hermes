@@ -372,7 +372,8 @@ def test_generic_plugin_context_starts_worker_without_memory_provider_slot(tmp_p
     provider.ReliquaryMemoryProvider = lambda: object()
     monkeypatch.setitem(sys.modules, "reliquary_hermes.provider", provider)
     monkeypatch.setattr(worker_module, "HostedInferenceWorker", FakeWorker)
-    context = SimpleNamespace(llm=object(), on_unload=callbacks.append)
+    llm = SimpleNamespace(acomplete_structured=lambda: None, aembed=lambda: None)
+    context = SimpleNamespace(llm=llm, on_unload=callbacks.append)
     register_plugin(context)
     assert started == [True] and len(callbacks) == 1
     callbacks[0]()
