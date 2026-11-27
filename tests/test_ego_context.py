@@ -256,7 +256,7 @@ def _stock_outgoing_request():
                 inputs.append([dict(message) for message in messages])
                 return selection(messages, **options)
             engine.select_context = witness
-            agent.run_conversation(message)
+            result = agent.run_conversation(message)
             assert len(captures) == 1, f"expected one completed request, saw {len(captures)}"
             first = captures[0]["messages"]
             original = inputs[0]
@@ -268,21 +268,28 @@ def _stock_outgoing_request():
                 assert first[0]["content"].count(marker) == 1
             assert "Disabled legacy MEMORY" not in first[0]["content"]
             assert "Disabled legacy USER" not in first[0]["content"]
-            assert first[-1]["content"] == original[-1]["content"]
+            assert first[1:] == original[1:]
             assert message in first[-1]["content"]
             if native:
                 assert engine._ego_client is not None
             if native:
                 assert "Atlas reviews purchase requests before releasing payment." in json.dumps(first)
+            history = result["messages"]
+            saved_history = json.dumps(history)
+            assert expected_identity not in saved_history
+            assert all(marker not in saved_history for marker in markers)
+
             import sys
             from unittest.mock import patch
 
             engine_module = sys.modules[type(engine).__module__]
             with patch.object(engine_module, "load_soul_md", return_value="Different leading identity."):
-                agent.run_conversation("Continue the fixture.")
+                agent.run_conversation("Continue the fixture.", conversation_history=history)
             assert len(captures) == 2
             fallback = captures[1]["messages"]
-            assert fallback[0]["content"] == inputs[1][0]["content"]
+            assert fallback == inputs[1]
+            assert len(fallback) > 2
+            assert any(message in row["content"] for row in fallback if row["role"] == "user")
             assert fallback[0]["content"].startswith(soul)
             assert expected_identity not in fallback[0]["content"]
             assert all(marker not in fallback[0]["content"] for marker in markers)
