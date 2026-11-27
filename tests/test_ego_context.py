@@ -81,9 +81,6 @@ def _stock_outgoing_request():
         )
         load_hermes_dotenv(hermes_home=home)
         native = HostClient(state, "profile-ego", "alice", token, binary=Path(host))
-        binding = native.attach("ego-fixture")
-        assert binding.rel_id == "a2" * 16 and binding.user_id == "a3" * 16
-        assert native.ego_call("status", {})["enabled"] is True
         expected_identity = "Respond with practical precision."
         markers = ("Always use metric units.", "Meetings use video.",
                    "Every Atlas purchase request is reviewed before payment is released.")
@@ -190,6 +187,10 @@ def _stock_outgoing_request():
         http.start()
         try:
             if native:
+                worker_cleanup.callback(native.cancel_startup)
+                binding = native.attach("ego-fixture")
+                assert binding.rel_id == "a2" * 16 and binding.user_id == "a3" * 16
+                assert native.ego_call("status", {})["enabled"] is True
                 original_config = config.read_text(encoding="utf-8")
                 config.write_text(
                     original_config.replace("model:\n", "model:\n  provider: 'custom:fixture'\n  default: fixture-model\n")
@@ -285,12 +286,15 @@ def _stock_outgoing_request():
             assert fallback[0]["content"].startswith(soul)
             assert expected_identity not in fallback[0]["content"]
             assert all(marker not in fallback[0]["content"] for marker in markers)
+            (home / "ego-wire-capture.json").write_text(
+                json.dumps({"original_messages": inputs, "outgoing_requests": captures}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         finally:
-            worker_cleanup.close()
-            server.shutdown()
-            if native and native._process is not None and native._process.poll() is None:
-                native._process.terminate()
-                native._process.wait(timeout=10)
+            try:
+                worker_cleanup.close()
+            finally:
+                server.shutdown()
 
 
 def test_stock_hermes_outgoing_ego_request(pinned_checkout, tmp_path):
