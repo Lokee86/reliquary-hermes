@@ -64,9 +64,8 @@ impl Registry {
                 .map_err(owner_error)?;
         }
         let result = self.commit_switch(next);
-        if !self.fenced && self.restart_ego_worker().is_err() {
-            self.fence();
-            return Err(RECOVERY_REQUIRED);
+        if !self.fenced {
+            self.resume_ego_worker();
         }
         if let Some((_, runtime)) = &self.perception_runtime {
             if self.gateway.set_perception_runtime(Some(runtime)).is_err() {

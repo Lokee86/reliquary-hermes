@@ -269,9 +269,17 @@ impl Registry {
         {
             self.ego_worker.take();
             self.ego_runtime = runtime;
-            self.restart_ego_worker()?;
+        }
+        if self.ego_worker.is_none() {
+            self.resume_ego_worker();
         }
         Ok(())
+    }
+
+    fn resume_ego_worker(&mut self) {
+        if self.restart_ego_worker().is_err() {
+            eprintln!("reliquary-hermes-host: ego_worker_unavailable");
+        }
     }
 
     fn restart_ego_worker(&mut self) -> Result<(), RegistryError> {
