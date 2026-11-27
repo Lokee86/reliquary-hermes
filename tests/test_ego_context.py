@@ -59,7 +59,7 @@ def _stock_outgoing_request():
     host = os.environ.get("EGO_HOST_BINARY")
     hosted_checkout = os.environ.get("EGO_FIXTURE_HOSTED_CHECKOUT")
     if host:
-        from reliquary_hermes.client import HostClient
+        from reliquary_hermes.client import HostClient, HostUnavailable
         from reliquary_hermes.validation import canonical
         from hermes_cli.env_loader import load_hermes_dotenv
 
@@ -70,7 +70,7 @@ def _stock_outgoing_request():
         shutil.copy2(os.environ["EGO_FIXTURE_REL"], rel)
         shutil.copy2(os.environ["EGO_FIXTURE_PHY"], phy)
         (state / "owners.json").write_bytes(canonical({
-            "profile_id": "profile-ego", "principal_id": "principal-ego",
+            "profile_id": "profile-ego", "principal_id": "alice",
             "main_rel": str(rel), "active_phy": str(phy), "projects": {},
         }))
         (state / "provider.json").write_bytes(canonical({"binary": host}))
@@ -78,7 +78,7 @@ def _stock_outgoing_request():
             f"RELIQUARY_HERMES_TOKEN={token}\nRELIQUARY_FIXTURE_API_KEY=fixture-loopback\n", encoding="utf-8",
         )
         load_hermes_dotenv(hermes_home=home)
-        native = HostClient(state, "profile-ego", "principal-ego", token, binary=Path(host))
+        native = HostClient(state, "profile-ego", "alice", token, binary=Path(host))
         binding = native.attach("ego-fixture")
         assert binding.rel_id == "a2" * 16 and binding.user_id == "a3" * 16
         assert native.ego_call("status", {})["enabled"] is True
@@ -210,13 +210,25 @@ def _stock_outgoing_request():
                 else:
                     discover_plugins(force=True)
                     engine_prototype = get_plugin_context_engine()
-                deadline = monotonic() + 30
+                ready_request = canonical({
+                    "protocol_version": 1, "request_id": "ego-fixture-ready",
+                    "operation": "memory_query", "profile_id": "profile-ego", "principal_id": "alice",
+                    "session_id": "ego-fixture", "turn_id": "ego-fixture-ready", "expected_revision": None,
+                    "idempotency_key": None, "arguments": {"query": message, "limit": 5},
+                })
+                deadline = monotonic() + 40
+                ready_error = "inference_unavailable"
                 while monotonic() < deadline:
-                    if native.read_source_status("ego-fixture").get("embedding_error") is None:
-                        break
-                    sleep(0.05)
+                    try:
+                        candidate = native.request(ready_request, recall_tool=True)
+                        if candidate.status == "ok":
+                            break
+                        ready_error = json.loads(candidate.result_json)["code"]
+                    except HostUnavailable as error:
+                        ready_error = str(error)
+                    sleep(0.1)
                 else:
-                    raise AssertionError("the fixture inference worker did not bind to the native profile")
+                    raise AssertionError(f"the native fixture recall route did not become available ({ready_error})")
             agent = AIAgent(provider="custom", base_url=f"http://127.0.0.1:{server.server_port}/v1",
                             api_key="fixture-loopback", model="fixture-model", session_id="ego-fixture",
                             quiet_mode=True, max_iterations=2, skip_memory=False)
