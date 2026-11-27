@@ -95,6 +95,17 @@ macro_rules! phy_audit_reads {
                 self.phy_audit_read(through)?.changes_since(previous, after)
             }
 
+            pub fn phy_audit_revision(
+                &self,
+                cut: PhyAuditCut,
+                id: MemoryId,
+            ) -> Result<Option<u64>, OwnerSessionError> {
+                Ok(self
+                    .phy_audit_read(cut)?
+                    .at_cut(cut, id)
+                    .map(|record| record.revision))
+            }
+
             pub fn phy_audit_evidence(
                 &self,
                 cut: PhyAuditCut,
@@ -142,7 +153,7 @@ macro_rules! phy_audit_reads {
                 ))
             }
 
-            fn phy_audit_read(
+            pub(in crate::session) fn phy_audit_read(
                 &self,
                 cut: PhyAuditCut,
             ) -> Result<PhyAuditRead<'_>, OwnerSessionError> {
@@ -161,13 +172,13 @@ macro_rules! phy_audit_reads {
 phy_audit_reads!(PhySession);
 phy_audit_reads!(PhyWriter);
 
-struct PhyAuditRead<'a> {
+pub(in crate::session) struct PhyAuditRead<'a> {
     common: &'a CommonState,
     cut: PhyAuditCut,
 }
 
 impl PhyAuditRead<'_> {
-    fn current(&self, id: MemoryId) -> Option<&MemoryRecord> {
+    pub(in crate::session) fn current(&self, id: MemoryId) -> Option<&MemoryRecord> {
         let captured = self.at_cut(self.cut, id)?;
         let head = self.common.memories.revision_record(id, None).ok()?;
         (captured.revision == head.revision
@@ -177,15 +188,9 @@ impl PhyAuditRead<'_> {
 
     fn at_cut(&self, cut: PhyAuditCut, id: MemoryId) -> Option<&MemoryRecord> {
         let record = self.common.memories.record_at_cut(id, cut.memory)?;
-        let settled = self
-            .common
-            .dreams
-            .settlement_position(id)
-            .is_some_and(|position| position <= cut.settlements)
-            || self
-                .common
-                .memories
-                .has_retained_phy_import_authority_at(id, cut.memory);
+        let settled =
+            super::observations::PhySettlements::Admitted(&self.common.dreams, cut.settlements)
+                .allows(&self.common.memories, id, cut.memory);
         (settled
             && !record.archived
             && record.superseded_by.is_none()

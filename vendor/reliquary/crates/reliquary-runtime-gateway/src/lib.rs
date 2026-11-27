@@ -494,7 +494,7 @@ pub use instance_identity::{
 mod ego_audit_handoff;
 mod instance_perception;
 mod instance_perception_lifecycle;
-pub use instance_perception::{PerceptionLifecycle, PerceptionRoutes};
+pub use instance_perception::{PerceptionLifecycle, PerceptionRoutes, PhyPerceptionWorker};
 mod instance_vectors;
 pub use instance_vectors::{
     ArchiveHybridHit, ArchiveHybridSearch, ArchiveLexicalIndexPublication,
@@ -515,7 +515,8 @@ pub use host_memory_delivery::{
 };
 pub use instance_external_source::{AuthorizedExternalLexicalIndex, ExternalHostSource};
 pub use instance_retrieval::{
-    MemoryRetrievalRoute, MemoryRetrievalTurn, PreparedMemoryDelivery, RetrievalCut,
-    RetrievalDeliveryOutcome, RetrievalMemory, RetrievalMode, RetrievalOutcome, RetrievalPreview,
-    RetrievalSource,
+    ActivePhyRecall, MemoryQueryEmbedding, MemoryRetrievalRoute, MemoryRetrievalTurn,
+    PreparedMemoryDelivery, RetrievalCut, RetrievalDeliveryOutcome, RetrievalMemory,
+    RetrievalMemoryReference, RetrievalMode, RetrievalOutcome, RetrievalPreview,
+    RetrievalRankedHit, RetrievalSource,
 };
