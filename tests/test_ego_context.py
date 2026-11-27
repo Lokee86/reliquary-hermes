@@ -12,6 +12,8 @@ def _stock_outgoing_request():
     import json
     import os
     import shutil
+    from contextlib import ExitStack
+    from importlib.util import module_from_spec, spec_from_file_location
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from pathlib import Path
     from threading import Thread
@@ -55,6 +57,7 @@ def _stock_outgoing_request():
     assert enabled_provider is not None and enabled_provider.name == "reliquary"
 
     host = os.environ.get("EGO_HOST_BINARY")
+    hosted_checkout = os.environ.get("EGO_FIXTURE_HOSTED_CHECKOUT")
     if host:
         from reliquary_hermes.client import HostClient
         from reliquary_hermes.validation import canonical
@@ -180,7 +183,7 @@ def _stock_outgoing_request():
 
     from run_agent import AIAgent
 
-    with ThreadingHTTPServer(("127.0.0.1", 0), Stub) as server:
+    with ThreadingHTTPServer(("127.0.0.1", 0), Stub) as server, ExitStack() as worker_cleanup:
         http = Thread(target=server.serve_forever, daemon=True)
         http.start()
         try:
@@ -195,8 +198,18 @@ def _stock_outgoing_request():
                     + "    model: fixture-embedding\n    dimensions: 2\n    input_type_handling: shared\n",
                     encoding="utf-8",
                 )
-                discover_plugins(force=True)
-                engine_prototype = get_plugin_context_engine()
+                if hosted_checkout:
+                    helper_path = package / "tests" / "hosted_hermes_worker.py"
+                    spec = spec_from_file_location("ego_hosted_fixture_worker", helper_path)
+                    worker = module_from_spec(spec)
+                    spec.loader.exec_module(worker)
+                    worker.start_hermes_worker(
+                        home, Path(hosted_checkout), f"http://127.0.0.1:{server.server_port}/v1",
+                        worker_cleanup, configure=False,
+                    )
+                else:
+                    discover_plugins(force=True)
+                    engine_prototype = get_plugin_context_engine()
                 deadline = monotonic() + 30
                 while monotonic() < deadline:
                     if native.read_source_status("ego-fixture").get("embedding_error") is None:
@@ -236,6 +249,7 @@ def _stock_outgoing_request():
             assert message in first[-1]["content"]
             if native:
                 assert engine._ego_client is not None
+            if native:
                 assert "Atlas reviews purchase requests before releasing payment." in json.dumps(first)
             import sys
             from unittest.mock import patch
@@ -250,6 +264,7 @@ def _stock_outgoing_request():
             assert expected_identity not in fallback[0]["content"]
             assert all(marker not in fallback[0]["content"] for marker in markers)
         finally:
+            worker_cleanup.close()
             server.shutdown()
             if native and native._process is not None and native._process.poll() is None:
                 native._process.terminate()
@@ -260,9 +275,17 @@ def test_stock_hermes_outgoing_ego_request(pinned_checkout, tmp_path):
     _run_probe(_stock_outgoing_request, pinned_checkout, tmp_path)
 
 
-def test_stock_hermes_outgoing_ego_request_through_native_host(pinned_checkout, tmp_path):
+def _native_fixture():
     names = ("EGO_HOST_BINARY", "EGO_FIXTURE_REL", "EGO_FIXTURE_PHY")
     if not all(os.environ.get(name) for name in names):
         pytest.skip("Set the isolated Ego binary and seeded fixture paths for the native proof")
-    paths = {name: Path(os.environ[name]).resolve(strict=True) for name in names}
-    _run_probe(_stock_outgoing_request, pinned_checkout, tmp_path, fixture_paths=paths)
+    return {name: Path(os.environ[name]).resolve(strict=True) for name in names}
+
+
+def test_stock_hermes_outgoing_ego_request_through_native_host(pinned_checkout, inference_checkout, tmp_path):
+    fixtures = {**_native_fixture(), "EGO_FIXTURE_HOSTED_CHECKOUT": inference_checkout}
+    _run_probe(_stock_outgoing_request, pinned_checkout, tmp_path, fixture_paths=fixtures)
+
+
+def test_hermes_embedding_sdk_outgoing_ego_and_recall_through_native_host(inference_checkout, tmp_path):
+    _run_probe(_stock_outgoing_request, inference_checkout, tmp_path, fixture_paths=_native_fixture())

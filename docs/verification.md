@@ -768,7 +768,7 @@ The previous eight-request client could saturate the host's two ordinary request
 
 ## Ego
 
-The focused stock fixture runs the normal agent against a loopback Chat Completions stub. It checks directory-plugin and MemoryProvider discovery, leading Identity replacement, preserved prompt suffix and user message, single insertion of Pins and summaries, legacy notes exclusion, and prefix-mismatch fallback. The native variant takes the isolated binary and seeded owner files via `EGO_HOST_BINARY`, `EGO_FIXTURE_REL` and `EGO_FIXTURE_PHY`. The registry test exercises revision-bound Identity approval, priority-only Pin changes and writable-PHY switch admission.
+The focused stock fixture runs the normal agent against a loopback Chat Completions stub. It checks directory-plugin and MemoryProvider discovery, leading Identity replacement, preserved prompt suffix and user message, single insertion of Pins and summaries, legacy notes exclusion, and prefix-mismatch fallback. The native fixtures take the isolated binary and seeded owner files via `EGO_HOST_BINARY`, `EGO_FIXTURE_REL` and `EGO_FIXTURE_PHY`. Pass `HP01_HERMES_CHECKOUT` for stock v0.23.0 and `HP_INFERENCE_HERMES_CHECKOUT` for the separately pinned embedding SDK revision. Stock v0.23.0 uses the same Context Engine and MemoryProvider with the real native host and a companion disposable inference worker on the SDK revision, since stock's plugin inference facade lacks embedding support. The same request is also captured on the SDK revision with the profile's own worker. Both pass through the normal MemoryProvider and verify exact ordinary recall alongside Ego. The registry test exercises revision-bound Identity approval, priority-only Pin changes and writable-PHY switch admission.
 
 
 ## Related docs
