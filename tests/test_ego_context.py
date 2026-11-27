@@ -196,11 +196,11 @@ def _stock_outgoing_request():
                     f"RELIQUARY_HERMES_TOKEN={token}\nRELIQUARY_FIXTURE_API_KEY=fixture-loopback\n", encoding="utf-8",
                 )
                 load_hermes_dotenv(hermes_home=home)
-                (state / "provider.json").write_bytes(canonical({"binary": host}))
                 worker_cleanup.callback(native.cancel_startup)
                 binding = native.attach("ego-fixture")
                 assert binding.rel_id == "a2" * 16 and binding.user_id == "a3" * 16
                 assert native.ego_call("status", {})["enabled"] is True
+                (state / "provider.json").write_bytes(canonical({"binary": host}))
                 if hosted_checkout:
                     helper_path = package / "tests" / "hosted_hermes_worker.py"
                     spec = spec_from_file_location("ego_hosted_fixture_worker", helper_path)
