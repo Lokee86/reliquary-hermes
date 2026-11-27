@@ -186,7 +186,7 @@ struct Admissions {
     provider_control: HostAdmissionControl,
     dashboard_actor: Instance,
     dashboard_control: HostAdmissionControl,
-    ego_actor: Option<(Instance, HostAdmissionControl)>,
+    phy_actor: Option<(Instance, HostAdmissionControl)>,
 }
 
 impl Registry {
@@ -300,7 +300,7 @@ impl Registry {
         }
         let (actor, _) = self
             .admissions
-            .ego_actor
+            .phy_actor
             .as_ref()
             .ok_or(store::UNAVAILABLE)?;
         self.phy_perception_worker = Some(
@@ -341,7 +341,7 @@ impl Registry {
         let Some((_, runtime)) = &self.ego_runtime else {
             return Ok(());
         };
-        let Some((actor, _)) = &self.admissions.ego_actor else {
+        let Some((actor, _)) = &self.admissions.phy_actor else {
             return Ok(());
         };
         let sources = self
@@ -370,7 +370,7 @@ impl Registry {
             return Err(RegistryError::Denied("ego_disabled"));
         }
         self.admissions
-            .ego_actor
+            .phy_actor
             .as_ref()
             .map(|(actor, _)| actor)
             .ok_or(RegistryError::Denied("ego_profile_not_enabled"))

@@ -66,6 +66,7 @@ impl Registry {
         }
         let result = self.commit_switch(next);
         if !self.fenced {
+            self.resume_ego_worker();
             if let Some((_, runtime)) = &self.perception_runtime {
                 if self.gateway.set_perception_runtime(Some(runtime)).is_err()
                     || self.resume_phy_perception().is_err()
@@ -74,7 +75,6 @@ impl Registry {
                     return Err(RECOVERY_REQUIRED);
                 }
             }
-            self.resume_ego_worker();
         }
         result
     }
@@ -122,7 +122,7 @@ impl Registry {
         self.mounted_rels = mounted_rels;
 
         let detached = if previous_phy != self.active_phy() {
-            if let Some((actor, control)) = &previous_admissions.ego_actor {
+            if let Some((actor, control)) = &previous_admissions.phy_actor {
                 control
                     .quiesce_writable_phylactery(actor, previous_phy)
                     .map_err(owner_error)
@@ -233,7 +233,7 @@ impl Admissions {
         .install(gateway)
         .map_err(owner_error)?;
         let provider_instance = provider.authenticate(credential).map_err(owner_error)?;
-        let ego_actor = if writable_phy {
+        let phy_actor = if writable_phy {
             let (admission, control) = TrustedHostAdmission::new([HostCredentialBinding::new(
                 &topology.principal_id,
                 credential,
@@ -257,18 +257,18 @@ impl Admissions {
             provider_control,
             dashboard_actor,
             dashboard_control,
-            ego_actor,
+            phy_actor,
         })
     }
 
     pub(super) fn revoke(&self, credential: &str) -> Result<(), RegistryError> {
         let provider = self.provider_control.revoke(credential);
         let dashboard = self.dashboard_control.revoke(credential);
-        let ego = self
-            .ego_actor
+        let phy = self
+            .phy_actor
             .as_ref()
             .map_or(Ok(()), |(_, control)| control.revoke(credential));
-        provider.and(dashboard).and(ego).map_err(owner_error)
+        provider.and(dashboard).and(phy).map_err(owner_error)
     }
 }
 

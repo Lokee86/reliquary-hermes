@@ -652,9 +652,11 @@ fn validate_requested_cut(
 }
 
 fn validate_projection(selection: &RetrievalPreview, limit: usize) -> Result<(), HttpError> {
+    let selected = selection.memories.len() + selection.observations.len();
     if selection.truncated
         || selection.memories.iter().any(|memory| memory.truncated)
-        || selection.memories.len() + selection.observations.len() > limit
+        || selected > limit
+        || (selection.phy_cut.is_some() && selection.ranked.len() != selected)
     {
         return Err(HttpError::new(503, "retrieval_projection_exceeded", false));
     }
