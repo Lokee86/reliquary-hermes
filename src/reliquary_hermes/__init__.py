@@ -30,6 +30,9 @@ def register(context):
         else:
             logger.warning("Reliquary hosted inference unavailable: plugin unload lifecycle is unsupported.")
     from .provider import ReliquaryMemoryProvider
+    if callable(getattr(context, "register_context_engine", None)):
+        from .ego_context import register as register_ego
+        register_ego(context)
 
     register_memory_provider = getattr(context, "register_memory_provider", None)
     if callable(register_memory_provider):

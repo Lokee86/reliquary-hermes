@@ -161,6 +161,10 @@ pub(crate) struct OwnerStatus {
 pub(crate) struct Registry {
     gateway: Gateway,
     perception_runtime: Option<(u64, Arc<ConfiguredRuntime>)>,
+    ego_runtime: Option<(u64, Arc<ConfiguredRuntime>)>,
+    ego_worker: Option<reliquary_memory::EgoWorkerHandle>,
+    ego_enabled: bool,
+    pub(crate) ego_approval: Option<crate::ego::IdentityApproval>,
     admissions: Admissions,
     credential: String,
     dashboard_intents: PathBuf,
@@ -179,6 +183,7 @@ struct Admissions {
     provider_control: HostAdmissionControl,
     dashboard_actor: Instance,
     dashboard_control: HostAdmissionControl,
+    ego_actor: Option<(Instance, HostAdmissionControl)>,
 }
 
 impl Registry {
@@ -187,27 +192,45 @@ impl Registry {
         state_dir: &Path,
         token: &str,
     ) -> Result<Self, RegistryError> {
+        let ego_enabled =
+            std::env::var_os("RELIQUARY_HERMES_EGO").is_some_and(|value| value == "1");
+        Self::open_with_ego(config, state_dir, token, ego_enabled)
+    }
+
+    fn open_with_ego(
+        config: OwnerConfig,
+        state_dir: &Path,
+        token: &str,
+        ego_enabled: bool,
+    ) -> Result<Self, RegistryError> {
         config.validate()?;
         let state_dir = state_dir.canonicalize().map_err(|_| store::UNAVAILABLE)?;
         let lease = acquire_service_lease(&state_dir)?;
         let topology_path = state_dir.join(TOPOLOGY_FILE);
         let gateway = Gateway::new();
-        let (topology, write) = topology::prepare_startup(&config, &topology_path, &gateway)?;
+        let (topology, write) =
+            topology::prepare_startup(&config, &topology_path, &gateway, ego_enabled)?;
         let sessions_dir = state_dir.join("sessions-v1");
         store::sessions_dir(&sessions_dir, write != topology::StartupWrite::Create)?;
         let mounted_rels = match write {
-            topology::StartupWrite::Current => switch::mount_on_startup(&gateway, &topology)?,
+            topology::StartupWrite::Current => {
+                switch::mount_on_startup(&gateway, &topology, ego_enabled)?
+            }
             topology::StartupWrite::Create | topology::StartupWrite::Upgrade => topology
                 .owners
                 .iter()
                 .filter_map(|(&id, owner)| (owner.kind == OwnerKind::Rel).then_some(id))
                 .collect(),
         };
-        let admissions = Admissions::new(&gateway, &topology, &mounted_rels, token)?;
+        let admissions = Admissions::new(&gateway, &topology, &mounted_rels, token, ego_enabled)?;
         topology::publish_startup(&topology_path, &topology, write)?;
         Ok(Self {
             gateway,
             perception_runtime: None,
+            ego_runtime: None,
+            ego_worker: None,
+            ego_approval: None,
+            ego_enabled,
             admissions,
             credential: token.to_owned(),
             dashboard_intents: state_dir.join("dashboard-mutations-v1"),
@@ -234,6 +257,57 @@ impl Registry {
             self.perception_runtime = runtime;
         }
         Ok(())
+    }
+
+    pub(crate) fn set_ego_runtime(
+        &mut self,
+        runtime: Option<(u64, Arc<ConfiguredRuntime>)>,
+    ) -> Result<(), RegistryError> {
+        self.require_current()?;
+        if self.ego_runtime.as_ref().map(|(epoch, _)| *epoch)
+            != runtime.as_ref().map(|(epoch, _)| *epoch)
+        {
+            self.ego_worker.take();
+            self.ego_runtime = runtime;
+            self.restart_ego_worker()?;
+        }
+        Ok(())
+    }
+
+    fn restart_ego_worker(&mut self) -> Result<(), RegistryError> {
+        let Some((_, runtime)) = &self.ego_runtime else {
+            return Ok(());
+        };
+        let Some((actor, _)) = &self.admissions.ego_actor else {
+            return Ok(());
+        };
+        let sources = self
+            .mounted_rels
+            .iter()
+            .copied()
+            .filter(|id| self.topology.current_rel(*id))
+            .collect::<Vec<_>>();
+        self.ego_worker = Some(
+            actor
+                .start_ego_worker(
+                    self.active_phy(),
+                    &sources,
+                    self.topology_path.parent().ok_or(store::UNAVAILABLE)?,
+                    runtime,
+                    |text| text.len() as u64,
+                )
+                .map_err(owner_error)?,
+        );
+        Ok(())
+    }
+
+    pub(crate) fn ego_actor(&self) -> Result<&Instance, RegistryError> {
+        self.require_current()?;
+        self.admissions
+            .ego_actor
+            .as_ref()
+            .map(|(actor, _)| actor)
+            .ok_or(RegistryError::Denied("ego_profile_not_enabled"))
     }
 
     pub(crate) fn dashboard_actor(&self) -> &Instance {
@@ -285,6 +359,9 @@ impl Registry {
 
     fn fence(&mut self) {
         self.fenced = true;
+        self.ego_worker.take();
+        self.ego_runtime.take();
+        self.ego_approval.take();
         if self.perception_runtime.take().is_some() {
             let _ = self.gateway.set_perception_runtime(None);
         }
@@ -681,7 +758,7 @@ fn acquire_service_lease(state_dir: &Path) -> Result<File, RegistryError> {
     }
 }
 
-fn owner_error(error: ProductError) -> RegistryError {
+pub(crate) fn owner_error(error: ProductError) -> RegistryError {
     match error.kind() {
         ProductErrorKind::Unauthorized | ProductErrorKind::Revoked => {
             RegistryError::Denied("denied")

@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 
-def _run_probe(probe, checkout, tmp_path):
+def _run_probe(probe, checkout, tmp_path, *, fixture_paths=None):
     # Preserve only process-launch necessities. The child gets neither provider
     # credentials nor the real Hermes config, plugin directories or Python path.
     inherited = {"path", "systemroot", "windir", "comspec", "lang", "lc_all", "pytest_current_test"}
@@ -27,6 +27,8 @@ def _run_probe(probe, checkout, tmp_path):
         TMPDIR=str(tmp_path),
         XDG_CACHE_HOME=str(tmp_path / "cache"),
     )
+    if fixture_paths:
+        env.update({key: str(value) for key, value in fixture_paths.items()})
     code = inspect.getsource(probe) + f"\n{probe.__name__}()\n"
     result = subprocess.run(
         [sys.executable, "-B", "-c", code],

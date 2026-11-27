@@ -9,7 +9,7 @@ use crate::{
     retrieval::RetrievalService,
     runtime::{HEARTBEAT_SECONDS, ReconciliationScope, RuntimeRegistry},
     service_http::{
-        ATTACH, DASHBOARD_READ, DASHBOARD_TOPOLOGY, FORBIDDEN, GRAPH_RENDER_EDGE_CHUNK,
+        ATTACH, DASHBOARD_READ, DASHBOARD_TOPOLOGY, EGO, FORBIDDEN, GRAPH_RENDER_EDGE_CHUNK,
         GRAPH_RENDER_ELIGIBLE, GRAPH_RENDER_INSPECT, GRAPH_RENDER_LOCATE,
         GRAPH_RENDER_NEIGHBORHOOD, GRAPH_RENDER_NODE_CHUNK, GRAPH_RENDER_PREPARE,
         GRAPH_RENDER_RESOLVE, HttpError, HttpRequest, HttpResponse, INVALID, MAX_WIRE_BYTES,
@@ -201,14 +201,17 @@ impl Service {
                     &self.discovery.instance_id,
                     &self.discovery.lease_id,
                     |runtime, epoch| {
-                        self.registry
-                            .lock()
-                            .map_err(|_| UNAVAILABLE)?
+                        let mut registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
+                        registry
+                            .set_ego_runtime(Some((epoch, Arc::clone(&runtime))))
+                            .map_err(attach_error)?;
+                        registry
                             .set_perception_runtime(
                                 (self.inference.native_epoch() == Some(epoch))
                                     .then(|| (epoch, Arc::clone(&runtime))),
                             )
                             .map_err(attach_error)?;
+                        drop(registry);
                         self.sources
                             .lock()
                             .map_err(|_| UNAVAILABLE)?
@@ -242,9 +245,9 @@ impl Service {
                 &self.discovery.lease_id,
             )?;
             if request.path == WORKER_ERROR {
-                self.registry
-                    .lock()
-                    .map_err(|_| UNAVAILABLE)?
+                let mut registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
+                registry.set_ego_runtime(None).map_err(attach_error)?;
+                registry
                     .set_perception_runtime(None)
                     .map_err(attach_error)?;
             }
@@ -269,6 +272,12 @@ impl Service {
         let instance = &current;
         match request.path {
             ATTACH => self.attach(instance, &request.body),
+            EGO => {
+                let mut registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
+                crate::ego::execute(&mut registry, &request.body)
+                    .map(HttpResponse::ok)
+                    .map_err(attach_error)
+            }
             SOURCE => self.source(instance, &request.body),
             SOURCE_STATUS => self.source_status(instance, &request.body),
             DASHBOARD_READ => crate::dashboard::read(
@@ -1285,6 +1294,7 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
             && service.inference.native_epoch().is_none()
             && let Ok(mut registry) = service.registry.try_lock()
         {
+            let _ = registry.set_ego_runtime(None);
             let _ = registry.set_perception_runtime(None);
         }
         // Expiry is a liveness event, not an idle-time event. Persist fences
@@ -1347,6 +1357,7 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
     }
     service.inference.stop();
     if let Ok(mut registry) = service.registry.lock() {
+        let _ = registry.set_ego_runtime(None);
         let _ = registry.set_perception_runtime(None);
     }
     drop(sender);

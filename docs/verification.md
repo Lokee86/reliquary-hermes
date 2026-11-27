@@ -766,6 +766,11 @@ The installed directory plugin ran in an isolated, already configured Windows pr
 
 The previous eight-request client could saturate the host's two ordinary request slots. The renderer now issues at most two chunk requests at once. The Python bridge retries signed, retryable backpressure responses within the original request deadline. Desktop gives the initial owner binding request time to finish a native open. The test installed the nested provider and generated Desktop bundle together. The opt-in `fullGraph` fixture in `desktop/tests/live-smoke.mjs` checks the initial draw counts and matches the clicked Memory to the hover tooltip. The pinned Python run passed 420 tests with 31 optional platform and process cases skipped. Dashboard typechecking, all 26 Node tests and the shared Web/Desktop build passed. Local evidence is under `C:/!bin/workspace-data/reliquary-verification-2026-11-20/desktop`.
 
+## Ego
+
+The focused stock fixture runs the normal agent against a loopback Chat Completions stub. It checks directory-plugin and MemoryProvider discovery, leading Identity replacement, preserved prompt suffix and user message, single insertion of Pins and summaries, legacy notes exclusion, and prefix-mismatch fallback. The native variant takes the isolated binary and seeded owner files via `EGO_HOST_BINARY`, `EGO_FIXTURE_REL` and `EGO_FIXTURE_PHY`. The registry test exercises revision-bound Identity approval, priority-only Pin changes and writable-PHY switch admission.
+
+
 ## Related docs
 
 - [HU09 native file-dialog specification](hu09-native-file-dialogs-onboarding-spec-2026-11-09.md)

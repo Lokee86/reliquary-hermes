@@ -149,6 +149,29 @@ Each viewport schedules at most two chunk requests at a time to match native hos
 
 Graph retrieval follows Root's one-hop workflow. A selection that exceeds the requested result or wire bounds fails before a retrieval receipt is recorded. Dashboard writes require verified same-origin browser or native Desktop admission and the expected owner cut. Setup uses existing Root owners and registry routing. Hermes workspace names, display names and caller-provided owner IDs convey no routing authority.
 
+## Ego on an opted-in profile
+
+Set the profile to use the Reliquary directory plugin and its stock Context Engine. Use the existing Memory provider for retrieval.
+
+```yaml
+plugins:
+  enabled:
+    - reliquary
+context:
+  engine: reliquary-ego
+memory:
+  provider: reliquary
+  memory_enabled: false
+  user_profile_enabled: false
+```
+
+Restart the profile's Reliquary service after changing this setting. An opted-in launch mounts the active PHY as writable and admits the Ego controller for its exact owner. Ordinary Memory provider and dashboard grants still follow their established paths. The service drains the Ego worker before changing configured routes or switching owners. The local pending-work database lives in the protected profile state directory. The host counts UTF-8 bytes conservatively for both request packing and the saved PHY cap. If a PHY draft exceeds the cap, one bounded hosted compression job can request up to four local counts and return one candidate for verification.
+
+In the Inspector, open Ego to manage Identities and Pins and inspect the current or a retained summary revision. Each Pin edit uses its saved revision. Summary citations show the source revision and byte range. Open a cited Memory in the selected owner with its source link. Web and supported native Desktop writes use the existing authenticated same-origin or verified native admission. The plain Web read path works on stock Hermes.
+
+Use `/identity <replacement text>` to preview a change to the active Identity. The command returns a short-lived approval bound to the exact draft, current revision, PHY, and session. Use the displayed `/identity approve <ticket>` command to save it once. Create and select the initial Identity in the Inspector.
+
+
 ## Related docs
 
 - [Protocol and authority](protocol.md)

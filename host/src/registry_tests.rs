@@ -813,3 +813,101 @@ fn manual_source_destination_is_limited_to_configured_rels() {
         "unconfigured_source_owner"
     );
 }
+
+#[test]
+fn ego_approval_and_pin_edits_use_active_phy_without_broadening_provider_grants() {
+    use reliquary_memory::EgoScope;
+
+    let fixture = Fixture::new();
+    let mut registry =
+        Registry::open_with_ego(fixture.config(), &fixture.state, TOKEN, true).unwrap();
+    registry.bind_session("ego-session", None).unwrap();
+    let phy = fixture.phy_id;
+    let provider = registry.instance().unwrap();
+    assert!(
+        provider
+            .pin_anchor(EgoScope::Phy(phy), "Denied ordinary grant.".into(), None)
+            .is_err()
+    );
+
+    let request = |registry: &mut Registry, operation, arguments| {
+        crate::ego::execute(
+            registry,
+            &serde_json::to_vec(&json!({
+                "profile_id": "profile-one", "principal_id": "principal-one",
+                "operation": operation, "body": arguments,
+            }))
+            .unwrap(),
+        )
+    };
+    let saved = request(
+        &mut registry,
+        "identity_create",
+        json!({
+            "owner_id": phy, "name": "Primary", "text": "Original Identity."
+        }),
+    )
+    .unwrap();
+    request(&mut registry, "identity_select", json!({
+        "owner_id": phy, "id": saved["identity"]["id"], "revision": saved["identity"]["revision"],
+        "selection_revision": 0
+    })).unwrap();
+    let prepared = request(
+        &mut registry,
+        "identity_prepare",
+        json!({
+            "session_id": "ego-session", "text": "Proposed Identity."
+        }),
+    )
+    .unwrap();
+    assert_eq!(prepared["draft"]["text"], "Proposed Identity.");
+    let context = json!({"session_id": "ego-session", "query": "", "counter": "utf8-bytes-v1", "budget": 4000});
+    assert_eq!(
+        request(&mut registry, "context", context.clone()).unwrap()["identity"],
+        "Original Identity."
+    );
+    let approval = json!({"session_id": "ego-session", "ticket": prepared["ticket"]});
+    assert_eq!(
+        request(&mut registry, "identity_approve", approval.clone()).unwrap()["identity"]["text"],
+        "Proposed Identity."
+    );
+    assert_eq!(
+        request(&mut registry, "identity_approve", approval)
+            .unwrap_err()
+            .code(),
+        "ego_approval_stale"
+    );
+    assert_eq!(
+        request(&mut registry, "context", context.clone()).unwrap()["identity"],
+        "Proposed Identity."
+    );
+
+    let new_pin = request(&mut registry, "pin_create", json!({
+        "session_id": "ego-session", "owner_id": phy, "scope": "phy", "text": "Preserve original wording."
+    })).unwrap();
+    let patch = json!({
+        "session_id": "ego-session", "owner_id": phy, "scope": "phy", "id": new_pin["pin"]["id"],
+        "revision": new_pin["pin"]["revision"], "priority": "High"
+    });
+    let changed = request(&mut registry, "pin_modify", patch.clone()).unwrap();
+    assert_eq!(changed["pin"]["text"], "Preserve original wording.");
+    assert_eq!(changed["pin"]["priority"], "High");
+    assert!(request(&mut registry, "pin_modify", patch).is_err());
+
+    let replacement = fixture._directory.path().join("replacement.phy");
+    let new_phy = Phylactery::create(&replacement).unwrap().owner_id();
+    let review = registry
+        .review_switch(SwitchChanges {
+            active_phy: Some(replacement),
+            main_rel: None,
+            projects: BTreeMap::new(),
+        })
+        .unwrap();
+    registry.apply_switch(review).unwrap();
+    assert_eq!(registry.active_phy(), new_phy);
+    assert!(request(&mut registry, "identities", json!({"owner_id": phy})).is_err());
+    assert_eq!(
+        request(&mut registry, "context", context).unwrap()["identity"],
+        Value::Null
+    );
+}

@@ -7,6 +7,7 @@ import { createKnowledgeClient, type KnowledgeScope } from "./client";
 import { KnowledgeGraph } from "./KnowledgeGraph";
 import type { StorageLike } from "../graph/model/scopedStorage";
 import { KnowledgeInspector } from "./KnowledgeInspector";
+import { EgoInspector } from "./EgoInspector";
 import { KnowledgeNavigation } from "./KnowledgeNavigation";
 import { communityLabel } from "./knowledgeUi";
 import type { GraphRenderFilterScope, GraphRenderTransport } from "../graph/render";
@@ -55,6 +56,7 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
   const [communitiesUnavailable, setCommunitiesUnavailable] = useState(false);
   const [cursor, setCursor] = useState<string | null>(null);
   const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(initialMemoryId ?? null);
+  const [citedMemory, setCitedMemory] = useState<{ id: string; revision: string } | null>(null);
   const [validatedSelection, setValidatedSelection] = useState<{ key: string; eligible: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -261,6 +263,9 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
       <KnowledgeInspector key={`${owner.owner_id}:${owner.cut}:${selectedMemoryId ?? "none"}`}
         client={client} scope={scope} memoryId={inspectorMemoryId} communities={communityPage?.items ?? []} controls={controls}
         blocked={mutationBlocked} writable={writable}
+        egoPanel={<EgoInspector transport={transport} controls={controls} owner={owner} blocked={mutationBlocked}
+          onOpenMemory={(id, revision) => { setCitedMemory({ id, revision }); setSelectedMemoryId(id); }} />}
+        initialRevision={citedMemory?.id === inspectorMemoryId ? citedMemory?.revision : undefined}
         onChanged={refresh} onOpenMemory={setSelectedMemoryId} />
     </section>
   );

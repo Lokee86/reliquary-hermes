@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { Community, MemoryDetail, MemorySummary, ReadResults } from "../../types";
 import type { HostControls } from "../host";
 import type { KnowledgeClient, KnowledgeScope } from "./client";
@@ -13,11 +13,13 @@ interface Props {
   controls: HostControls;
   blocked?: string;
   writable: boolean;
+  egoPanel?: ReactNode;
+  initialRevision?: string;
   onChanged: (memoryId?: string) => void;
   onOpenMemory: (memoryId: string) => void;
 }
 
-export function KnowledgeInspector({ client, scope, memoryId, communities, controls, blocked, writable, onChanged, onOpenMemory }: Props) {
+export function KnowledgeInspector({ client, scope, memoryId, communities, controls, blocked, writable, egoPanel, initialRevision, onChanged, onOpenMemory }: Props) {
   const [detail, setDetail] = useState<MemoryDetail | null>(null);
   const [currentRevision, setCurrentRevision] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -73,7 +75,7 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
     setProvenance(null);
     setProvenanceUnavailable(false);
     setError(null);
-    if (memoryId) void loadDetail(memoryId, null, controller.signal).then(next =>
+    if (memoryId) void loadDetail(memoryId, initialRevision ?? null, controller.signal).then(next =>
       scope.owner.capabilities.history && !next.tombstone
         ? client.read(scope, "ui.memory_history", { memory_id: memoryId, cursor: null, limit: 20 }, controller.signal)
         : null,
@@ -85,7 +87,7 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Could not open this Memory.");
     });
     return () => { controller.abort(); revisionRequest.current?.abort(); };
-  }, [client, scope, memoryId]);
+  }, [client, scope, memoryId, initialRevision]);
 
   async function openRevision(nextRevision: string | null) {
     if (!memoryId) return;
@@ -133,10 +135,12 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
   if (!memoryId) return <aside className="knowledge-inspector" aria-label="Memory inspector">
     <div className="eyebrow">MEMORY</div>
     <div className="knowledge-state">Select a memory.</div>
+    {egoPanel}
   </aside>;
   if (!detail || !memory) return <aside className="knowledge-inspector" aria-label="Memory inspector">
     {error ? <p className="knowledge-inline-error" role="alert">{error}</p>
       : <div className="knowledge-state">Loading detail, history, and provenance…</div>}
+    {egoPanel}
   </aside>;
 
   const community = communities.find((candidate) => candidate.community_id === memory.community_id) ?? null;
@@ -212,6 +216,7 @@ export function KnowledgeInspector({ client, scope, memoryId, communities, contr
           <ProvenanceItem key={`${source.kind}:${index}`} source={source} />)}</div>}
       </section>
       {blocked && <p className="knowledge-muted" role="status">{blocked}</p>}
+      {egoPanel}
     </aside>
   );
 }

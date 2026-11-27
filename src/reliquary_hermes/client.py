@@ -114,6 +114,16 @@ class HostClient:
         return HostClient(self._state_dir, self._profile_id, self._principal_id, self._token,
                           binary=self._binary)
 
+    def ego_call(self, operation: str, body: dict) -> dict:
+        discovery = self._read_discovery()
+        if discovery is None:
+            raise HostUnavailable("host_unavailable")
+        reply = self._exchange(discovery, "/v1/ego", canonical({
+            "profile_id": self._profile_id, "principal_id": self._principal_id,
+            "operation": operation, "body": body,
+        }), time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS)
+        return decode(reply)
+
     def _runtime_call(self, path: str, value: dict) -> dict:
         discovery = self._read_discovery()
         if discovery is None:
@@ -341,6 +351,12 @@ class HostClient:
         bundle = bundle_at_launch(self._state_dir, self._binary)
         environment = {name: os.environ[name] for name in ("SystemRoot", "WINDIR") if name in os.environ}
         environment.update({name: str(self._state_dir) for name in ("TEMP", "TMP", "TMPDIR")})
+        from .settings import ego_enabled
+        try:
+            if ego_enabled(self._state_dir.parent):
+                environment["RELIQUARY_HERMES_EGO"] = "1"
+        except (ContractError, OSError, ImportError, AttributeError):
+            pass
         platform = ({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt"
                     else {"start_new_session": True})
         try:

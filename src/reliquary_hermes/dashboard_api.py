@@ -500,6 +500,51 @@ async def graph_render_v1(request: Request, operation: str):
     return Response(result, media_type=media, headers={"Cache-Control": "no-store"})
 
 
+_EGO_READS = {"status", "pins", "identities", "summary"}
+_EGO_WRITES = {"pin_create", "pin_modify", "pin_delete", "identity_create",
+               "identity_edit", "identity_select", "summary_edit"}
+
+
+@router.post("/ego-v1/{operation}")
+async def ego_v1(request: Request, operation: str):
+    """Use the existing profile and same-origin/native Inspector admission for Ego."""
+    _require_hermes_auth(request, "dashboard_admission_failed")
+    home = _host_home(request)
+    if operation not in _EGO_READS | _EGO_WRITES:
+        raise HTTPException(status_code=404, detail="ego_operation_unavailable")
+    writable = _same_origin(request)
+    if operation in _EGO_WRITES and not writable:
+        raise HTTPException(status_code=403, detail="same_origin_required")
+    content_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
+    if content_type != "application/json":
+        raise HTTPException(status_code=415, detail="ego_json_required")
+    try:
+        arguments = decode(await _read_bounded_body(request, limit=64 << 10,
+                                                    error="ego_request_too_large"))
+        require(type(arguments) is dict, "invalid_ego_request")
+    except ContractError:
+        raise HTTPException(status_code=400, detail="invalid_ego_request") from None
+
+    def execute():
+        settings = read_settings(home)
+        client = HostClient(settings.state_dir, settings.profile_id, settings.principal_id, read_token(home))
+        return client.ego_call(operation, arguments)
+
+    try:
+        result = await run_in_threadpool(execute)
+    except HostUnavailable as error:
+        status = {"host_denied": 403, "host_conflict": 409, "host_invalid": 400}.get(str(error), 503)
+        raise HTTPException(status_code=status, detail={
+            400: "invalid_ego_request", 403: "ego_scope_denied",
+            409: "ego_revision_changed", 503: "ego_unavailable",
+        }[status]) from None
+    except (ContractError, OSError):
+        raise HTTPException(status_code=503, detail="ego_unavailable") from None
+    if operation == "status":
+        result["writable"] = bool(result["enabled"] and writable)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/dashboard-v1")
 async def dashboard_v1(request: Request):
     """Authenticated plugin API; the browser never selects profile or principal authority."""

@@ -2,7 +2,7 @@ name: reliquary
 version: "0.3.4"
 description: "Local Reliquary memory and source provenance with Hermes-owned inference and an interactive relationship graph."
 author: Lokee86
-kind: exclusive
+kind: standalone
 requires_hermes: ">=0.23.0"
 python_dependencies:
   - "jsonschema>=4,<5"

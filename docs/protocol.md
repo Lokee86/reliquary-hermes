@@ -206,6 +206,11 @@ Hermes authenticates and profile-scopes the plugin route `/api/plugins/reliquary
 
 Same-origin writes use the Origin against Hermes' admitted Host and scheme. Hosted plugins receive request-local sensitive-route admission from Hermes over private IPC. Hosted browser mutations require an Origin and same-origin Fetch Metadata because Hermes strips the public Host before forwarding. Hosted Desktop mutations require Hermes' private native admission bit for the worker's profile and an absent Origin. The signed private service route accepts only the named public Root workflows for mutations and uses the configured active PHY as their actor. Provider operations keep their original service principal. A private durable intent retains the accepted original cut and exact inputs required for Root replay.
 
+## Ego request assembly and controls
+
+The signed `/v1/ego` request follows the existing profile and principal binding. The Context Engine sends the bound session, a bounded turn query, a budget and the `utf8-bytes-v1` counter identity. The service resolves the session REL and active PHY, then returns Identity, standing context and Core's revision bindings. Opted-in profiles use the same endpoint for scoped Pin lookup and edits. Inspector requests pass through Hermes authentication first and mutations additionally require the existing dashboard write admission. The browser supplies neither profile nor principal authority.
+
+
 ## Related docs
 
 - [Documentation policy and ownership](documentation-policy.md)

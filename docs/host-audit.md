@@ -114,6 +114,11 @@ These existing host gates provide the HU03 v1 dashboard authentication boundary.
 
 The accepted G4 product exposes opaque owner handles, trusted host admission, management/maintenance and selected queue/host types. HP02 must expose narrow existing workflows through public Root/Gateway/Application operations. The temporary `HACK` receipt bridge belongs inside the Rust host at the selected-Memory result-return boundary. The standalone Python provider transport carries retrieval and source operations. The Rust host depends on public `reliquary-memory` for domain work.
 
+## Stock Ego request hook
+
+Hermes v0.23.0 calls `ContextEngine.select_context` after assembling the system prompt, transcript and prefill. The Reliquary directory plugin registers its engine through the general plugin API on opted-in profiles. The memory collector still recognizes the same standalone MemoryProvider entry point. The engine inherits the stock compressor and changes its request copy only. It reuses Hermes' SOUL loader for the exact prefix and preserves the existing prompt suffix. It uses a conservative UTF-8 byte counter, output reservation and tool allowance because the stock selection hook receives messages and the context window.
+
+
 ## Related docs
 
 - [Documentation policy and ownership](documentation-policy.md)

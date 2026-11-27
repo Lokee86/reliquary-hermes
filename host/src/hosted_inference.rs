@@ -6,8 +6,8 @@ use crate::{
 };
 use reliquary_memory::{
     DecisionEndpoint, DecisionEndpointError, EmbeddingEndpoint, EmbeddingEndpointError,
-    EmbeddingNormalization, GeneralEndpoint, GeneralEndpointError, HostedEmbeddingInputSemantics,
-    HostedInferenceIdentity, SwitchboardEmbeddingMode,
+    EmbeddingNormalization, GeneralEndpoint, GeneralEndpointError, GeneralTool,
+    HostedEmbeddingInputSemantics, HostedInferenceIdentity, SwitchboardEmbeddingMode,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -879,13 +879,54 @@ impl GeneralEndpoint for GeneralAdapter {
         schema_name: &str,
         schema: &Value,
     ) -> Result<Value, GeneralEndpointError> {
+        self.complete_at(
+            system_prompt,
+            user_payload,
+            schema_name,
+            schema,
+            Instant::now() + JOB_TIMEOUT,
+        )
+    }
+
+    fn complete_json_with_tool(
+        &self,
+        system_prompt: &str,
+        user_payload: &str,
+        schema_name: &str,
+        schema: &Value,
+        tool: GeneralTool<'_>,
+        count: &mut dyn FnMut(Value) -> Result<Value, GeneralEndpointError>,
+    ) -> Result<Value, GeneralEndpointError> {
+        let deadline = Instant::now() + JOB_TIMEOUT;
+        crate::hosted_ego_tool::run_job(
+            system_prompt,
+            user_payload,
+            schema,
+            tool,
+            count,
+            |prompt, input, envelope| {
+                self.complete_at(prompt, input, schema_name, envelope, deadline)
+            },
+        )
+    }
+}
+
+impl GeneralAdapter {
+    fn complete_at(
+        &self,
+        system_prompt: &str,
+        user_payload: &str,
+        schema_name: &str,
+        schema: &Value,
+        deadline: Instant,
+    ) -> Result<Value, GeneralEndpointError> {
         let payload = json!({"instructions":system_prompt,"input":[{"type":"text","text":user_payload}],"json_schema":schema,"schema_name":schema_name,"purpose":"general"});
         let value = self
             .broker
             .invoke_bound(
                 "complete_structured",
                 payload,
-                Instant::now() + JOB_TIMEOUT,
+                deadline,
                 Some(self.epoch),
                 MAX_JOB_BYTES,
             )
