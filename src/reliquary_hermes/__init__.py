@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def register(context):
     llm = getattr(context, "llm", None)
-    if llm is None:
+    if not all(callable(getattr(llm, name, None)) for name in ("acomplete_structured", "aembed")):
         logger.warning("Reliquary hosted inference unavailable: Hermes ctx.llm embedding support is required (embedding_unavailable).")
     else:
         on_unload = getattr(context, "on_unload", None)
