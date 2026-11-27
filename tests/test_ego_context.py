@@ -237,8 +237,18 @@ def _stock_outgoing_request():
             assert message in first[-1]["content"]
             if native:
                 assert "Atlas reviews purchase requests before releasing payment." in json.dumps(first)
-            mismatched = [{"role": "system", "content": "Different leading identity."}, *original[1:]]
-            assert selection(mismatched, budget_tokens=131072) is None
+            import sys
+            from unittest.mock import patch
+
+            engine_module = sys.modules[type(engine).__module__]
+            with patch.object(engine_module, "load_soul_md", return_value="Different leading identity."):
+                agent.run_conversation("Continue the fixture.")
+            assert len(captures) == 2
+            fallback = captures[1]["messages"]
+            assert fallback[0]["content"] == inputs[1][0]["content"]
+            assert fallback[0]["content"].startswith(soul)
+            assert expected_identity not in fallback[0]["content"]
+            assert all(marker not in fallback[0]["content"] for marker in markers)
         finally:
             server.shutdown()
             if native and native._process is not None and native._process.poll() is None:
