@@ -533,9 +533,8 @@ def test_native_active_phy_observation_uses_ordinary_mixed_recall(
         start_hermes_worker(home, inference_checkout, url, cleanup, dimensions=DIMENSIONS)
         attempts = count()
 
-        def ordinary(limit=10, principal=PRINCIPAL):
+        def ordinary(limit=10):
             request = decode(query_request(f"phy-{next(attempts)}", "needle zephyr"))
-            request["principal_id"] = principal
             request["arguments"]["limit"] = limit
             try:
                 response = client.request(canonical(request), recall_tool=True)
@@ -569,5 +568,11 @@ def test_native_active_phy_observation_uses_ordinary_mixed_recall(
             assert claim["claim"] == "Zephyr delivery was approved."
         limited = ordinary(limit=1)
         assert isinstance(limited, dict) and len(limited["ranked"]) == 1, limited
-        assert ordinary(principal="another-principal") == "denied"
+        forged = decode(query_request("wrong-principal", "needle zephyr"))
+        forged["principal_id"] = "another-principal"
+        discovery = client._read_discovery()
+        assert discovery is not None
+        denied = decode(client._exchange(
+            discovery, "/v1/retrieval/tool", canonical(forged), monotonic() + 5))
+        assert denied["status"] == "denied" and denied["result"]["code"] == "denied"
     assert sha256(phy.read_bytes()).digest() == original_phy
