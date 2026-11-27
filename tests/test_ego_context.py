@@ -65,6 +65,10 @@ def _stock_outgoing_request():
         from reliquary_hermes.validation import canonical
         from hermes_cli.env_loader import load_hermes_dotenv
 
+        helper_path = package / "tests" / "hosted_hermes_worker.py"
+        spec = spec_from_file_location("ego_hosted_fixture_worker", helper_path)
+        worker = module_from_spec(spec)
+        spec.loader.exec_module(worker)
         token = "fixture-" + "x" * 40
         state = home / "reliquary"
         state.mkdir()
@@ -138,22 +142,13 @@ def _stock_outgoing_request():
             self.wfile.write(body)
 
         def structured(self, inbound):
-            state = {}
-            for message in inbound.get("messages", []):
-                if message.get("role") != "user":
-                    continue
-                sections = message.get("content", "")
-                if isinstance(sections, str):
-                    sections = [{"text": sections}]
-                for block in sections:
-                    try:
-                        value = json.loads(block.get("text", ""))
-                    except (ValueError, TypeError):
-                        continue
-                    if isinstance(value, dict) and isinstance(value.get("state"), dict):
-                        state = value["state"]
+            request = worker.decode_hermes_sdk_request(inbound)
+            payload = request["payload"] or {}
+            state = payload.get("state", {})
             if state.get("operation") in {"memory_query", "refine_query", "traverse_graph"}:
                 result = {"version": 1, "approved": [item["memory"] for item in state.get("candidates", [])[:1]]}
+            elif request["schema_name"] == "memory_web_audit_v3":
+                result = {"ego": {"candidates": [], "lookups": []}, "perception": {"candidates": [], "lookups": []}}
             else:
                 result = {"ready": True}
             return {
@@ -202,10 +197,6 @@ def _stock_outgoing_request():
                 assert native.ego_call("status", {})["enabled"] is True
                 (state / "provider.json").write_bytes(canonical({"binary": host}))
                 if hosted_checkout:
-                    helper_path = package / "tests" / "hosted_hermes_worker.py"
-                    spec = spec_from_file_location("ego_hosted_fixture_worker", helper_path)
-                    worker = module_from_spec(spec)
-                    spec.loader.exec_module(worker)
                     worker.start_hermes_worker(
                         home, Path(hosted_checkout), f"http://127.0.0.1:{server.server_port}/v1",
                         worker_cleanup, configure=False,
