@@ -73,6 +73,11 @@ Root bounds the source scan independently of the filtered result. A scan beyond 
 
 `ui.graph_page` serves the inspector’s bounded relation editor. The editor reads nearby semantic relation endpoints with revision and cut and offers writes for authorized user associations. The spatial renderer consumes the separate prepared generation and its binary chunks.
 
+## Ego Inspector
+
+The Inspector's Ego section uses the profile-bound `/ego-v1/{operation}` routes. It lists scoped Pins and Identities, opens current or retained summary revisions, and links citations to the exact Memory revision when its owner is selected. The Web and Desktop reuse existing dashboard authentication. Writes require same-origin or verified native admission followed by a separate owner and expected-revision check in Core. Readonly profiles can inspect without receiving mutation controls.
+
+
 ## Related docs
 
 - [Host and web SDK audit](host-audit.md)
