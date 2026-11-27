@@ -210,8 +210,7 @@ def _stock_outgoing_request():
             engine = agent.context_compressor
             assert type(engine) is type(engine_prototype)
             if native:
-                # Session attachment, ordinary recall and Ego all use the signed native host.
-                engine._ego_client = native
+                assert engine._ego_client is None  # The engine resolves the stock profile itself.
                 assert any(tool.get("function", {}).get("name") == "memory_query" for tool in agent.tools)
             else:
                 engine._ego_client = Package()
@@ -236,6 +235,7 @@ def _stock_outgoing_request():
             assert first[-1]["content"] == original[-1]["content"]
             assert message in first[-1]["content"]
             if native:
+                assert engine._ego_client is not None
                 assert "Atlas reviews purchase requests before releasing payment." in json.dumps(first)
             import sys
             from unittest.mock import patch
