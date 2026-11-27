@@ -31,6 +31,7 @@ const PROVENANCE_UNAVAILABLE: HttpError =
     HttpError::new(503, "source_provenance_unavailable", true);
 
 mod retrieval;
+pub(crate) use retrieval::RetrievalDisclosure;
 
 pub(crate) struct DashboardSourceStatus {
     pub(crate) state: &'static str,

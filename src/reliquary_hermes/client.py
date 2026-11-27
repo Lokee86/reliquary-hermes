@@ -351,10 +351,15 @@ class HostClient:
         bundle = bundle_at_launch(self._state_dir, self._binary)
         environment = {name: os.environ[name] for name in ("SystemRoot", "WINDIR") if name in os.environ}
         environment.update({name: str(self._state_dir) for name in ("TEMP", "TMP", "TMPDIR")})
-        from .settings import ego_enabled
+        from .settings import ego_enabled, phy_perception_enabled
         try:
             if ego_enabled(self._state_dir.parent):
                 environment["RELIQUARY_HERMES_EGO"] = "1"
+        except (ContractError, OSError, ImportError, AttributeError):
+            pass
+        try:
+            if phy_perception_enabled(self._state_dir.parent):
+                environment["RELIQUARY_HERMES_PHY_PERCEPTION"] = "1"
         except (ContractError, OSError, ImportError, AttributeError):
             pass
         platform = ({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt"

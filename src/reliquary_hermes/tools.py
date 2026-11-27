@@ -14,7 +14,7 @@ def tool_schemas() -> list[dict]:
                            "limit": limit, "cut": ident},
     }
     descriptions = {
-        "memory_query": "Search the current session's REL for relevant Memories and verified Observations.",
+        "memory_query": "Search the current session's REL and active PHY for relevant Memories and verified Observations.",
         "refine_query": "Refine a search from this turn using its search ID and any returned Memory IDs.",
         "traverse_graph": "Find Memories one hop from returned seeds at the supplied cut.",
     }

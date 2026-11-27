@@ -18,6 +18,30 @@ def _ids(value: Any, *, nonempty: bool = False) -> None:
     require(len(set(identifier(item) for item in values)) == len(values), "duplicate_id")
 
 
+def _ranked_recall(value: Any, memories: list, observations: list) -> None:
+    seen, selected_memories, selected_observations = set(), set(), set()
+    for row in sequence(value, MAX_RETRIEVAL_RESULTS, nonempty=True):
+        hit = obj(row, {"kind", "owner_id", "id", "revision", "body_id"})
+        kind = choice(hit["kind"], {"memory", "observation"})
+        owner = identifier(hit["owner_id"])
+        require(len(owner) == 32 and all(c in "0123456789abcdef" for c in owner),
+                "invalid_retrieval_owner")
+        identity = digest(hit["id"])
+        revision = integer(hit["revision"], 1, 2**64 - 1)
+        body = digest(hit["body_id"])
+        key = (kind, owner, identity)
+        require(key not in seen, "duplicate_id")
+        seen.add(key)
+        if kind == "memory":
+            selected_memories.add(identity)
+        else:
+            selected_observations.add((owner, identity, revision, body))
+    require(selected_memories == set(memories) and selected_observations == {
+        (row["owner_id"], row["observation_id"], row["revision"], row["body_id"])
+        for row in observations
+    }, "retrieval_order_mismatch")
+
+
 def _source_digests(value: Any, maximum: int) -> None:
     digests = [digest(d) for d in sequence(value, maximum)]
     require(len(set(digests)) == len(digests), "duplicate_source_digest")
@@ -171,8 +195,8 @@ class Response:
             require(type(e["retryable"]) is bool, "invalid_retryable")
         elif op in {"memory_query", "refine_query", "traverse_graph"}:
             keys = {"search_id", "delivery_id", "context", "memory_ids", "provenance"}
-            if type(result) is dict and "observations" in result:
-                keys.add("observations")
+            if type(result) is dict:
+                keys.update(result.keys() & {"observations", "ranked"})
             r = obj(result, keys)
             identifier(r["search_id"])
             identifier(r["delivery_id"])
@@ -182,6 +206,8 @@ class Response:
             _ids(r["memory_ids"])
             require(len(r["memory_ids"]) + len(observations) <= MAX_RETRIEVAL_RESULTS,
                     "retrieval_result_limit")
+            if "ranked" in r:
+                _ranked_recall(r["ranked"], r["memory_ids"], observations)
             sources = set()
             for item in sequence(r["provenance"], MAX_RETRIEVAL_RESULTS):
                 source = obj(item, {"memory_id", "source_snapshot_digests"})

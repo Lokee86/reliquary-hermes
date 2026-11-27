@@ -106,6 +106,7 @@ impl SourceService {
         registry: &Registry,
         runtimes: &mut RuntimeRegistry,
         owner: OwnerId,
+        active_phy: OwnerId,
         selection: &RetrievalPreview,
     ) -> Result<RetrievalDisclosure, HttpError> {
         let mut checks = SourceChecks {
@@ -118,11 +119,30 @@ impl SourceService {
                 .map_err(|_| PROVENANCE_UNAVAILABLE)?,
             heads: BTreeMap::new(),
         };
-        let provenance = selection
-            .memories
-            .iter()
-            .map(|memory| checks.selected_memory(memory))
-            .collect::<Result<Vec<_>, _>>()?;
+        let rel = owner.to_string();
+        let phy = active_phy.to_string();
+        let mut provenance = BTreeMap::new();
+        for memory in &selection.memories {
+            let proof = if memory.owner_id == rel {
+                checks.selected_memory(memory)?
+            } else if memory.owner_id == phy {
+                RetrievalProvenance {
+                    memory_id: memory.memory_id.clone(),
+                    source_snapshot_digests: Vec::new(),
+                }
+            } else {
+                return Err(PROVENANCE_UNAVAILABLE);
+            };
+            let entry = provenance
+                .entry(memory.memory_id.clone())
+                .or_insert_with(|| RetrievalProvenance {
+                    memory_id: memory.memory_id.clone(),
+                    source_snapshot_digests: Vec::new(),
+                });
+            if !proof.source_snapshot_digests.is_empty() {
+                *entry = proof;
+            }
+        }
         let mut checked_lineage = BTreeMap::new();
         let mut observations = Vec::with_capacity(selection.observations.len());
         for hit in &selection.observations {
@@ -131,19 +151,29 @@ impl SourceService {
                 return Err(PROVENANCE_UNAVAILABLE);
             };
 
+            let in_rel = claim.citation.owner_id == owner.as_bytes();
+            if !in_rel && claim.citation.owner_id != active_phy.as_bytes() {
+                return Err(PROVENANCE_UNAVAILABLE);
+            }
             let mut lineage = Vec::with_capacity(claim.lineage.len());
             for source in &claim.lineage {
-                let source_snapshot_digests = match checked_lineage.entry(*source) {
-                    std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-                    std::collections::btree_map::Entry::Vacant(entry) => {
-                        entry.insert(checks.lineage_memory(source)?)
+                let source_snapshot_digests = if in_rel {
+                    match checked_lineage.entry(*source) {
+                        std::collections::btree_map::Entry::Occupied(entry) => {
+                            entry.into_mut().clone()
+                        }
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            entry.insert(checks.lineage_memory(source)?).clone()
+                        }
                     }
+                } else {
+                    Vec::new()
                 };
                 lineage.push(LineageProvenance {
                     memory_id: hex(&source.memory_id),
                     revision: source.revision,
                     body_id: hex(&source.body_id),
-                    source_snapshot_digests: source_snapshot_digests.clone(),
+                    source_snapshot_digests,
                 });
             }
             observations.push(ReturnedObservation {
@@ -164,7 +194,11 @@ impl SourceService {
             });
         }
         Ok(RetrievalDisclosure {
-            provenance,
+            provenance: selection
+                .memories
+                .iter()
+                .filter_map(|memory| provenance.remove(&memory.memory_id))
+                .collect(),
             observations,
         })
     }

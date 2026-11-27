@@ -118,6 +118,11 @@ def ego_enabled(home: Path) -> bool:
             and memory.get("user_profile_enabled") is False)
 
 
+def phy_perception_enabled(home: Path) -> bool:
+    config = read_profile_config(home).get("reliquary")
+    return isinstance(config, dict) and config.get("phy_perception") is True
+
+
 def read_native_decision_route(home: Path) -> NativeDecisionRoute | None:
     """Read literal route selectors from this Hermes profile's config.yaml."""
     reliquary = read_profile_config(home).get("reliquary", {})

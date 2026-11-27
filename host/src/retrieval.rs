@@ -8,8 +8,8 @@ use crate::{
 };
 use reliquary_hermes_host::{ReturnOutcome, SelectedReturn};
 use reliquary_memory::{
-    ConfiguredRuntime, Instance, MemoryId, OwnerId, RetrievalMode, RetrievalPreview,
-    RetrievalSession,
+    ActivePhyRecall, ConfiguredRuntime, Instance, MemoryId, ObservationSource, OwnerId,
+    RetrievalMode, RetrievalPreview, RetrievalRankedHit, RetrievalSession,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -110,6 +110,7 @@ impl RetrievalService {
         raw: &[u8],
         instance: &Instance,
         owner: OwnerId,
+        phy: ActivePhyRecall,
     ) -> Result<HttpResponse, HttpError> {
         if request.operation != Operation::MemoryQuery {
             return Err(INVALID);
@@ -117,7 +118,7 @@ impl RetrievalService {
         let runtime = self.runtime.clone().ok_or(UNAVAILABLE)?;
         let key = turn_key(request);
         self.prune(instance);
-        let state = self.turn_mut(&key, instance, owner)?;
+        let state = self.turn_mut(&key, instance, owner, &phy)?;
         let fingerprint = fingerprint(raw);
         if state.completed.contains(&fingerprint) {
             state.touched = Instant::now();
@@ -132,7 +133,12 @@ impl RetrievalService {
             state.staged = None;
         }
         let outcome = instance
-            .memory_query(&state.session, text_arg(request, "query")?, &runtime)
+            .memory_query_limited(
+                &state.session,
+                text_arg(request, "query")?,
+                &runtime,
+                request_limit(request)?,
+            )
             .map_err(product_error)?;
         let Some(prepared) = outcome.prepared else {
             return Ok(HttpResponse::ok(json!({"prepared": false})));
@@ -169,6 +175,7 @@ impl RetrievalService {
         instance: &Instance,
         registry_mutex: &Mutex<Registry>,
         owner: OwnerId,
+        phy: ActivePhyRecall,
         sources_mutex: &Mutex<SourceService>,
         runtimes_mutex: &Mutex<RuntimeRegistry>,
         deadline: Instant,
@@ -176,7 +183,7 @@ impl RetrievalService {
         let runtime = self.runtime.clone().ok_or(UNAVAILABLE)?;
         let key = turn_key(request);
         self.prune(instance);
-        let state = self.turn_mut(&key, instance, owner)?;
+        let state = self.turn_mut(&key, instance, owner, &phy)?;
         state.touched = Instant::now();
         let fingerprint = fingerprint(raw);
         if state.completed.contains(&fingerprint) {
@@ -206,10 +213,20 @@ impl RetrievalService {
                         // proposal and evaluate against the current cut.
                         let _ = instance.cancel_retrieval(&state.session);
                         state.session = instance
-                            .begin_retrieval(owner, &root_turn_id(&key), RetrievalMode::Deliver)
+                            .begin_scoped_retrieval(
+                                Some(owner),
+                                phy,
+                                &root_turn_id(&key),
+                                RetrievalMode::Deliver,
+                            )
                             .map_err(product_error)?;
                         let outcome = instance
-                            .memory_query(&state.session, text_arg(request, "query")?, &runtime)
+                            .memory_query_limited(
+                                &state.session,
+                                text_arg(request, "query")?,
+                                &runtime,
+                                request_limit(request)?,
+                            )
                             .map_err(product_error)?;
                         let Some(prepared) = outcome.prepared else {
                             return Err(HttpError::new(503, "no_recall_results", false));
@@ -218,7 +235,12 @@ impl RetrievalService {
                     }
                 } else {
                     let outcome = instance
-                        .memory_query(&state.session, text_arg(request, "query")?, &runtime)
+                        .memory_query_limited(
+                            &state.session,
+                            text_arg(request, "query")?,
+                            &runtime,
+                            request_limit(request)?,
+                        )
                         .map_err(product_error)?;
                     let Some(prepared) = outcome.prepared else {
                         return Err(HttpError::new(503, "no_recall_results", false));
@@ -343,6 +365,12 @@ impl RetrievalService {
                 return Err(UNAVAILABLE);
             }
         };
+        if registry.source_owner(&request.session_id, true).ok() != Some(owner)
+            || session.phy_owner() != Some(registry.active_phy())
+        {
+            let _ = instance.cancel_retrieval(session);
+            return Err(HttpError::new(409, "retrieval_cut_stale", false));
+        }
         let selected = match SelectedReturn::new(registry.admission(), instance, session, &prepared)
         {
             Ok(selected) => selected,
@@ -377,6 +405,7 @@ impl RetrievalService {
             &registry,
             &mut runtimes,
             owner,
+            registry.active_phy(),
             selection,
         ) {
             Ok(disclosure) => disclosure,
@@ -385,23 +414,23 @@ impl RetrievalService {
                 return Err(error);
             }
         };
-        let mut context = selection
-            .memories
-            .iter()
-            .map(|memory| memory.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        for observation in &disclosure.observations {
-            observation.render(&mut context);
-        }
+        let (context, ranked) = match render_ranked(selection, &disclosure) {
+            Ok(result) => result,
+            Err(error) => {
+                let _ = instance.cancel_retrieval(session);
+                return Err(error);
+            }
+        };
         if context.len() > 32768 {
             let _ = instance.cancel_retrieval(session);
             return Err(HttpError::new(503, "retrieval_projection_exceeded", false));
         }
         let cut = cut_token(selection)?;
+        let mut seen = BTreeSet::new();
         let ids = selection
             .memories
             .iter()
+            .filter(|memory| seen.insert(&memory.memory_id))
             .map(|memory| memory.memory_id.clone())
             .collect::<Vec<_>>();
         let mut result = json!({
@@ -411,6 +440,9 @@ impl RetrievalService {
             "memory_ids": ids,
             "provenance": disclosure.provenance,
         });
+        if !ranked.is_empty() {
+            result["ranked"] = json!(ranked);
+        }
         if !disclosure.observations.is_empty() {
             result["observations"] = json!(disclosure.observations);
         }
@@ -455,11 +487,17 @@ impl RetrievalService {
         key: &TurnKey,
         instance: &Instance,
         owner: OwnerId,
+        phy: &ActivePhyRecall,
     ) -> Result<&'a mut TurnState, HttpError> {
         if !self.turns.contains_key(key) {
             self.runtime.as_ref().ok_or(UNAVAILABLE)?;
             let session = instance
-                .begin_retrieval(owner, &root_turn_id(key), RetrievalMode::Deliver)
+                .begin_scoped_retrieval(
+                    Some(owner),
+                    phy.clone(),
+                    &root_turn_id(key),
+                    RetrievalMode::Deliver,
+                )
                 .map_err(product_error)?;
             if self.turns.len() >= MAX_TURNS {
                 if let Some(oldest) = self
@@ -489,7 +527,11 @@ impl RetrievalService {
                 },
             );
         }
-        self.turns.get_mut(key).ok_or(UNAVAILABLE)
+        let state = self.turns.get_mut(key).ok_or(UNAVAILABLE)?;
+        instance
+            .validate_retrieval(&state.session)
+            .map_err(product_error)?;
+        Ok(state)
     }
 
     fn prune(&mut self, instance: &Instance) {
@@ -507,6 +549,62 @@ impl RetrievalService {
 pub(crate) fn no_dashboard_recall() -> Value {
     json!({"state": "none", "search_id": null, "delivery_id": null,
         "candidate_ids": [], "selected_ids": [], "returned_ids": []})
+}
+
+fn render_ranked(
+    selection: &RetrievalPreview,
+    disclosure: &crate::source_ingest::RetrievalDisclosure,
+) -> Result<(String, Vec<Value>), HttpError> {
+    let mut context = String::new();
+    let mut ranked = Vec::new();
+    if selection.ranked.is_empty() {
+        context = selection
+            .memories
+            .iter()
+            .map(|memory| memory.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        for observation in &disclosure.observations {
+            observation.render(&mut context);
+        }
+        return Ok((context, ranked));
+    }
+    for hit in &selection.ranked {
+        match hit {
+            RetrievalRankedHit::Memory { reference } => {
+                let memory = selection
+                    .memories
+                    .iter()
+                    .find(|memory| memory.reference() == *reference)
+                    .ok_or(UNAVAILABLE)?;
+                if !context.is_empty() {
+                    context.push_str("\n\n");
+                }
+                context.push_str(&memory.content);
+                ranked.push(json!({"kind": "memory", "owner_id": &reference.owner_id,
+                    "id": &reference.memory_id, "revision": reference.revision,
+                    "body_id": &reference.body_id}));
+            }
+            RetrievalRankedHit::Observation { citation } => {
+                let ObservationSource::Observation(id) = citation.source else {
+                    return Err(UNAVAILABLE);
+                };
+                let index = selection
+                    .observations
+                    .iter()
+                    .position(|hit| hit.claim.citation == *citation)
+                    .ok_or(UNAVAILABLE)?;
+                disclosure
+                    .observations
+                    .get(index)
+                    .ok_or(UNAVAILABLE)?
+                    .render(&mut context);
+                ranked.push(json!({"kind": "observation", "owner_id": hex(&citation.owner_id),
+                    "id": hex(&id.0), "revision": citation.revision, "body_id": hex(&citation.body_id)}));
+            }
+        }
+    }
+    Ok((context, ranked))
 }
 
 fn turn_key(request: &ProviderRequest) -> TurnKey {
@@ -533,7 +631,11 @@ fn fingerprint(raw: &[u8]) -> String {
 }
 
 fn cut_token(selection: &RetrievalPreview) -> Result<String, HttpError> {
-    let bytes = serde_json::to_vec(&selection.cut).map_err(|_| UNAVAILABLE)?;
+    let bytes = match &selection.phy_cut {
+        Some(phy) => serde_json::to_vec(&(&selection.cut, phy)),
+        None => serde_json::to_vec(&selection.cut),
+    }
+    .map_err(|_| UNAVAILABLE)?;
     Ok(hex(&Sha256::digest(bytes)))
 }
 

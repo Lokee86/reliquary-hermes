@@ -753,13 +753,14 @@ impl Service {
         let owner = registry
             .source_owner(&request.session_id, true)
             .map_err(attach_error)?;
+        let phy = registry.active_phy_recall();
         drop(registry);
         self.ensure_embedding_owner(instance, owner)?;
         let permit = RetrievalPermit::acquire(&self.retrieval_busy).ok_or(RETRIEVAL_BUSY)?;
         let mut slot = self.retrieval.try_lock().map_err(|_| UNAVAILABLE)?;
         let mut work = slot.take_for_work();
         drop(slot);
-        let response = work.prepare(&request, bytes, instance, owner);
+        let response = work.prepare(&request, bytes, instance, owner, phy);
         self.restore_retrieval(instance, work)?;
         drop(permit);
         response
@@ -840,6 +841,7 @@ impl Service {
                             )));
                         }
                     };
+                    let phy = registry.active_phy_recall();
                     drop(registry);
                     if let Err(error) = self.ensure_embedding_owner(instance, owner) {
                         return Ok(HttpResponse::ok(request.error(
@@ -880,6 +882,7 @@ impl Service {
                         instance,
                         &self.registry,
                         owner,
+                        phy,
                         &self.sources,
                         &self.runtimes,
                         retrieval_deadline,

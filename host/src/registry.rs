@@ -161,6 +161,9 @@ pub(crate) struct OwnerStatus {
 pub(crate) struct Registry {
     gateway: Gateway,
     perception_runtime: Option<(u64, Arc<ConfiguredRuntime>)>,
+    phy_perception_worker: Option<reliquary_memory::PhyPerceptionWorker>,
+    phy_perception_enabled: bool,
+    active_phy_recall: reliquary_memory::ActivePhyRecall,
     ego_runtime: Option<(u64, Arc<ConfiguredRuntime>)>,
     ego_worker: Option<reliquary_memory::EgoWorkerHandle>,
     ego_enabled: bool,
@@ -194,27 +197,47 @@ impl Registry {
     ) -> Result<Self, RegistryError> {
         let ego_enabled =
             std::env::var_os("RELIQUARY_HERMES_EGO").is_some_and(|value| value == "1");
-        Self::open_with_ego(config, state_dir, token, ego_enabled)
+        let phy_perception_enabled =
+            std::env::var_os("RELIQUARY_HERMES_PHY_PERCEPTION").is_some_and(|value| value == "1");
+        Self::open_with_features(
+            config,
+            state_dir,
+            token,
+            ego_enabled,
+            phy_perception_enabled,
+        )
     }
 
+    #[cfg(test)]
     fn open_with_ego(
         config: OwnerConfig,
         state_dir: &Path,
         token: &str,
         ego_enabled: bool,
     ) -> Result<Self, RegistryError> {
+        Self::open_with_features(config, state_dir, token, ego_enabled, false)
+    }
+
+    fn open_with_features(
+        config: OwnerConfig,
+        state_dir: &Path,
+        token: &str,
+        ego_enabled: bool,
+        phy_perception_enabled: bool,
+    ) -> Result<Self, RegistryError> {
+        let writable_phy = ego_enabled || phy_perception_enabled;
         config.validate()?;
         let state_dir = state_dir.canonicalize().map_err(|_| store::UNAVAILABLE)?;
         let lease = acquire_service_lease(&state_dir)?;
         let topology_path = state_dir.join(TOPOLOGY_FILE);
         let gateway = Gateway::new();
         let (topology, write) =
-            topology::prepare_startup(&config, &topology_path, &gateway, ego_enabled)?;
+            topology::prepare_startup(&config, &topology_path, &gateway, writable_phy)?;
         let sessions_dir = state_dir.join("sessions-v1");
         store::sessions_dir(&sessions_dir, write != topology::StartupWrite::Create)?;
         let mounted_rels = match write {
             topology::StartupWrite::Current => {
-                switch::mount_on_startup(&gateway, &topology, ego_enabled)?
+                switch::mount_on_startup(&gateway, &topology, writable_phy)?
             }
             topology::StartupWrite::Create | topology::StartupWrite::Upgrade => topology
                 .owners
@@ -222,11 +245,14 @@ impl Registry {
                 .filter_map(|(&id, owner)| (owner.kind == OwnerKind::Rel).then_some(id))
                 .collect(),
         };
-        let admissions = Admissions::new(&gateway, &topology, &mounted_rels, token, ego_enabled)?;
+        let admissions = Admissions::new(&gateway, &topology, &mounted_rels, token, writable_phy)?;
         topology::publish_startup(&topology_path, &topology, write)?;
         Ok(Self {
             gateway,
             perception_runtime: None,
+            phy_perception_worker: None,
+            phy_perception_enabled,
+            active_phy_recall: reliquary_memory::ActivePhyRecall::new(topology.active_phy),
             ego_runtime: None,
             ego_worker: None,
             ego_approval: None,
@@ -251,11 +277,37 @@ impl Registry {
         if self.perception_runtime.as_ref().map(|(epoch, _)| *epoch)
             != runtime.as_ref().map(|(epoch, _)| *epoch)
         {
+            self.phy_perception_worker.take();
             self.gateway
                 .set_perception_runtime(runtime.as_ref().map(|(_, runtime)| runtime.as_ref()))
                 .map_err(owner_error)?;
             self.perception_runtime = runtime;
         }
+        self.resume_phy_perception()?;
+        Ok(())
+    }
+
+    fn writable_phy(&self) -> bool {
+        self.ego_enabled || self.phy_perception_enabled
+    }
+
+    fn resume_phy_perception(&mut self) -> Result<(), RegistryError> {
+        if !self.phy_perception_enabled
+            || self.perception_runtime.is_none()
+            || self.phy_perception_worker.is_some()
+        {
+            return Ok(());
+        }
+        let (actor, _) = self
+            .admissions
+            .ego_actor
+            .as_ref()
+            .ok_or(store::UNAVAILABLE)?;
+        self.phy_perception_worker = Some(
+            actor
+                .start_phy_perception(self.active_phy())
+                .map_err(owner_error)?,
+        );
         Ok(())
     }
 
@@ -283,6 +335,9 @@ impl Registry {
     }
 
     fn restart_ego_worker(&mut self) -> Result<(), RegistryError> {
+        if !self.ego_enabled {
+            return Ok(());
+        }
         let Some((_, runtime)) = &self.ego_runtime else {
             return Ok(());
         };
@@ -311,6 +366,9 @@ impl Registry {
 
     pub(crate) fn ego_actor(&self) -> Result<&Instance, RegistryError> {
         self.require_current()?;
+        if !self.ego_enabled {
+            return Err(RegistryError::Denied("ego_disabled"));
+        }
         self.admissions
             .ego_actor
             .as_ref()
@@ -354,6 +412,10 @@ impl Registry {
         self.topology.active_phy
     }
 
+    pub(crate) fn active_phy_recall(&self) -> reliquary_memory::ActivePhyRecall {
+        self.active_phy_recall.clone()
+    }
+
     pub(crate) fn legacy_phy(&self) -> OwnerId {
         self.topology.legacy.active_phy
     }
@@ -367,6 +429,8 @@ impl Registry {
 
     fn fence(&mut self) {
         self.fenced = true;
+        self.active_phy_recall.invalidate();
+        self.phy_perception_worker.take();
         self.ego_worker.take();
         self.ego_runtime.take();
         self.ego_approval.take();
