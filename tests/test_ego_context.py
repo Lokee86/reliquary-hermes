@@ -12,12 +12,13 @@ def _stock_outgoing_request():
     import json
     import os
     import shutil
+    import subprocess
+    import sys
     from contextlib import ExitStack
-    from importlib.util import module_from_spec, spec_from_file_location
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from pathlib import Path
     from threading import Thread
-    from time import monotonic, sleep
+    from time import monotonic, sleep, time
 
     import reliquary_hermes
     from hermes_cli.plugins import discover_plugins, get_plugin_command_handler, get_plugin_context_engine
@@ -62,13 +63,17 @@ def _stock_outgoing_request():
     hosted_checkout = os.environ.get("EGO_FIXTURE_HOSTED_CHECKOUT")
     if host:
         from reliquary_hermes.client import HostClient, HostUnavailable
+        from reliquary_hermes.outbox import SourceOutbox
+        from reliquary_hermes.source_capture import capture_snapshot
         from reliquary_hermes.validation import canonical
         from hermes_cli.env_loader import load_hermes_dotenv
 
-        helper_path = package / "tests" / "hosted_hermes_worker.py"
-        spec = spec_from_file_location("ego_hosted_fixture_worker", helper_path)
-        worker = module_from_spec(spec)
-        spec.loader.exec_module(worker)
+        sys.path.insert(0, str(package / "tests"))
+        import hosted_hermes_worker as worker
+        from test_hp04_host import TEXT, _fixture_reply
+
+        ordinary_recall = "Atlas also logs every approval in the procurement register."
+        TEXT["accepted"] = ordinary_recall
         token = "fixture-" + "x" * 40
         state = home / "reliquary"
         state.mkdir()
@@ -91,6 +96,7 @@ def _stock_outgoing_request():
         message = "Tell me about the fixture."
 
     captures = []
+    fixture_calls = []
     class Stub(BaseHTTPRequestHandler):
         def log_message(self, *_args):
             pass
@@ -99,6 +105,7 @@ def _stock_outgoing_request():
         def do_POST(self):
             inbound = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             if self.path == "/v1/embeddings":
+                fixture_calls.append("embed")
                 dimensions = inbound.get("dimensions", 2)
                 self.reply_json({"model": inbound["model"], "data": [
                     {"index": index, "embedding": [1.0] + [0.0] * (dimensions - 1)}
@@ -106,7 +113,7 @@ def _stock_outgoing_request():
                 ], "usage": {"prompt_tokens": 2, "total_tokens": 2}})
                 return
             assert self.path == "/v1/chat/completions", self.path
-            if inbound.get("response_format"):
+            if native and inbound.get("response_format"):
                 self.reply_json(self.structured(inbound))
                 return
             captures.append(inbound)
@@ -145,12 +152,15 @@ def _stock_outgoing_request():
             request = worker.decode_hermes_sdk_request(inbound)
             payload = request["payload"] or {}
             state = payload.get("state", {})
+            fixture_calls.append(request["schema_name"] + ":" + state.get("operation", ""))
             if state.get("operation") in {"memory_query", "refine_query", "traverse_graph"}:
-                result = {"version": 1, "approved": [item["memory"] for item in state.get("candidates", [])[:1]]}
+                candidates = state.get("candidates", [])
+                matching = [item for item in candidates if ordinary_recall in json.dumps(item)]
+                result = {"version": 1, "approved": [item["memory"] for item in (matching or candidates)[:1]]}
             elif request["schema_name"] == "memory_web_audit_v3":
                 result = {"ego": {"candidates": [], "lookups": []}, "perception": {"candidates": [], "lookups": []}}
             else:
-                result = {"ready": True}
+                result = json.loads(_fixture_reply(inbound)["choices"][0]["message"]["content"])
             return {
                 "id": "ego-readiness", "object": "chat.completion", "created": 1,
                 "model": inbound["model"], "choices": [
@@ -194,16 +204,71 @@ def _stock_outgoing_request():
                 worker_cleanup.callback(native.cancel_startup)
                 binding = native.attach("ego-fixture")
                 assert binding.rel_id == "a2" * 16 and binding.user_id == "a3" * 16
+                native.attach_runtime("ego-fixture")
                 assert native.ego_call("status", {})["enabled"] is True
                 (state / "provider.json").write_bytes(canonical({"binary": host}))
                 if hosted_checkout:
-                    worker.start_hermes_worker(
-                        home, Path(hosted_checkout), f"http://127.0.0.1:{server.server_port}/v1",
-                        worker_cleanup, configure=False,
-                    )
+                    # Stock owns request assembly. A second, unmodified Hermes SDK
+                    # process discovers the same installed plugin and owns model jobs.
+                    script = """
+from pathlib import Path
+import os
+import sys
+from hermes_cli.env_loader import load_hermes_dotenv
+from hermes_cli.plugins import discover_plugins
+load_hermes_dotenv(hermes_home=Path(os.environ["HERMES_HOME"]))
+discover_plugins(force=True)
+sys.stdin.read()
+"""
+                    environment = {**os.environ, "PYTHONPATH": os.pathsep.join((hosted_checkout, str(package / "src")))}
+                    with (home / "ego-inference-worker.log").open("w", encoding="utf-8") as log:
+                        companion = subprocess.Popen(
+                            [sys.executable, "-B", "-c", script], cwd=home, env=environment, stdin=subprocess.PIPE,
+                            stdout=log, stderr=subprocess.STDOUT,
+                        )
+
+                    def stop_companion():
+                        companion.stdin.close()
+                        try:
+                            companion.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            companion.kill()
+                            companion.wait(timeout=5)
+
+                    worker_cleanup.callback(stop_companion)
                 else:
                     discover_plugins(force=True)
                     engine_prototype = get_plugin_context_engine()
+                # Seed a separately imported Memory through Hermes' real source pipeline.
+                seed_session = "ego-memory-seed"
+                native.attach(seed_session)
+                outbox = SourceOutbox(state, "profile-ego", "alice")
+                snapshot = capture_snapshot("profile-ego", seed_session, [{
+                    "message_uid": "accepted", "role": "user", "timestamp": time(), "content": ordinary_recall,
+                }])
+                outbox.enqueue(snapshot, generation=outbox.generation(seed_session))
+                job = outbox.next_job(seed_session)
+                deadline = monotonic() + 40
+                while monotonic() < deadline:
+                    try:
+                        receipt = native.deliver_source_job(job)
+                        assert outbox.acknowledge(job, receipt)
+                        break
+                    except HostUnavailable as error:
+                        if str(error) != "source_import_pending":
+                            raise
+                    sleep(0.1)
+                else:
+                    raise AssertionError(f"ordinary source fixture receipt did not arrive; loopback calls: {fixture_calls}")
+                deadline = monotonic() + 40
+                while monotonic() < deadline:
+                    progress = native.read_source_status(seed_session)
+                    if progress["state"] == "complete":
+                        break
+                    sleep(0.1)
+                else:
+                    raise AssertionError(f"ordinary source fixture did not finish ({progress['state']}); loopback calls: {fixture_calls}")
+                native.attach("ego-fixture")
                 ready_request = canonical({
                     "protocol_version": 1, "request_id": "ego-fixture-ready",
                     "operation": "memory_query", "profile_id": "profile-ego", "principal_id": "alice",
@@ -222,7 +287,7 @@ def _stock_outgoing_request():
                         ready_error = str(error)
                     sleep(0.1)
                 else:
-                    raise AssertionError(f"the native fixture recall route did not become available ({ready_error})")
+                    raise AssertionError(f"the native fixture recall route did not become available ({ready_error}); loopback calls: {fixture_calls}")
             agent = AIAgent(provider="custom", base_url=f"http://127.0.0.1:{server.server_port}/v1",
                             api_key="fixture-loopback", model="fixture-model", session_id="ego-fixture",
                             quiet_mode=True, max_iterations=2, skip_memory=False)
@@ -251,8 +316,18 @@ def _stock_outgoing_request():
             assert len(captures) == 1, f"expected one completed request, saw {len(captures)}"
             first = captures[0]["messages"]
             original = inputs[0]
+            assert original[0]["content"].startswith(soul), repr(original[0]["content"][:100])
+            if native and not first[0]["content"].startswith(expected_identity):
+                try:
+                    package_now = native.ego_call("context", {
+                        "session_id": "ego-fixture", "query": message, "budget": 10_000, "counter": "utf8-bytes-v1",
+                    })
+                    current_identity = package_now["identity"]
+                except HostUnavailable as error:
+                    current_identity = str(error)
+                raise AssertionError(f"stock identity was not replaced; package Identity {current_identity!r}; "
+                                     f"native client initialized: {engine._ego_client is not None}")
             assert first[0]["content"].startswith(expected_identity)
-            assert original[0]["content"].startswith(soul)
             suffix = original[0]["content"][len(soul):]
             assert first[0]["content"].startswith(expected_identity + suffix)
             for marker in markers:
@@ -264,13 +339,12 @@ def _stock_outgoing_request():
             if native:
                 assert engine._ego_client is not None
             if native:
-                assert "Atlas reviews purchase requests before releasing payment." in json.dumps(first)
+                assert ordinary_recall in json.dumps(first)
             history = result["messages"]
             saved_history = json.dumps(history)
             assert expected_identity not in saved_history
             assert all(marker not in saved_history for marker in markers)
 
-            import sys
             from unittest.mock import patch
 
             engine_module = sys.modules[type(engine).__module__]
