@@ -73,6 +73,8 @@ HP01 verifies the pinned Hermes interfaces and the Python provider, owner routin
 
 The signed `test_native_active_phy_observation_uses_ordinary_mixed_recall` process cases use `HP03_HOST_BINARY`, `HP_INFERENCE_HERMES_CHECKOUT` and `HP_PHY_RECALL_FIXTURE_DIR`. Generate `mixed.rel`, `current.phy` and `pending.phy` with the Core scoped recall test by setting its `RELIQUARY_TEST_SCOPED_RECALL_FIXTURE_DIR`. Run `python -B -m pytest -q --basetemp=.pytest_tmp tests/test_hosted_inference_e2e.py -k active_phy_observation`. The cases use copies of both owners. They cover the ordinary signed query, a shared limit, duplicate Memory IDs with exact owner-qualified bodies, pending claim withholding, and principal denial. The Rust registry test exercises the old turn fence when only the PHY changes.
 
+With Core `da03bac76282152e778f52403b51cd103217d68c` and the audited Hermes SDK, both signed cases passed in 18.79 seconds. The focused registry switch test, all four selected-return cases, all three copied-source cases, and 127 Python protocol and client tests passed. The signed cases also confirmed byte-for-byte preservation of the read-only active PHY.
+
 ## Standalone checks
 
 From the plugin repository with Python 3.11+, pytest 9.1.x, jsonschema 4.x, the pinned Hermes runtime dependencies and the audited checkout available:
