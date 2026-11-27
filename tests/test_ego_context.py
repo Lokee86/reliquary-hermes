@@ -20,7 +20,7 @@ def _stock_outgoing_request():
     from time import monotonic, sleep
 
     import reliquary_hermes
-    from hermes_cli.plugins import discover_plugins, get_plugin_context_engine
+    from hermes_cli.plugins import discover_plugins, get_plugin_command_handler, get_plugin_context_engine
 
     home = Path(os.environ["HERMES_HOME"])
     profile_plugin = home / "plugins" / "reliquary"
@@ -43,6 +43,7 @@ def _stock_outgoing_request():
     disabled_provider = load_memory_provider("reliquary")
     assert disabled_provider is not None and disabled_provider.name == "reliquary"
     assert get_plugin_context_engine() is None
+    assert get_plugin_command_handler("identity") is None
 
     config.write_text(
         install_config + "context:\n  engine: reliquary-ego\n"
@@ -53,6 +54,7 @@ def _stock_outgoing_request():
     discover_plugins(force=True)
     engine_prototype = get_plugin_context_engine()
     assert engine_prototype is not None and engine_prototype.name == "reliquary-ego"
+    assert get_plugin_command_handler("identity") is not None
     enabled_provider = load_memory_provider("reliquary")
     assert enabled_provider is not None and enabled_provider.name == "reliquary"
 
@@ -234,9 +236,17 @@ def _stock_outgoing_request():
                             quiet_mode=True, max_iterations=2, skip_memory=False)
             engine = agent.context_compressor
             assert type(engine) is type(engine_prototype)
+            exposed_tools = {tool.get("function", {}).get("name") for tool in agent.tools}
+            assert {"lookup_anchors", "pin_anchor", "modify_anchor", "delete_anchor"} <= exposed_tools
             if native:
                 assert engine._ego_client is None  # The engine resolves the stock profile itself.
-                assert any(tool.get("function", {}).get("name") == "memory_query" for tool in agent.tools)
+                assert "memory_query" in exposed_tools
+                provider = agent._memory_manager.get_provider("reliquary")
+                assert provider is not None
+                deadline = monotonic() + 10
+                while provider.binding is None and monotonic() < deadline:
+                    sleep(0.05)
+                assert provider.binding is not None, provider.lifecycle_status
             else:
                 engine._ego_client = Package()
             selection = engine.select_context
