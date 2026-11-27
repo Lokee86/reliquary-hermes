@@ -223,6 +223,7 @@ impl MountedOwner {
 pub struct Gateway {
     owners: Arc<RwLock<HashMap<OwnerId, MountedOwner>>>,
     owner_worker_leases: Arc<Mutex<BTreeSet<(OwnerId, u8)>>>,
+    pub(crate) ego_audit_registry: Arc<ego_audit_handoff::EgoAuditRegistry>,
     credential_publication: Arc<RwLock<()>>,
     rel_topology: Arc<RwLock<()>>,
 }
@@ -441,6 +442,17 @@ mod insomnia_worker;
 mod instance_context;
 mod instance_conversation;
 mod instance_dream;
+mod instance_ego;
+pub use instance_ego::{
+    EgoContext, EgoContextBinding, EgoIdentityDraft, EgoPinPatch, EgoPointInspection,
+    EgoQueryVector, EgoRelInspection, EgoRoutes, EgoScope, EgoSummaryEdit, EgoSummaryItemId,
+    EgoTopicInspection, EgoWorkerHandle, PreparedEgoIdentity,
+};
+pub use reliquary_owner_session::{
+    EgoAnchor, EgoAnchorId, EgoAnchorPriority, EgoCitation, EgoIdentity, EgoIdentityId,
+    EgoIdentitySelection, EgoPhySummary, EgoPointId, EgoPointStatus, EgoTextField, EgoTimeScope,
+    EgoTopicId,
+};
 mod owner_workers;
 mod workflow_workers;
 pub use instance_context::{
@@ -479,6 +491,7 @@ pub use instance_identity::{
     IdentitySeparationPreview, IdentitySeparationRequest, IdentitySeparationReview,
     IdentitySeparationState, PreparedIdentitySeparation,
 };
+mod ego_audit_handoff;
 mod instance_perception;
 mod instance_perception_lifecycle;
 pub use instance_perception::{PerceptionLifecycle, PerceptionRoutes};
