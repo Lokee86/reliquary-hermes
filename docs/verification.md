@@ -71,6 +71,8 @@ For the real inference fixture, set `HP_INFERENCE_HERMES_CHECKOUT` to the exact 
 
 HP01 verifies the pinned Hermes interfaces and the Python provider, owner routing and copied-source fixtures. HP02 verifies the selected-return bridge, copied-source import and dashboard product operations through the public Root API.
 
+The signed `test_native_active_phy_observation_uses_ordinary_mixed_recall` process cases use `HP03_HOST_BINARY`, `HP_INFERENCE_HERMES_CHECKOUT` and `HP_PHY_RECALL_FIXTURE_DIR`. Generate `mixed.rel`, `current.phy` and `pending.phy` with the Core scoped recall test by setting its `RELIQUARY_TEST_SCOPED_RECALL_FIXTURE_DIR`. Run `python -B -m pytest -q --basetemp=.pytest_tmp tests/test_hosted_inference_e2e.py -k active_phy_observation`. The cases use copies of both owners. They cover the ordinary signed query, a shared limit, duplicate Memory IDs with exact owner-qualified bodies, pending claim withholding, and principal denial. The Rust registry test exercises the old turn fence when only the PHY changes.
+
 ## Standalone checks
 
 From the plugin repository with Python 3.11+, pytest 9.1.x, jsonschema 4.x, the pinned Hermes runtime dependencies and the audited checkout available:

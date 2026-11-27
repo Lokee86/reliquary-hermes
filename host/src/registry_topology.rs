@@ -123,7 +123,7 @@ pub(super) fn prepare_startup(
     config: &OwnerConfig,
     path: &Path,
     gateway: &Gateway,
-    ego_enabled: bool,
+    writable_phy: bool,
 ) -> Result<(Topology, StartupWrite), RegistryError> {
     let legacy = match load(path)? {
         Some(PersistedTopology::Current(topology)) => {
@@ -165,7 +165,12 @@ pub(super) fn prepare_startup(
             }));
         }
         let owner_id = gateway
-            .mount_owner_path(&path, kind, kind == OwnerKind::Rel || ego_enabled, expected)
+            .mount_owner_path(
+                &path,
+                kind,
+                kind == OwnerKind::Rel || writable_phy,
+                expected,
+            )
             .map_err(|error| match error.kind() {
                 ProductErrorKind::Admission => TOPOLOGY_CHANGED,
                 ProductErrorKind::Conflict => RegistryError::Invalid("duplicate_owner"),
