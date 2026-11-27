@@ -263,7 +263,7 @@ export function KnowledgePanel({ owner, sessionId, transport, graphTransportFor,
       <KnowledgeInspector key={`${owner.owner_id}:${owner.cut}:${selectedMemoryId ?? "none"}`}
         client={client} scope={scope} memoryId={inspectorMemoryId} communities={communityPage?.items ?? []} controls={controls}
         blocked={mutationBlocked} writable={writable}
-        egoPanel={<EgoInspector transport={transport} controls={controls} owner={owner} blocked={mutationBlocked}
+        egoPanel={<EgoInspector transport={transport} controls={controls} owner={owner} sessionId={sessionId} blocked={mutationBlocked}
           onOpenMemory={(id, revision) => { setCitedMemory({ id, revision }); setSelectedMemoryId(id); }} />}
         initialRevision={citedMemory?.id === inspectorMemoryId ? citedMemory?.revision : undefined}
         onChanged={refresh} onOpenMemory={setSelectedMemoryId} />

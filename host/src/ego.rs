@@ -92,6 +92,7 @@ struct SlashApproval {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SummaryQuery {
+    session_id: Option<String>,
     owner_id: OwnerId,
     rel_id: Option<OwnerId>,
     revision: Option<u64>,
@@ -177,11 +178,7 @@ fn pins(registry: &Registry, op: &str, input: PinCommand) -> Result<Value, Regis
     let scope = match input.scope {
         Scope::Phy if input.owner_id == registry.active_phy() => EgoScope::Phy(input.owner_id),
         Scope::Rel => {
-            if let Some(session) = input.session_id.as_deref() {
-                if !valid_id(session) || registry.source_owner(session, true)? != input.owner_id {
-                    return Err(DENIED);
-                }
-            }
+            require_rel_scope(registry, input.owner_id, input.session_id.as_deref())?;
             EgoScope::Rel(input.owner_id)
         }
         Scope::Phy => return Err(DENIED),
@@ -357,10 +354,30 @@ fn approve(registry: &mut Registry, input: SlashApproval) -> Result<Value, Regis
     )
 }
 
+fn require_rel_scope(
+    registry: &Registry,
+    rel: OwnerId,
+    session: Option<&str>,
+) -> Result<(), RegistryError> {
+    let (_, kind, _) = registry.dashboard_scope(
+        registry.profile_id(),
+        &registry.active_phy().to_string(),
+        &rel.to_string(),
+        session,
+    )?;
+    if kind != reliquary_memory::OwnerKind::Rel {
+        return Err(DENIED);
+    }
+    Ok(())
+}
+
 fn summaries(registry: &Registry, op: &str, input: SummaryQuery) -> Result<Value, RegistryError> {
     let phy = registry.active_phy();
     if input.owner_id != phy {
         return Err(DENIED);
+    }
+    if let Some(rel) = input.rel_id {
+        require_rel_scope(registry, rel, input.session_id.as_deref())?;
     }
     let actor = registry.ego_actor()?;
     match (op, input.rel_id) {

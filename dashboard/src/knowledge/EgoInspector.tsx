@@ -26,11 +26,12 @@ interface Props {
   transport: JsonTransport;
   controls: HostControls;
   owner: OwnerBinding;
+  sessionId: string | null;
   blocked?: string;
   onOpenMemory(id: string, revision: string): void;
 }
 
-export function EgoInspector({ transport, controls, owner, blocked, onOpenMemory }: Props) {
+export function EgoInspector({ transport, controls, owner, sessionId, blocked, onOpenMemory }: Props) {
   const [expanded, expand] = useState(false);
   const [status, setStatus] = useState<Status | null>(null);
   const [pinned, setPinned] = useState<Pin[]>([]);
@@ -46,12 +47,15 @@ export function EgoInspector({ transport, controls, owner, blocked, onOpenMemory
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const { Button, Input, Textarea } = controls;
-  const scope = { scope: owner.owner_kind === "REL" ? "rel" : "phy", owner_id: owner.owner_id };
+  const isRel = owner.owner_kind === "REL";
+  const session = isRel ? sessionId : null;
+  const scope = { scope: isRel ? "rel" : "phy", owner_id: owner.owner_id, session_id: session };
   const call = <T,>(op: string, body: object, signal?: AbortSignal) =>
     transport("/ego-v1/" + op, { method: "POST", body, signal }) as Promise<T>;
   const summaryScope = (phy: string) => ({
     owner_id: phy,
-    rel_id: owner.owner_kind === "REL" ? owner.owner_id : null,
+    rel_id: isRel ? owner.owner_id : null,
+    session_id: session,
   });
   const writable = Boolean(status?.enabled && status.writable && !blocked);
 
@@ -86,7 +90,7 @@ export function EgoInspector({ transport, controls, owner, blocked, onOpenMemory
       if (!controller.signal.aborted) setError("Ego is unavailable for this profile.");
     });
     return () => controller.abort();
-  }, [expanded, owner.owner_id, transport]);
+  }, [expanded, owner.owner_id, session, transport]);
 
   async function write(op: string, body: object) {
     if (!writable || busy) return;

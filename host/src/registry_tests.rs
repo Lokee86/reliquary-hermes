@@ -896,16 +896,38 @@ fn ego_approval_and_pin_edits_use_active_phy_without_broadening_provider_grants(
 
     let replacement = fixture._directory.path().join("replacement.phy");
     let new_phy = Phylactery::create(&replacement).unwrap().owner_id();
+    let replacement_rel = fixture._directory.path().join("replacement.rel");
+    Rel::create(&replacement_rel).unwrap();
     let review = registry
         .review_switch(SwitchChanges {
             active_phy: Some(replacement),
-            main_rel: None,
+            main_rel: Some(replacement_rel),
             projects: BTreeMap::new(),
         })
         .unwrap();
     registry.apply_switch(review).unwrap();
     assert_eq!(registry.active_phy(), new_phy);
     assert!(request(&mut registry, "identities", json!({"owner_id": phy})).is_err());
+    assert!(
+        request(
+            &mut registry,
+            "pins",
+            json!({
+                "scope": "rel", "owner_id": fixture.main_id
+            })
+        )
+        .is_err()
+    );
+    assert!(
+        request(
+            &mut registry,
+            "summary",
+            json!({
+                "owner_id": new_phy, "rel_id": fixture.main_id
+            })
+        )
+        .is_err()
+    );
     assert!(request(&mut registry, "context", context.clone()).is_err());
     registry.bind_session("replacement-session", None).unwrap();
     let mut context = context;
