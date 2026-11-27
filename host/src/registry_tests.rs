@@ -937,3 +937,66 @@ fn ego_approval_and_pin_edits_use_active_phy_without_broadening_provider_grants(
         Value::Null
     );
 }
+
+#[test]
+fn active_phy_recall_fences_previous_turn_on_the_same_rel() {
+    use reliquary_memory::RetrievalMode;
+
+    let fixture = Fixture::new();
+    let mut registry =
+        Registry::open_with_features(fixture.config(), &fixture.state, TOKEN, false, true).unwrap();
+    assert!(registry.writable_phy());
+    assert!(registry.ego_actor().is_err());
+    registry.bind_session("previous-chat", None).unwrap();
+    let previous = registry.instance().unwrap();
+    let active = registry.active_phy_recall();
+    let turn = previous
+        .begin_scoped_retrieval(
+            Some(fixture.main_id),
+            active.clone(),
+            "previous-turn",
+            RetrievalMode::Deliver,
+        )
+        .unwrap();
+    previous.validate_retrieval(&turn).unwrap();
+
+    let replacement = fixture._directory.path().join("replacement.phy");
+    let replacement_id = Phylactery::create(&replacement).unwrap().owner_id();
+    let review = registry
+        .review_switch(SwitchChanges {
+            active_phy: Some(replacement),
+            main_rel: None,
+            projects: BTreeMap::new(),
+        })
+        .unwrap();
+    registry.apply_switch(review).unwrap();
+    assert!(previous.validate_retrieval(&turn).is_err());
+    assert!(registry.source_owner("previous-chat", true).is_err());
+
+    let current = registry.instance().unwrap();
+    assert!(
+        current
+            .begin_scoped_retrieval(
+                Some(fixture.main_id),
+                active,
+                "stale-turn",
+                RetrievalMode::Deliver,
+            )
+            .is_err()
+    );
+    registry.bind_session("current-chat", None).unwrap();
+    assert_eq!(
+        registry.source_owner("current-chat", true).unwrap(),
+        fixture.main_id
+    );
+    let rebound = current
+        .begin_scoped_retrieval(
+            Some(fixture.main_id),
+            registry.active_phy_recall(),
+            "current-turn",
+            RetrievalMode::Deliver,
+        )
+        .unwrap();
+    assert_eq!(rebound.phy_owner(), Some(replacement_id));
+    current.validate_retrieval(&rebound).unwrap();
+}
