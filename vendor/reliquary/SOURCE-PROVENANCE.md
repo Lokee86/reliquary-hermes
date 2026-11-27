@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This source-only snapshot pins the Reliquary Core Ego implementation at `5e3418323e5c510f81e5d7f508185452e4dcc252`.
+This source-only snapshot pins the Reliquary Core Ego implementation at `5e4d5b0ba1ff0b498bd025bbc87394e702f48b18`.
 The Hermes host uses the public `reliquary-memory` API for leased owner mounts.
 Core restores verified REL checkpoints, replays recent writes, and reads older history on demand.
 This revision includes same-REL Perception, hosted native decision binding, and typed Observation recall through shared hybrid retrieval, durable source deletion and rewind, Ego package and controls, and paged initial auditing with the version 1 progress record.
