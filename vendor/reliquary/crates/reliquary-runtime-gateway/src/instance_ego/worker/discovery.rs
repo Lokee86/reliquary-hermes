@@ -5,8 +5,9 @@ use reliquary_application::perception_workflow::{
     retain_current_ego_evidence,
 };
 use reliquary_owner_session::{
-    AUDIT_WORK_PAGE_SIZE, AuditDiscoveryCursor, AuditWorkSource, MemoryId, PerceptionAuditPage,
-    PerceptionSourceCut, PhyAuditChange, PhyAuditCursor, PhyAuditCut, model::MemoryTextField,
+    AUDIT_CADENCE, AUDIT_WORK_PAGE_SIZE, AuditDiscoveryCursor, AuditWorkSource, MemoryId,
+    PerceptionAuditPage, PerceptionSourceCut, PhyAuditChange, PhyAuditCursor, PhyAuditCut,
+    model::MemoryTextField,
 };
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +40,58 @@ struct RelBootstrap {
     after: Option<MemoryId>,
     page: Option<Page>,
     done: bool,
+    #[serde(default)]
+    incremental: Option<RelIncremental>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct RelIncremental {
+    base: EgoSourceCut,
+    settlements: u64,
+    memory: u64,
+}
+
+impl RelIncremental {
+    fn due(prior: EgoSourceCut, current: &PerceptionSourceCut) -> bool {
+        prior.owner_id == current.owner_id
+            && prior.history_generation == current.history_generation
+            && prior.memory_version <= current.memory
+            && current.settlements.saturating_sub(prior.audit_frontier) >= AUDIT_CADENCE as u64
+    }
+
+    fn next_page(
+        &mut self,
+        rel: &RelSession,
+        cut: &PerceptionSourceCut,
+    ) -> Result<Page, OwnerSessionError> {
+        let mut sources = if self.settlements < cut.settlements {
+            let rows = rel.perception_settlements_page(
+                self.settlements,
+                cut.settlements,
+                AUDIT_WORK_PAGE_SIZE,
+            );
+            self.settlements = rows
+                .last()
+                .map_or(cut.settlements, |(position, _)| *position);
+            rows.into_iter().map(|(_, id)| id).collect()
+        } else {
+            let (next, sources) = rel.perception_recurring_changed_ids_page(
+                cut,
+                self.memory,
+                self.base.audit_frontier,
+                AUDIT_WORK_PAGE_SIZE,
+            )?;
+            self.memory = next;
+            sources
+        };
+        sources.sort_unstable();
+        sources.dedup();
+        Ok(Page::new(sources, None))
+    }
+
+    fn complete(&self, cut: &PerceptionSourceCut) -> bool {
+        self.settlements == cut.settlements && self.memory == cut.memory
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -72,6 +125,29 @@ impl EgoWorker {
         owner: OwnerId,
         pending: &mut EgoPendingWork,
     ) -> Result<bool, String> {
+        self.advance_rel_walk(owner, pending, None)
+    }
+
+    pub(super) fn advance_rel_recurring(
+        &self,
+        owner: OwnerId,
+        prior: EgoSourceCut,
+        pending: &mut EgoPendingWork,
+    ) -> Result<bool, String> {
+        self.advance_rel_walk(owner, pending, Some(prior))
+    }
+
+    fn advance_rel_walk(
+        &self,
+        owner: OwnerId,
+        pending: &mut EgoPendingWork,
+        prior: Option<EgoSourceCut>,
+    ) -> Result<bool, String> {
+        let kind = if prior.is_some() {
+            EgoRunKind::RelIndependentRecurring
+        } else {
+            EgoRunKind::RelBootstrap
+        };
         let current = self
             .instance
             .with_reliquary(owner, RelSession::perception_source_cut)
@@ -84,7 +160,12 @@ impl EgoWorker {
                 .checkpoint(run)
                 .map_err(as_error)?
                 .ok_or("Ego REL checkpoint missing")?;
-            if run.kind != EgoRunKind::RelBootstrap
+            if run.kind != kind
+                || walk
+                    .incremental
+                    .as_ref()
+                    .map(|incremental| incremental.base)
+                    != prior
                 || run.route != self.routes.identity
                 || run.contract != CONTRACT_VERSION
                 || walk.cut.history_generation != current.history_generation
@@ -95,18 +176,31 @@ impl EgoWorker {
             }
             (run, walk)
         } else {
+            let incremental = if let Some(prior) = prior {
+                if !RelIncremental::due(prior, &current) {
+                    return Ok(false);
+                }
+                Some(RelIncremental {
+                    base: prior,
+                    settlements: prior.audit_frontier,
+                    memory: prior.memory_version,
+                })
+            } else {
+                None
+            };
             let run = self.new_run(
                 owner,
                 current.history_generation,
                 current.memory,
                 current.settlements,
-                EgoRunKind::RelBootstrap,
+                kind,
             );
             let walk = RelBootstrap {
                 cut: current,
                 after: None,
                 page: None,
                 done: false,
+                incremental,
             };
             pending.save_checkpoint(run, &walk).map_err(as_error)?;
             (run, walk)
@@ -116,21 +210,30 @@ impl EgoWorker {
             return Ok(true);
         }
         let Some(page) = &mut walk.page else {
-            let sources = self
-                .instance
-                .with_reliquary(owner, |rel| {
-                    rel.perception_source_ids_page(walk.after, AUDIT_WORK_PAGE_SIZE)
-                })
-                .map_err(as_error)?;
-            let next =
-                (sources.len() == AUDIT_WORK_PAGE_SIZE).then(|| sources[AUDIT_WORK_PAGE_SIZE - 1]);
-            walk.page = Some(Page::new(sources, next));
+            walk.page = Some(
+                self.instance
+                    .with_reliquary(owner, |rel| {
+                        if let Some(incremental) = &mut walk.incremental {
+                            return incremental.next_page(rel, &walk.cut);
+                        }
+                        let sources =
+                            rel.perception_source_ids_page(walk.after, AUDIT_WORK_PAGE_SIZE);
+                        let next = (sources.len() == AUDIT_WORK_PAGE_SIZE)
+                            .then(|| sources[AUDIT_WORK_PAGE_SIZE - 1]);
+                        Ok(Page::new(sources, next))
+                    })
+                    .map_err(as_error)?
+                    .map_err(as_error)?,
+            );
             pending.save_checkpoint(run, &walk).map_err(as_error)?;
             return Ok(true);
         };
         if usize::from(page.cursor.source) == page.sources.len() {
             walk.after = page.next;
-            walk.done = page.next.is_none();
+            walk.done = walk.incremental.as_ref().map_or_else(
+                || page.next.is_none(),
+                |incremental| incremental.complete(&walk.cut),
+            );
             walk.page = None;
             pending.save_checkpoint(run, &walk).map_err(as_error)?;
             return Ok(true);
@@ -193,6 +296,12 @@ impl EgoWorker {
             .map_err(as_error)?;
             let mut candidates = accepted(result.ego)?;
             self.still_authorized(owner).map_err(as_error)?;
+            if run.kind == EgoRunKind::RelIndependentRecurring
+                && self.shared_perception_available(owner)
+            {
+                pending.discard_stale(run).map_err(as_error)?;
+                return Ok(true);
+            }
             self.instance
                 .with_reliquary(owner, |rel| {
                     retain_current_ego_evidence(rel, &mut candidates)
