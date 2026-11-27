@@ -75,11 +75,6 @@ def _stock_outgoing_request():
             "profile_id": "profile-ego", "principal_id": "alice",
             "main_rel": str(rel), "active_phy": str(phy), "projects": {},
         }))
-        (state / "provider.json").write_bytes(canonical({"binary": host}))
-        (home / ".env").write_text(
-            f"RELIQUARY_HERMES_TOKEN={token}\nRELIQUARY_FIXTURE_API_KEY=fixture-loopback\n", encoding="utf-8",
-        )
-        load_hermes_dotenv(hermes_home=home)
         native = HostClient(state, "profile-ego", "alice", token, binary=Path(host))
         expected_identity = "Respond with practical precision."
         markers = ("Always use metric units.", "Meetings use video.",
@@ -187,10 +182,6 @@ def _stock_outgoing_request():
         http.start()
         try:
             if native:
-                worker_cleanup.callback(native.cancel_startup)
-                binding = native.attach("ego-fixture")
-                assert binding.rel_id == "a2" * 16 and binding.user_id == "a3" * 16
-                assert native.ego_call("status", {})["enabled"] is True
                 original_config = config.read_text(encoding="utf-8")
                 config.write_text(
                     original_config.replace("model:\n", "model:\n  provider: 'custom:fixture'\n  default: fixture-model\n")
@@ -201,6 +192,15 @@ def _stock_outgoing_request():
                     + "    model: fixture-embedding\n    dimensions: 2\n    input_type_handling: shared\n",
                     encoding="utf-8",
                 )
+                (home / ".env").write_text(
+                    f"RELIQUARY_HERMES_TOKEN={token}\nRELIQUARY_FIXTURE_API_KEY=fixture-loopback\n", encoding="utf-8",
+                )
+                load_hermes_dotenv(hermes_home=home)
+                (state / "provider.json").write_bytes(canonical({"binary": host}))
+                worker_cleanup.callback(native.cancel_startup)
+                binding = native.attach("ego-fixture")
+                assert binding.rel_id == "a2" * 16 and binding.user_id == "a3" * 16
+                assert native.ego_call("status", {})["enabled"] is True
                 if hosted_checkout:
                     helper_path = package / "tests" / "hosted_hermes_worker.py"
                     spec = spec_from_file_location("ego_hosted_fixture_worker", helper_path)
