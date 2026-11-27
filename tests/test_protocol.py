@@ -82,6 +82,36 @@ def test_retrieval_response_counts_memories_and_observations_together():
         parsed.for_request(Request.parse(canonical(request(arguments={"query": "x", "limit": 9}))))
 
 
+def test_mixed_rank_qualifies_shared_memory_ids_and_counts_every_hit():
+    wire = response()
+    result = wire["result"]
+    shared_id = "5" * 64
+    observation = _observation()
+    result["memory_ids"] = [shared_id]
+    result["provenance"] = [
+        {"owner_id": "9" * 32, "memory_id": shared_id, "source_snapshot_digests": []},
+        {"owner_id": observation["owner_id"], "memory_id": shared_id, "source_snapshot_digests": []},
+    ]
+    result["observations"] = [observation]
+    result["ranked"] = [
+        {"kind": "memory", "owner_id": "9" * 32, "id": shared_id,
+         "revision": 2, "body_id": "8" * 64},
+        {"kind": "observation", "owner_id": observation["owner_id"],
+         "id": observation["observation_id"], "revision": observation["revision"],
+         "body_id": observation["body_id"]},
+        {"kind": "memory", "owner_id": observation["owner_id"], "id": shared_id,
+         "revision": 2, "body_id": "6" * 64},
+    ]
+    parsed = Response.parse(canonical(wire))
+    assert json.loads(parsed.result_json)["ranked"] == result["ranked"]
+    requested = Request.parse(canonical(request(arguments={"query": "x", "limit": 2})))
+    with pytest.raises(ContractError, match="response_limit_mismatch"):
+        parsed.for_request(requested)
+    result["ranked"][1]["revision"] += 1
+    with pytest.raises(ContractError, match="retrieval_order_mismatch"):
+        Response.parse(canonical(wire))
+
+
 def test_derived_observation_keeps_ultimate_memory_lineage():
     wire = response()
     observation = _observation()

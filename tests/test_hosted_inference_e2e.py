@@ -500,3 +500,70 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
         assert NATIVE_DECISION_KEY not in (home / "hosted-worker.log").read_text(encoding="utf-8")
         assert worker_command(worker, "stop")["registered"] is False
         wait_for(lambda: not discovery.exists(), diagnostic=diagnostic)
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_native_active_phy_observation_uses_ordinary_mixed_recall(
+        tmp_path, binaries, inference_checkout, pending):
+    directory = os.environ.get("HP_PHY_RECALL_FIXTURE_DIR")
+    if not directory:
+        pytest.skip("Set HP_PHY_RECALL_FIXTURE_DIR to the disposable Core mixed-recall fixture")
+    fixture = Path(directory)
+    binary, _ = binaries
+    rel, phy = tmp_path / "mixed.rel", tmp_path / "active.phy"
+    copyfile(fixture / "mixed.rel", rel)
+    copyfile(fixture / ("pending.phy" if pending else "current.phy"), phy)
+    home = tmp_path / "profile"
+    home.mkdir()
+    state = home / "reliquary"
+    config(state, rel, phy, profile=PROFILE)
+    save_settings(home, {"profile_id": PROFILE, "principal_id": PRINCIPAL,
+        "main_rel": str(rel), "active_phy": str(phy), "binary": str(binary)})
+    (home / ".env").write_text(f"{TOKEN_VAR}={TOKEN}\n", encoding="utf-8")
+    original_phy = sha256(phy.read_bytes()).digest()
+
+    with hosted_model(DIMENSIONS) as (url, _), ExitStack() as cleanup:
+        client = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
+        cleanup.callback(lambda: stop(client._process) if client._process is not None else None)
+        client.attach(SESSION)
+        start_hermes_worker(home, inference_checkout, url, cleanup, dimensions=DIMENSIONS)
+        attempts = count()
+
+        def ordinary(limit=10, principal=PRINCIPAL):
+            request = decode(query_request(f"phy-{next(attempts)}", "needle zephyr"))
+            request["principal_id"] = principal
+            request["arguments"]["limit"] = limit
+            try:
+                response = client.request(canonical(request), recall_tool=True)
+            except HostUnavailable as error:
+                return str(error)
+            result = decode(response.result_json)
+            return result if response.status == "ok" else result["code"]
+
+        def recalled():
+            result = ordinary()
+            return result if isinstance(result, dict) else None
+
+        result = wait_for(recalled, diagnostic=lambda: audit(home))
+        memory_hits = [hit for hit in result["ranked"] if hit["kind"] == "memory"]
+        assert len(memory_hits) == 2, result
+        assert len({hit["owner_id"] for hit in memory_hits}) == 2
+        assert len({hit["id"] for hit in memory_hits}) == 1
+        assert len({hit["body_id"] for hit in memory_hits}) == 2
+        assert {(row["owner_id"], row["memory_id"]) for row in result["provenance"]} == {
+            (hit["owner_id"], hit["id"]) for hit in memory_hits
+        }
+        if pending:
+            assert not result.get("observations") and "Zephyr delivery was approved." not in result["context"]
+        else:
+            [claim] = result["observations"]
+            [ranked_claim] = [hit for hit in result["ranked"] if hit["kind"] == "observation"]
+            [private] = [hit for hit in memory_hits if hit["owner_id"] == claim["owner_id"]]
+            assert ranked_claim["owner_id"] == claim["owner_id"]
+            assert ranked_claim["id"] == claim["observation_id"]
+            assert all(reference["owner_id"] == private["owner_id"] for reference in claim["evidence"])
+            assert claim["claim"] == "Zephyr delivery was approved."
+        limited = ordinary(limit=1)
+        assert isinstance(limited, dict) and len(limited["ranked"]) == 1, limited
+        assert ordinary(principal="another-principal") == "denied"
+    assert sha256(phy.read_bytes()).digest() == original_phy

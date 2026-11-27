@@ -18,14 +18,19 @@ def _ids(value: Any, *, nonempty: bool = False) -> None:
     require(len(set(identifier(item) for item in values)) == len(values), "duplicate_id")
 
 
-def _ranked_recall(value: Any, memories: list, observations: list) -> None:
+def _recall_owner(value: Any) -> str:
+    owner = identifier(value)
+    require(len(owner) == 32 and all(c in "0123456789abcdef" for c in owner),
+            "invalid_retrieval_owner")
+    return owner
+
+
+def _ranked_recall(value: Any, memories: list, observations: list) -> set:
     seen, selected_memories, selected_observations = set(), set(), set()
     for row in sequence(value, MAX_RETRIEVAL_RESULTS, nonempty=True):
         hit = obj(row, {"kind", "owner_id", "id", "revision", "body_id"})
         kind = choice(hit["kind"], {"memory", "observation"})
-        owner = identifier(hit["owner_id"])
-        require(len(owner) == 32 and all(c in "0123456789abcdef" for c in owner),
-                "invalid_retrieval_owner")
+        owner = _recall_owner(hit["owner_id"])
         identity = digest(hit["id"])
         revision = integer(hit["revision"], 1, 2**64 - 1)
         body = digest(hit["body_id"])
@@ -33,13 +38,15 @@ def _ranked_recall(value: Any, memories: list, observations: list) -> None:
         require(key not in seen, "duplicate_id")
         seen.add(key)
         if kind == "memory":
-            selected_memories.add(identity)
+            selected_memories.add((owner, identity))
         else:
             selected_observations.add((owner, identity, revision, body))
-    require(selected_memories == set(memories) and selected_observations == {
+    require({identity for _, identity in selected_memories} == set(memories)
+            and selected_observations == {
         (row["owner_id"], row["observation_id"], row["revision"], row["body_id"])
         for row in observations
     }, "retrieval_order_mismatch")
+    return selected_memories
 
 
 def _source_digests(value: Any, maximum: int) -> None:
@@ -206,16 +213,24 @@ class Response:
             _ids(r["memory_ids"])
             require(len(r["memory_ids"]) + len(observations) <= MAX_RETRIEVAL_RESULTS,
                     "retrieval_result_limit")
-            if "ranked" in r:
-                _ranked_recall(r["ranked"], r["memory_ids"], observations)
-            sources = set()
+            ranked_memories = (_ranked_recall(r["ranked"], r["memory_ids"], observations)
+                               if "ranked" in r else None)
+            sources, qualified = set(), set()
             for item in sequence(r["provenance"], MAX_RETRIEVAL_RESULTS):
-                source = obj(item, {"memory_id", "source_snapshot_digests"})
+                keys = {"memory_id", "source_snapshot_digests"}
+                if type(item) is dict and "owner_id" in item:
+                    keys.add("owner_id")
+                source = obj(item, keys)
                 memory_id = identifier(source["memory_id"])
-                require(memory_id not in sources, "duplicate_id")
+                key = (_recall_owner(source["owner_id"]), memory_id) if "owner_id" in source else (
+                    None, memory_id)
+                require(key not in qualified, "duplicate_id")
                 _source_digests(source["source_snapshot_digests"], 50)
+                qualified.add(key)
                 sources.add(memory_id)
-            require(sources == set(r["memory_ids"]), "provenance_mismatch")
+            require(sources == set(r["memory_ids"]) and
+                    (ranked_memories is None or qualified == ranked_memories),
+                    "provenance_mismatch")
             require(v["cut"] is not None, "missing_cut")
         elif op == "snapshot_submit":
             r = obj(result, {"import_receipt", "snapshot_digest", "durable"})
@@ -247,7 +262,8 @@ class Response:
             return self
         arguments, result = decode(request.arguments_json), decode(self.result_json)
         if self.operation in {"memory_query", "refine_query", "traverse_graph"}:
-            count = len(result["memory_ids"]) + len(result.get("observations", []))
+            count = (len(result["ranked"]) if "ranked" in result else
+                     len(result["memory_ids"]) + len(result.get("observations", [])))
             require(count <= arguments["limit"], "response_limit_mismatch")
         if self.operation == "refine_query":
             require(result["search_id"] == arguments["search_id"], "response_search_mismatch")

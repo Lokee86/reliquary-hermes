@@ -14,6 +14,7 @@ pub(crate) struct RetrievalDisclosure {
 
 #[derive(Serialize)]
 pub(crate) struct RetrievalProvenance {
+    owner_id: String,
     memory_id: String,
     source_snapshot_digests: Vec<String>,
 }
@@ -121,27 +122,20 @@ impl SourceService {
         };
         let rel = owner.to_string();
         let phy = active_phy.to_string();
-        let mut provenance = BTreeMap::new();
+        let mut provenance = Vec::with_capacity(selection.memories.len());
         for memory in &selection.memories {
             let proof = if memory.owner_id == rel {
                 checks.selected_memory(memory)?
             } else if memory.owner_id == phy {
                 RetrievalProvenance {
+                    owner_id: memory.owner_id.clone(),
                     memory_id: memory.memory_id.clone(),
                     source_snapshot_digests: Vec::new(),
                 }
             } else {
                 return Err(PROVENANCE_UNAVAILABLE);
             };
-            let entry = provenance
-                .entry(memory.memory_id.clone())
-                .or_insert_with(|| RetrievalProvenance {
-                    memory_id: memory.memory_id.clone(),
-                    source_snapshot_digests: Vec::new(),
-                });
-            if !proof.source_snapshot_digests.is_empty() {
-                *entry = proof;
-            }
+            provenance.push(proof);
         }
         let mut checked_lineage = BTreeMap::new();
         let mut observations = Vec::with_capacity(selection.observations.len());
@@ -194,11 +188,7 @@ impl SourceService {
             });
         }
         Ok(RetrievalDisclosure {
-            provenance: selection
-                .memories
-                .iter()
-                .filter_map(|memory| provenance.remove(&memory.memory_id))
-                .collect(),
+            provenance,
             observations,
         })
     }
@@ -232,6 +222,7 @@ impl SourceChecks<'_> {
             Vec::new()
         };
         Ok(RetrievalProvenance {
+            owner_id: memory.owner_id.clone(),
             memory_id: memory.memory_id.clone(),
             source_snapshot_digests,
         })
