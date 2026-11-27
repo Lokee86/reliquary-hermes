@@ -137,7 +137,7 @@ impl SourceService {
             };
             provenance.push(proof);
         }
-        let mut checked_lineage = BTreeMap::new();
+        let mut checked_lineage: BTreeMap<_, Vec<String>> = BTreeMap::new();
         let mut observations = Vec::with_capacity(selection.observations.len());
         for hit in &selection.observations {
             let claim = &hit.claim;
