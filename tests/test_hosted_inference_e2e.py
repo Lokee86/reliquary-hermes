@@ -4,6 +4,7 @@ from contextlib import ExitStack
 from hashlib import sha256
 from itertools import count
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -634,16 +635,17 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
 
 @pytest.mark.parametrize("pending", [False, True])
 def test_native_active_phy_observation_uses_ordinary_mixed_recall(
-        tmp_path, inference_checkout, monkeypatch, pending):
+        tmp_path, stock_release_checkout, monkeypatch, pending):
     directory = os.environ.get("HP_PHY_RECALL_FIXTURE_DIR")
     if not directory:
         pytest.skip("Set HP_PHY_RECALL_FIXTURE_DIR to the disposable Core mixed-recall fixture")
     fixture = Path(directory)
     host = os.environ.get("HP03_HOST_BINARY")
-    if not host:
-        pytest.skip("Set HP03_HOST_BINARY for native host recall verification")
+    cli = os.environ.get("HP03_RELIQUARY_CLI")
+    if not host or not cli:
+        pytest.skip("Set HP03_HOST_BINARY and HP03_RELIQUARY_CLI for native host recall verification")
     binary = Path(host).resolve(strict=True)
-    monkeypatch.syspath_prepend(str(inference_checkout))
+    monkeypatch.syspath_prepend(str(stock_release_checkout))
     rel, phy = tmp_path / "mixed.rel", tmp_path / "active.phy"
     copyfile(fixture / "mixed.rel", rel)
     copyfile(fixture / ("pending.phy" if pending else "current.phy"), phy)
@@ -656,11 +658,12 @@ def test_native_active_phy_observation_uses_ordinary_mixed_recall(
     (home / ".env").write_text(f"{TOKEN_VAR}={TOKEN}\n", encoding="utf-8")
     original_phy = sha256(phy.read_bytes()).digest()
 
-    with hosted_model(DIMENSIONS) as (url, _), ExitStack() as cleanup:
+    with hosted_model(2) as (url, model), ExitStack() as cleanup:
+        configure_embeddings(home, url, Path(cli).resolve(strict=True))
         client = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
         cleanup.callback(lambda: stop(client._process) if client._process is not None else None)
         client.attach(SESSION)
-        start_hermes_worker(home, inference_checkout, url, cleanup, dimensions=DIMENSIONS)
+        start_hermes_worker(home, stock_release_checkout, url, cleanup)
         attempts = count()
 
         def ordinary(limit=10):
@@ -677,7 +680,7 @@ def test_native_active_phy_observation_uses_ordinary_mixed_recall(
             result = ordinary()
             return result if isinstance(result, dict) else None
 
-        result = wait_for(recalled, diagnostic=lambda: audit(home))
+        result = wait_for(recalled, diagnostic=lambda: (ordinary(), model["calls"], model["errors"], audit(home)))
         memory_hits = [hit for hit in result["ranked"] if hit["kind"] == "memory"]
         assert len(memory_hits) == 2, result
         assert len({hit["owner_id"] for hit in memory_hits}) == 2

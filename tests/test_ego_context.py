@@ -12,7 +12,6 @@ def _stock_outgoing_request():
     import json
     import os
     import shutil
-    import subprocess
     import sys
     from contextlib import ExitStack
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -60,7 +59,7 @@ def _stock_outgoing_request():
     assert enabled_provider is not None and enabled_provider.name == "reliquary"
 
     host = os.environ.get("EGO_HOST_BINARY")
-    hosted_checkout = os.environ.get("EGO_FIXTURE_HOSTED_CHECKOUT")
+    switchboard_cli = os.environ.get("EGO_STOCK_SWITCHBOARD_CLI")
     if host:
         from reliquary_hermes.client import HostClient, HostUnavailable
         from reliquary_hermes.outbox import SourceOutbox
@@ -104,7 +103,9 @@ def _stock_outgoing_request():
             self.send_error(404)
         def do_POST(self):
             inbound = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            if self.path == "/v1/embeddings":
+            if self.path == "/embedding-provider/embeddings":
+                assert self.headers["Authorization"] == "Bearer " + worker.EMBEDDING_KEY
+                assert inbound["input_type"] in {"search_query", "search_document"}
                 fixture_calls.append("embed")
                 dimensions = inbound.get("dimensions", 2)
                 self.reply_json({"model": inbound["model"], "data": [
@@ -113,6 +114,7 @@ def _stock_outgoing_request():
                 ], "usage": {"prompt_tokens": 2, "total_tokens": 2}})
                 return
             assert self.path == "/v1/chat/completions", self.path
+            assert self.headers["Authorization"] == "Bearer fixture-loopback"
             if native and inbound.get("response_format"):
                 self.reply_json(self.structured(inbound))
                 return
@@ -192,53 +194,25 @@ def _stock_outgoing_request():
                     original_config.replace("model:\n", "model:\n  provider: 'custom:fixture'\n  default: fixture-model\n")
                     + "custom_providers:\n  - name: fixture\n"
                     + f"    base_url: http://127.0.0.1:{server.server_port}/v1\n"
-                    + "    api_mode: chat_completions\n    key_env: RELIQUARY_FIXTURE_API_KEY\n"
-                    + "auxiliary:\n  embedding:\n    provider: 'custom:fixture'\n"
-                    + "    model: fixture-embedding\n    dimensions: 2\n    input_type_handling: shared\n",
+                    + "    api_mode: chat_completions\n    key_env: RELIQUARY_FIXTURE_API_KEY\n",
                     encoding="utf-8",
                 )
                 (home / ".env").write_text(
                     f"RELIQUARY_HERMES_TOKEN={token}\nRELIQUARY_FIXTURE_API_KEY=fixture-loopback\n", encoding="utf-8",
                 )
                 load_hermes_dotenv(hermes_home=home)
+                worker.configure_embeddings(
+                    home, f"http://127.0.0.1:{server.server_port}", Path(switchboard_cli))
+                enrollment = state / "capture-enrollment-v1.json"
+                enrollment.write_bytes(canonical({"version": 1, "cutoff": time() - 30}))
                 worker_cleanup.callback(native.cancel_startup)
                 binding = native.attach("ego-fixture")
                 assert binding.rel_id == "a2" * 16 and binding.user_id == "a3" * 16
                 native.attach_runtime("ego-fixture")
                 assert native.ego_call("status", {})["enabled"] is True
                 (state / "provider.json").write_bytes(canonical({"binary": host}))
-                if hosted_checkout:
-                    # Stock owns request assembly. A second, unmodified Hermes SDK
-                    # process discovers the same installed plugin and owns model jobs.
-                    script = """
-from pathlib import Path
-import os
-import sys
-from hermes_cli.env_loader import load_hermes_dotenv
-from hermes_cli.plugins import discover_plugins
-load_hermes_dotenv(hermes_home=Path(os.environ["HERMES_HOME"]))
-discover_plugins(force=True)
-sys.stdin.read()
-"""
-                    environment = {**os.environ, "PYTHONPATH": os.pathsep.join((hosted_checkout, str(package / "src")))}
-                    with (home / "ego-inference-worker.log").open("w", encoding="utf-8") as log:
-                        companion = subprocess.Popen(
-                            [sys.executable, "-B", "-c", script], cwd=home, env=environment, stdin=subprocess.PIPE,
-                            stdout=log, stderr=subprocess.STDOUT,
-                        )
-
-                    def stop_companion():
-                        companion.stdin.close()
-                        try:
-                            companion.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            companion.kill()
-                            companion.wait(timeout=5)
-
-                    worker_cleanup.callback(stop_companion)
-                else:
-                    discover_plugins(force=True)
-                    engine_prototype = get_plugin_context_engine()
+                discover_plugins(force=True)
+                engine_prototype = get_plugin_context_engine()
                 # Seed a separately imported Memory through Hermes' real source pipeline.
                 seed_session = "ego-memory-seed"
                 native.attach(seed_session)
@@ -291,6 +265,8 @@ sys.stdin.read()
             agent = AIAgent(provider="custom", base_url=f"http://127.0.0.1:{server.server_port}/v1",
                             api_key="fixture-loopback", model="fixture-model", session_id="ego-fixture",
                             quiet_mode=True, max_iterations=2, skip_memory=False)
+            if switchboard_cli:
+                worker_cleanup.callback(agent.close)
             engine = agent.context_compressor
             assert type(engine) is type(engine_prototype)
             exposed_tools = {tool.get("function", {}).get("name") for tool in agent.tools}
@@ -340,6 +316,16 @@ sys.stdin.read()
                 assert engine._ego_client is not None
             if native:
                 assert ordinary_recall in json.dumps(first)
+            if switchboard_cli:
+                from reliquary_hermes.capture_policy import history_supported
+                from reliquary_hermes.source_capture import turn_attribution_supported
+
+                assert "embed" in fixture_calls
+                assert not history_supported()
+                assert not turn_attribution_supported()
+                assert agent._memory_manager.flush_pending(timeout=10)
+                assert provider.sync_status == "source_capture_session_unavailable"
+                assert SourceOutbox(state, "profile-ego", "alice").next_job("ego-fixture") is None
             history = result["messages"]
             saved_history = json.dumps(history)
             assert expected_identity not in saved_history
@@ -369,8 +355,8 @@ sys.stdin.read()
                 server.shutdown()
 
 
-def test_stock_hermes_outgoing_ego_request(pinned_checkout, tmp_path):
-    _run_probe(_stock_outgoing_request, pinned_checkout, tmp_path)
+def test_stock_hermes_outgoing_ego_request(stock_release_checkout, tmp_path):
+    _run_probe(_stock_outgoing_request, stock_release_checkout, tmp_path)
 
 
 def _native_fixture():
@@ -380,10 +366,9 @@ def _native_fixture():
     return {name: Path(os.environ[name]).resolve(strict=True) for name in names}
 
 
-def test_stock_hermes_outgoing_ego_request_through_native_host(pinned_checkout, inference_checkout, tmp_path):
-    fixtures = {**_native_fixture(), "EGO_FIXTURE_HOSTED_CHECKOUT": inference_checkout}
-    _run_probe(_stock_outgoing_request, pinned_checkout, tmp_path, fixture_paths=fixtures)
-
-
-def test_hermes_embedding_sdk_outgoing_ego_and_recall_through_native_host(inference_checkout, tmp_path):
-    _run_probe(_stock_outgoing_request, inference_checkout, tmp_path, fixture_paths=_native_fixture())
+def test_stock_release_ego_request_and_capture_hold_through_native_host(stock_release_checkout, tmp_path):
+    cli = os.environ.get("HP03_RELIQUARY_CLI")
+    if not cli:
+        pytest.skip("Set HP03_RELIQUARY_CLI to configure the native embedding route")
+    fixtures = {**_native_fixture(), "EGO_STOCK_SWITCHBOARD_CLI": Path(cli).resolve(strict=True)}
+    _run_probe(_stock_outgoing_request, stock_release_checkout, tmp_path, fixture_paths=fixtures)
