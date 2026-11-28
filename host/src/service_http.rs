@@ -585,14 +585,8 @@ mod tests {
             "profile_id": "wrong-profile",
             "instance_id": instance,
             "service_lease_id": lease,
-            "general": {"provider": "openai-api", "model": "fixture-general"},
-            "embedding": {
-                "provider": "openai-api",
-                "model": "fixture-embedding",
-                "dimensions": 3,
-                "input_type_handling": "shared",
-                "normalization": "none"
-            }
+            "protocol_version": crate::hosted_inference::WORKER_PROTOCOL_VERSION,
+            "general": {"provider": "openai-api", "model": "fixture-general"}
         }))
         .unwrap();
         let tag = mac(

@@ -23,7 +23,7 @@ from test_hp03_provider import pinned_provider
 from test_hp04_host import (
     PRINCIPAL, PROFILE, SESSION, TEXT, _cli, _fixture_reply, _queue, _when_ready,
 )
-from hosted_hermes_worker import configure_hermes, start_hermes_worker, worker_command
+from hosted_hermes_worker import EMBEDDING_KEY, configure_embeddings, configure_hermes, start_hermes_worker, worker_command
 from hosted_hermes_worker import decode_hermes_sdk_request
 
 
@@ -69,9 +69,14 @@ def _retrieval_fixture_model(*, slow_query=None):
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             try:
-                if self.headers.get("Authorization") != "Bearer synthetic-hosted-inference-key":
-                    raise ValueError("synthetic provider credential was not scoped to Hermes")
+                embedding = self.path == "/embedding-provider/embeddings"
+                key = EMBEDDING_KEY if embedding else "synthetic-hosted-inference-key"
+                if self.headers.get("Authorization") != f"Bearer {key}":
+                    raise ValueError("synthetic provider credential crossed routes")
                 request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                assert ("input" in request) == embedding
+                if embedding:
+                    assert request["input_type"] in {"search_document", "search_query"}
                 normalized = decode_hermes_sdk_request(request)
                 broker_payload = normalized.get("payload")
                 state = broker_payload.get("state") if isinstance(broker_payload, dict) else request.get("state")
@@ -143,7 +148,7 @@ def _retrieval_fixture_model(*, slow_query=None):
                                        "choices": [{"message": {"content": json.dumps(result)}}]}
                                       if sdk_request else {"choices": [{"message": {"content": json.dumps(result)}}]})
                 body = canonical(body_value)
-            except (KeyError, TypeError, ValueError) as error:
+            except (AssertionError, KeyError, TypeError, ValueError) as error:
                 errors.append(str(error))
                 self.send_error(400)
                 return
@@ -169,6 +174,7 @@ def _retrieval_fixture_model(*, slow_query=None):
 
 def _configure(cli, state, url):
     configure_hermes(state.parent, url)
+    configure_embeddings(state.parent, url, cli)
     return state.parent
 
 

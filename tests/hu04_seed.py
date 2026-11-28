@@ -17,7 +17,7 @@ from reliquary_hermes.client import HostUnavailable
 from reliquary_hermes.outbox import SourceOutbox
 from reliquary_hermes.source_capture import capture_snapshot
 from reliquary_hermes.validation import canonical, decode
-from hosted_hermes_worker import configure_hermes, start_hermes_worker, worker_command
+from hosted_hermes_worker import EMBEDDING_KEY, configure_embeddings, configure_hermes, start_hermes_worker, worker_command
 from test_hp03_host import stop
 from test_hp04_host import _cli, _fixture_reply, _when_ready
 
@@ -85,11 +85,16 @@ def _model():
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             try:
-                if self.headers.get("Authorization") != "Bearer synthetic-hosted-inference-key":
-                    raise ValueError("synthetic provider credential was not scoped to Hermes")
+                embedding = self.path == "/embedding-provider/embeddings"
+                key = EMBEDDING_KEY if embedding else "synthetic-hosted-inference-key"
+                if self.headers.get("Authorization") != f"Bearer {key}":
+                    raise ValueError("synthetic provider credential crossed routes")
                 request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                assert ("input" in request) == embedding
+                if embedding:
+                    assert request["input_type"] in {"search_document", "search_query"}
                 body = canonical(_model_reply(request))
-            except (KeyError, TypeError, ValueError) as error:
+            except (AssertionError, KeyError, TypeError, ValueError) as error:
                 errors.append(str(error))
                 self.send_error(400)
                 return
@@ -115,6 +120,7 @@ def _model():
 
 def _configure(cli, state, url):
     configure_hermes(state.parent, url)
+    configure_embeddings(state.parent, url, cli)
 
 
 def _hermes_sessions(home, checkout, sessions, *, archive=None):
@@ -211,7 +217,10 @@ def seed_profile(home, checkout, inference_checkout, binaries, client, cleanup):
     assert client._process is not None
     with _model() as url:
         _configure(cli, state, url)
+        # Native embedding routes are resolved once, when the service opens.
+        stop(client._process)
         worker = start_hermes_worker(home, inference_checkout, url, cleanup)
+        client.attach(GENERAL_SESSION)
         _settle(client, GENERAL_SESSION, len(GENERAL_UIDS))
         _settle(client, PROJECT_SESSION, 1)
 

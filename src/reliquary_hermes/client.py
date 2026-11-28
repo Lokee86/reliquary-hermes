@@ -12,7 +12,7 @@ import time
 from urllib.parse import urlsplit
 
 from .authority import Discovery
-from .native_host import bundle_at_launch, prune_unused_hosts
+from .native_host import bundle_at_launch, host_environment, prune_unused_hosts
 from .protocol import Request, Response
 from .setup_wire import switch_review as parse_switch_review, switch_status as parse_switch_status
 from .validation import (ContractError, MAX_WIRE_BYTES, canonical, choice, decode, digest,
@@ -349,8 +349,7 @@ class HostClient:
         if self._binary is None or not self._binary.is_absolute() or not self._binary.is_file():
             raise HostUnavailable("host_not_configured")
         bundle = bundle_at_launch(self._state_dir, self._binary)
-        environment = {name: os.environ[name] for name in ("SystemRoot", "WINDIR") if name in os.environ}
-        environment.update({name: str(self._state_dir) for name in ("TEMP", "TMP", "TMPDIR")})
+        environment = host_environment(self._state_dir)
         from .capture_policy import history_supported
         from .settings import ego_enabled, phy_perception_enabled
         from .source_capture import turn_attribution_supported
@@ -568,7 +567,8 @@ class HostClient:
                 require(result["diagnostic"] == "source_personal_attribution_unverified", "invalid_source_status")
             if result.get("embedding_error") is not None:
                 choice(result["embedding_error"], {"embedding_identity_stale", "embedding_identity_unbound",
-                    "embedding_identity_unavailable", "embedding_unavailable", "inference_unavailable", "inference_stale"})
+                    "embedding_identity_unavailable", "embedding_unconfigured", "embedding_config_invalid",
+                    "embedding_credentials_unavailable", "inference_unavailable", "inference_stale"})
             require(result["session_id"] == session and result["state"] in {
                 "none", "staged", "processing", "complete", "failed", "tombstoned", "unavailable"},
                 "invalid_source_status")

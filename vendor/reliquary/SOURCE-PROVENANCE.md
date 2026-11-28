@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This source-only snapshot pins Reliquary Core at `4f8960e71703315d6622fdad90c9eec947313d6b`.
+This source-only snapshot pins Reliquary Core at `5e530a99b7087a03bcfa0fd519950e6f5ecea6d4`.
 The Hermes host uses the public `reliquary-memory` API for leased owner mounts.
 Core restores verified REL checkpoints, replays recent writes, and reads older history on demand.
 This revision includes same-REL Perception, hosted native decision binding, and typed Observation recall through shared hybrid retrieval, durable source deletion and rewind, Ego package and controls, and paged initial auditing. The active PHY supports native verified claims, retained history and joint ordinary recall with REL owners. Automatic copied-source staging seals the original PHY, preserves trusted per-turn attribution through routed Insomnia publication, and settles the personal Memories for ordinary recall.

@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from threading import Thread
 
-from hosted_hermes_worker import decode_hermes_sdk_request
+from hosted_hermes_worker import EMBEDDING_KEY, decode_hermes_sdk_request
 from reliquary_hermes.validation import canonical
 from test_hp04_host import _fixture_reply
 
@@ -16,19 +16,19 @@ NATIVE_DECISION_KEY = "synthetic-profile-jev-key"
 @contextmanager
 def hosted_model(dimensions, *, perception=None, embed=None, decide=None, complete=None, chat=None):
     state = {"calls": [], "errors": [], "revoked": False, "large_reply": False,
-             "native_calls": [], "approve_memories": True}
+             "native_calls": [], "approve_memories": True, "embedding_calls": [],
+             "embedding_key": EMBEDDING_KEY, "embedding_revoked": False}
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             native = self.path == "/decisions"
-            if not native and not self.path.endswith(("/chat/completions", "/embeddings")):
-                self.send_error(404)
-                return
-            key = NATIVE_DECISION_KEY if native else "synthetic-hosted-inference-key"
+            embedding = self.path == "/embedding-provider/embeddings"
+            key = (NATIVE_DECISION_KEY if native else state["embedding_key"] if embedding
+                   else "synthetic-hosted-inference-key")
             if self.headers.get("Authorization") != f"Bearer {key}":
                 self.send_error(401)
                 return
-            if state["revoked"]:
+            if (state["embedding_revoked"] if embedding else state["revoked"]):
                 self.send_response(401)
                 body = b'{"error":{"message":"Synthetic credential revoked","type":"authentication_error"}}'
             else:
@@ -45,16 +45,20 @@ def hosted_model(dimensions, *, perception=None, embed=None, decide=None, comple
                         state["calls"].append({"schema_name": "conversation", "model": raw["model"]})
                         return self.conversation(raw, chat)
                     else:
+                        assert self.path.endswith("/chat/completions") or embedding
                         request = decode_hermes_sdk_request(raw)
                         name = request.get("schema_name", "embed")
-                        state["calls"].append({"schema_name": name, "model": request["model"]})
+                        assert (name == "embed") == embedding, "completion/embedding route crossed"
                         if name == "embed":
                             assert request["dimensions"] == dimensions
+                            assert request["input_type"] in {"search_document", "search_query"}
+                            state["embedding_calls"].append(request)
                             result = {"model": request["model"], "data": [
                                 {"index": index, "embedding": (
                                     embed(text) if embed else [0.12345678901234567] * dimensions)}
                                 for index, text in enumerate(request["inputs"])]}
                         else:
+                            state["calls"].append({"schema_name": name, "model": request["model"]})
                             answer = complete(request) if complete else reply(
                                 request, perception, approve_memories=state["approve_memories"])
                             result = {"choices": [{"message": {"content": json.dumps(answer)}}],

@@ -5,7 +5,6 @@ import logging
 
 
 HERMES_REVISION = "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
-HERMES_INFERENCE_REVISION = "168a923023a7018be3dbf66530531dd20b1834b9"
 HERMES_REMOVALS_REVISION = "4f1bf621049ebbf811ed4a3b1cc444c910db5d0f"
 PROTOCOL_VERSION = 1
 logger = logging.getLogger(__name__)
@@ -13,8 +12,8 @@ logger = logging.getLogger(__name__)
 
 def register(context):
     llm = getattr(context, "llm", None)
-    if not all(callable(getattr(llm, name, None)) for name in ("acomplete_structured", "aembed")):
-        logger.warning("Reliquary hosted inference unavailable: Hermes ctx.llm embedding support is required (embedding_unavailable).")
+    if llm is None:
+        logger.warning("Reliquary hosted inference unavailable: Hermes ctx.llm completions are required.")
     else:
         on_unload = getattr(context, "on_unload", None)
         if callable(on_unload):

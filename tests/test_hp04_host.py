@@ -19,7 +19,7 @@ from reliquary_hermes.validation import canonical, decode
 from test_host_client import TOKEN
 from test_hp03_host import binaries, config, install_setup_host, owner, setup_hosts, stop
 from test_hp03_provider import history_provider
-from hosted_hermes_worker import configure_hermes, decode_hermes_sdk_request, start_hermes_worker
+from hosted_hermes_worker import EMBEDDING_KEY, configure_embeddings, configure_hermes, decode_hermes_sdk_request, start_hermes_worker
 
 
 SESSION = "session-a"
@@ -216,11 +216,16 @@ def _loopback_model():
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             try:
-                if self.headers.get("Authorization") != "Bearer synthetic-hosted-inference-key":
-                    raise ValueError("synthetic provider credential was not scoped to Hermes")
+                embedding = self.path == "/embedding-provider/embeddings"
+                key = EMBEDDING_KEY if embedding else "synthetic-hosted-inference-key"
+                if self.headers.get("Authorization") != f"Bearer {key}":
+                    raise ValueError("synthetic provider credential crossed routes")
                 request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                assert ("input" in request) == embedding
+                if embedding:
+                    assert request["input_type"] in {"search_document", "search_query"}
                 body = canonical(_fixture_reply(request))
-            except (KeyError, TypeError, ValueError) as error:
+            except (AssertionError, KeyError, TypeError, ValueError) as error:
                 errors.append(str(error))
                 self.send_error(400)
                 return
@@ -245,8 +250,9 @@ def _loopback_model():
 
 
 def _processing_config(cli, state, url):
-    """Configure Hermes' synthetic provider without a native processing.json override."""
+    """Bind independent completion and embedding routes before host startup."""
     configure_hermes(state.parent, url)
+    configure_embeddings(state.parent, url, cli)
 
 
 def test_hp04_processed_append_tombstones_both_exact_source_turns(tmp_path, binaries, inference_checkout):

@@ -16,9 +16,9 @@ trap 'rm -rf -- "$scratch"' EXIT
 stock="$scratch/hermes"
 git init --quiet "$stock"
 git -C "$stock" fetch --quiet --depth=1 --no-tags https://github.com/NousResearch/hermes-agent.git \
-  refs/tags/v0.23.3:refs/tags/v0.23.3
-git -C "$stock" checkout --quiet --detach refs/tags/v0.23.3
-test "$(git -C "$stock" rev-parse HEAD)" = caafe5389ae585ef77387a962aee05b1bcf17029
+  refs/tags/v0.23.4:refs/tags/v0.23.4
+git -C "$stock" checkout --quiet --detach refs/tags/v0.23.4
+test "$(git -C "$stock" rev-parse HEAD)" = 8fc0374447313e276f6b9a2764bfc750190c966a
 
 # Run the stock PM bootstrap with private action-output files.
 cd "$stock"

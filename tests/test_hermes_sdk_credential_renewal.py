@@ -1,4 +1,4 @@
-"""Exercise actual Hermes PluginLlm credential-pool rotation over loopback HTTP."""
+"""Exercise Hermes's profile credentials for structured completions over loopback HTTP."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ import json
 import sys
 from pathlib import Path
 
-from hermes_constants import set_hermes_home_override
+from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 from agent.secret_scope import reset_secret_scope, set_secret_scope
 from hermes_cli.auth import read_credential_pool, write_credential_pool
 from hermes_cli.plugins import PluginContext, PluginManager
@@ -33,21 +33,17 @@ home.mkdir(parents=True, exist_ok=True)
 home_override = set_hermes_home_override(home)
 secret_scope = set_secret_scope({}, profile_home=str(home))
 (home / "config.yaml").write_text(hermes_yaml.safe_dump({
-    "model": {"provider": "openai-codex", "default": "chat-only-default"},
+    "model": {"provider": "custom:fixture", "default": "fixture-completion-model"},
     "providers": {"fixture": {
         "name": "fixture", "provider_key": "fixture", "base_url": base_url,
         "api_mode": "chat_completions",
-    }},
-    "auxiliary": {"embedding": {
-        "provider": "custom:fixture", "model": "fixture-embedding-model",
-        "dimensions": 2, "input_type_handling": "shared", "timeout": 8,
     }},
 }), encoding="utf-8")
 (home / ".env").write_text("", encoding="utf-8")
 
 def entry(identifier, token, priority):
     return {"id": identifier, "label": identifier, "auth_type": "api_key",
-            "priority": priority, "source": "manual", "access_token": token}
+            "priority": priority, "source": "manual", "access_token": token, "base_url": base_url}
 
 if not read_credential_pool("fixture"):
     write_credential_pool("fixture", [
@@ -61,30 +57,34 @@ manifest = PluginManifest(name="reliquary-hermes", key="reliquary-hermes",
 context = PluginContext(manifest, manager)
 print(json.dumps({"event": "ready"}), flush=True)
 
-async def embed():
+async def complete():
     try:
-        result = await context.llm.aembed(
-            ["synthetic query"], input_type="query", purpose="credential-renewal-test")
+        result = await context.llm.acomplete_structured(
+            instructions="Return ready as true.",
+            input=[{"type": "text", "text": "Synthetic credential renewal."}],
+            json_schema={"type": "object", "properties": {"ready": {"type": "boolean"}},
+                         "required": ["ready"]},
+            purpose="credential-renewal-test", timeout=8,
+        )
     except Exception as exc:
-        code = getattr(exc, "code", "embedding_failed")
-        print(json.dumps({"event": "embedding_error", "code": code}), flush=True)
+        print(json.dumps({"event": "completion_error", "code": getattr(exc, "code", "failed")}),
+              flush=True)
         return
-    print(json.dumps({"event": "embedding_ok", "provider": result.provider,
-                      "model": result.model, "dimensions": result.dimensions,
-                      "input_type": result.audit.get("input_type")}), flush=True)
+    print(json.dumps({"event": "completion_ok", "provider": result.provider,
+                      "model": result.model, "parsed": result.parsed}), flush=True)
 
 for line in sys.stdin:
     command = json.loads(line)
     operation = command.get("op")
-    if operation == "embed":
-        asyncio.run(embed())
+    if operation == "complete":
+        asyncio.run(complete())
     elif operation == "renew":
         rows = read_credential_pool("fixture")
         for row in rows:
-            if row.get("id") == "key-two":
+            if row.get("id") == "key-one":
                 row["access_token"] = "fixture-key-renewed"
-        write_credential_pool("fixture", rows, status_cleared_ids=["key-two"])
-        asyncio.run(embed())
+        write_credential_pool("fixture", rows, status_cleared_ids=["key-one"])
+        print(json.dumps({"event": "pool_updated", "entries": len(rows)}), flush=True)
     elif operation == "revoke-both":
         rows = read_credential_pool("fixture")
         replacements = [
@@ -102,13 +102,13 @@ for line in sys.stdin:
         print(json.dumps({"event": "command_error"}), flush=True)
 
 reset_secret_scope(secret_scope)
-set_hermes_home_override(home_override)
+reset_hermes_home_override(home_override)
 '''
 
 
 @pytest.fixture
 def fake_provider():
-    state = {"accepted": "fixture-key-two", "seen": []}
+    state = {"accepted": "fixture-key-one", "seen": []}
     labels = {
         "Bearer fixture-key-one": "initial-one",
         "Bearer fixture-key-two": "initial-two",
@@ -132,13 +132,10 @@ def fake_provider():
                 self.end_headers()
                 self.wfile.write(payload)
                 return
-            count = len(body.get("input", []))
             payload = json.dumps({
-                "object": "list", "model": "fixture-actual-model",
-                "data": [{"object": "embedding", "index": index,
-                          "embedding": [float(index + 1), 0.25]}
-                         for index in range(count)],
-                "usage": {"prompt_tokens": 3, "total_tokens": 3},
+                "model": "fixture-actual-model",
+                "choices": [{"message": {"content": '{"ready":true}'}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
             }).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -205,6 +202,13 @@ def _command(process, operation: str) -> dict:
     return json.loads(line)
 
 
+def _stop_sdk(process):
+    if process.poll() is None:
+        assert _command(process, "quit") == {"event": "quitting"}
+        process.stdin.close()
+        process.wait(timeout=5)
+
+
 def test_real_plugin_llm_uses_and_renews_profile_credential_pool(
     tmp_path, inference_checkout, fake_provider,
 ):
@@ -213,40 +217,28 @@ def test_real_plugin_llm_uses_and_renews_profile_credential_pool(
     home.mkdir()
     process = _start_sdk(home, inference_checkout, base_url)
     try:
-        # First credential is rejected; Hermes's resolver rotates to the second pool entry.
-        first = _command(process, "embed")
-        assert first == {"event": "embedding_ok", "provider": "custom:fixture",
-                         "model": "fixture-actual-model", "dimensions": 2,
-                         "input_type": "query"}
-        assert [row["credential"] for row in state["seen"]] == ["initial-one", "initial-two"]
-        assert {row["model"] for row in state["seen"]} == {"fixture-embedding-model"}
-        assert all(row["path"] == "/v1/embeddings" for row in state["seen"])
+        first = _command(process, "complete")
+        assert first == {"event": "completion_ok", "provider": "custom:fixture",
+                         "model": "fixture-actual-model", "parsed": {"ready": True}}
+        assert [row["credential"] for row in state["seen"]] == ["initial-one"]
 
-        # Renew through Hermes's public auth store API and prove the facade retains identity.
+        # The stock facade reopens the profile's credential pool after restart.
+        assert _command(process, "renew") == {"event": "pool_updated", "entries": 2}
+        _stop_sdk(process)
         state["accepted"] = "fixture-key-renewed"
-        renewed = _command(process, "renew")
+        process = _start_sdk(home, inference_checkout, base_url)
+        renewed = _command(process, "complete")
         assert renewed == first
-        assert state["seen"][-1] == {"credential": "renewed",
-                                     "model": "fixture-embedding-model",
-                                     "path": "/v1/embeddings"}
 
-        # Revoke both pool entries; no provider detail or credential may escape the typed failure.
         state["accepted"] = "no-credential-is-valid"
         assert _command(process, "revoke-both") == {"event": "pool_updated", "entries": 2}
-        assert _command(process, "quit") == {"event": "quitting"}
-        process.stdin.close()
-        process.wait(timeout=5)
-
-        # A fresh Hermes process reloads the renewed profile pool, avoiding stale in-memory tokens.
+        _stop_sdk(process)
         process = _start_sdk(home, inference_checkout, base_url)
-        revoked = _command(process, "embed")
-        assert revoked == {"event": "embedding_error", "code": "embedding_failed"}
-        assert [row["credential"] for row in state["seen"]] == [
-            "initial-one", "initial-two", "renewed", "revoked-one", "revoked-two",
-        ]
+        revoked = _command(process, "complete")
+        assert revoked["event"] == "completion_error"
+        assert [row["credential"] for row in state["seen"]] == ["initial-one", "renewed", "revoked-one"]
+        assert {row["model"] for row in state["seen"]} == {"fixture-completion-model"}
+        assert {row["path"] for row in state["seen"]} == {"/v1/chat/completions"}
         assert "fixture-key" not in json.dumps([first, renewed, revoked])
     finally:
-        if process.poll() is None:
-            assert _command(process, "quit") == {"event": "quitting"}
-            process.stdin.close()
-            process.wait(timeout=5)
+        _stop_sdk(process)

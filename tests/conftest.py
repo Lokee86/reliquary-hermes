@@ -10,7 +10,7 @@ import pytest
 
 from reliquary_hermes import HERMES_REMOVALS_REVISION, HERMES_REVISION
 
-HERMES_INFERENCE_REVISION = "168a923023a7018be3dbf66530531dd20b1834b9"
+HERMES_INFERENCE_REVISION = "8fc0374447313e276f6b9a2764bfc750190c966a"
 
 
 @pytest.fixture(scope="session")
@@ -53,6 +53,9 @@ def inference_checkout():
     checkout = Path(value).resolve(strict=True)
     actual = subprocess.check_output(["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True).strip()
     assert actual == HERMES_INFERENCE_REVISION, "unsupported Hermes inference revision"
+    assert not subprocess.check_output(
+        ["git", "-C", str(checkout), "status", "--porcelain", "--untracked-files=no"], text=True
+    ).strip(), "hosted inference requires unmodified stock Hermes"
     return checkout
 
 

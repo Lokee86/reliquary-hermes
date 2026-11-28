@@ -13,7 +13,7 @@ from queue import Empty, Queue
 from threading import Thread
 
 
-INFERENCE_REVISION = "168a923023a7018be3dbf66530531dd20b1834b9"
+EMBEDDING_KEY = "synthetic-switchboard-embedding-key"
 # HostedInferenceWorker.stop() can spend at most 8s cancelling a broker job
 # (3s connect + 5s response), 2s joining its polling thread, 6s reporting
 # worker-error (3s connect + 3s response), and 4.5s detaching its runtime lease
@@ -25,7 +25,8 @@ def decode_hermes_sdk_request(request: dict) -> dict:
     """Normalize an OpenAI SDK HTTP body into provider-neutral fixture inputs."""
     if "input" in request:
         return {"operation": "embed", "model": request.get("model"),
-                "dimensions": request.get("dimensions"), "inputs": request["input"]}
+                "dimensions": request.get("dimensions"), "inputs": request["input"],
+                "input_type": request.get("input_type")}
     schema = request["response_format"]["json_schema"]
     schema_name = schema["name"]
     messages = request.get("messages", [])
@@ -51,9 +52,8 @@ def decode_hermes_sdk_request(request: dict) -> dict:
             "schema_name": schema_name, "schema": schema["schema"], "payload": payload}
 
 
-def configure_hermes(home: Path, model_url: str, *, embedding_model: str = "fixture-embedding",
-                     dimensions: int = 2) -> None:
-    """Configure isolated Hermes chat and embedding routes for a fake HTTP server."""
+def configure_hermes(home: Path, model_url: str) -> None:
+    """Configure only stock Hermes' structured-completion route."""
     home.mkdir(parents=True, exist_ok=True)
     base_url = model_url.rstrip("/")
     (home / "config.yaml").write_text(
@@ -64,14 +64,7 @@ def configure_hermes(home: Path, model_url: str, *, embedding_model: str = "fixt
         "  - name: fixture\n"
         f"    base_url: {base_url}\n"
         "    api_mode: chat_completions\n"
-        "    key_env: RELIQUARY_FIXTURE_API_KEY\n"
-        "auxiliary:\n"
-        "  embedding:\n"
-        "    provider: 'custom:fixture'\n"
-        f"    model: {embedding_model}\n"
-        f"    dimensions: {dimensions}\n"
-        "    input_type_handling: shared\n"
-        "    timeout: 20\n",
+        "    key_env: RELIQUARY_FIXTURE_API_KEY\n",
         encoding="utf-8",
     )
     env_path = home / ".env"
@@ -81,14 +74,36 @@ def configure_hermes(home: Path, model_url: str, *, embedding_model: str = "fixt
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def configure_embeddings(home: Path, model_url: str, cli: Path, *, model="fixture-embedding",
+                         dimensions=2, key=EMBEDDING_KEY, select=True) -> Path:
+    """Use the standalone CLI, never Hermes credentials, to bind Switchboard."""
+    state = home.resolve() / "reliquary"
+    state.mkdir(parents=True, exist_ok=True)
+    path = state / "embedding.cfg"
+    if not path.exists():
+        # Empty CVCFG 1.0 table avoids unrelated default model credentials.
+        path.write_bytes(bytes.fromhex("4356434647000d0a0100000000000000"))
+    def run(*args, input=None):
+        result = subprocess.run([str(cli), "--config", str(path), "config", *args],
+                                input=input, capture_output=True, text=True, cwd=state, timeout=20)
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout).get("saved"), result.stdout
+    run("credential", "add-api-key", "fixture-embedding-key", "--stdin", input=key + "\n")
+    run("model", "set-embedding", "--url", model_url.rstrip("/") + "/embedding-provider/embeddings",
+        "--model", model, "--dimensions", str(dimensions), "--normalization", "none",
+        "--credential", "fixture-embedding-key")
+    if select:
+        (state / "processing.json").write_text(json.dumps({"config_path": str(path)}), encoding="utf-8")
+    return path
+
+
 def start_hermes_worker(home: Path, checkout: Path, model_url: str, cleanup, *,
-                        embedding_model: str = "fixture-embedding", dimensions: int = 2,
                         configure: bool = True) -> subprocess.Popen:
     """Register this plugin in a subprocess; its ctx.llm is Hermes' real PluginLlm facade."""
     home = home.resolve()
     checkout = checkout.resolve()
     if configure:
-        configure_hermes(home, model_url, embedding_model=embedding_model, dimensions=dimensions)
+        configure_hermes(home, model_url)
     repo_src = Path(__file__).resolve().parents[1] / "src"
     script = r'''
 import json
@@ -128,8 +143,8 @@ def start():
 def install_audit(context):
     import os
     llm = context.llm
+    assert not hasattr(llm, "aembed") and not hasattr(llm, "embed"), "stock Hermes has no embedding facade"
     original_complete = llm.acomplete_structured
-    original_embed = llm.aembed
     audit_path = home / "hosted-inference-audit.jsonl"
     def record(value):
         fd = os.open(audit_path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
@@ -141,14 +156,7 @@ def install_audit(context):
                 "purpose": kwargs.get("purpose"), "provider": getattr(result, "provider", None),
                 "model": getattr(result, "model", None)})
         return result
-    async def audited_embed(*args, **kwargs):
-        result = await original_embed(*args, **kwargs)
-        record({"method": "aembed", "input_type": kwargs.get("input_type"),
-                "purpose": kwargs.get("purpose"), "provider": getattr(result, "provider", None),
-                "model": getattr(result, "model", None), "dimensions": getattr(result, "dimensions", None)})
-        return result
     llm.acomplete_structured = audited_complete
-    llm.aembed = audited_embed
 
 def stop(context):
     # on_unload() registrations are owned by PluginManager's ledger, not

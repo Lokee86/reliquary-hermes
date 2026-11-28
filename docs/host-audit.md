@@ -8,11 +8,26 @@ Record the pinned Hermes lifecycle, source identity, privacy and plugin surfaces
 
 ## Overview
 
-### Authenticated inference extension
+### Current stock Hermes target
+
+The supported stock Hermes baseline is `v0.23.4` at `8fc0374447313e276f6b9a2764bfc750190c966a`. Reliquary uses the active profile's `ctx.llm.acomplete_structured` method from `agent/plugin_llm.py`. [Verification](verification.md#stock-hermes-native-embedding-target)
+
+The completion worker uses stock `ctx.llm` only for ordinary/structured completions and negotiates worker `protocol_version=2`. `host/src/embedding_route.rs` selects the separate native Switchboard route from the existing `processing.json` CVCFG pointer. `vendor/reliquary/crates/reliquary-switchboard/src/protected_config.rs::ResolvedEmbeddingRoute` resolves only the embedding slot and referenced protected credential; `transport.rs::ConfiguredEmbeddingEndpoint` uses `OpenAiReady`, binds the endpoint hash, and sends distinct query/document modes. The broker carries completion and opt-in Perception requests. Embedding vectors and their provider credentials stay in the native host. [Inference protocol](protocol.md#hosted-inference)
+
+Embedding support does not imply any of these separate host features:
+
+- Trusted history/native original-creation proof and privacy-filtered export still gate automatic capture and explicit history import. Do not read the transcript database directly to bypass a missing capability.
+- Trusted session project attribution still gates dedicated routing; without it, new sessions use General and existing accepted bindings remain intact.
+- A committed transcript-removal journal remains a separate authority for durable delete/rewind recovery; historical removal-pin evidence does not establish that stock v0.23.4 supplies it.
+- Desktop native mutation admission and bounded byte-transport SDK support remain separate from completion and embedding availability; Web fallback, List and inspector retain their documented capability gates.
+
+The following historical probes use their own revisions for the MemoryProvider ABC, trusted history, and transcript-removal contracts.
+
+### Historical authenticated inference extension
 
 The independent embedding API is audited at Hermes `168a923023a7018be3dbf66530531dd20b1834b9`, submitted as [Hermes PR #154202](https://github.com/NousResearch/hermes-agent/pull/154202). `PluginContext.llm` supplies `complete_structured/acomplete_structured` and additive `embed/aembed`. The embedding selection belongs to `auxiliary.embedding`; override trust gates, profile-scoped credentials, pool recovery, and unsupported-grant rejection remain in Hermes. The upstream gate passed 359 distinct tests and all 16 repository checks using deterministic local models and test credentials.
 
-`HERMES_INFERENCE_REVISION` pins that capability audit separately from the existing history/ABC protocol baseline below. It is not a claim that the inference PR changes the history contract. Runtime registration checks the actual facade capability, and older builds report `embedding_unavailable`. The dedicated worker inherits the owning profile and secret context, has its own scope-free runtime lease, and invokes no raw provider API or credential-copy interface. Root receives only signed correlated results and validates schemas and vector shape again. [Inference protocol](protocol.md#hosted-inference)
+Historically, `HERMES_INFERENCE_REVISION` pinned that extension audit separately from the history/ABC baseline below. That route checked `embed/aembed` and reported `embedding_unavailable` on older builds. These are extension-era facts, not prerequisites or error semantics for the current native embedding target. The dedicated completion worker still inherits its owning profile/secret context and a scope-free runtime lease. [Current inference protocol](protocol.md#hosted-inference)
 
 The 2026-11-08 HP01-R1 audit repins the HP01 contract to stable Hermes v0.23.0. Local source probes exercise persistence, provider egress and committed lifecycle dispatch against synthetic history in isolated profiles.
 
@@ -22,7 +37,7 @@ The audited Hermes revision is stable `v0.23.0` at `2bd378ed1b8d6bf2192cb26e0a55
 
 Historical pin evidence comes from `cf4f3a7396814ffcaef69d9af09f7cfdade3ddbe` in the October canary worktree. The standalone contract started at `428f297604afc4fe43765001e9d4939bae617861` on `hp01/freeze-hermes-contract`. The native 2.1 implementation spec linked by the README governs this audit.
 
-The observations below apply to the stable SHA. `Discovery.validate` enforces a single exact host revision and protocol version. An upgrade requires a new audit and contract test run. The real-process probe verifies stable discovery and rejects the historical pin.
+The observations below apply to the historical v0.23.0 stable SHA. Its `Discovery.validate` enforced a single exact host revision and protocol version. An upgrade requires a new audit and contract test run; the historical real-process probe verified that baseline and rejected the earlier canary pin. This is not evidence of current v0.23.4 discovery acceptance.
 
 ## Actual lifecycle surface
 
