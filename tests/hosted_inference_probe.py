@@ -161,7 +161,7 @@ def reply(request, perception=None, *, approve_memories=True):
         approved = [item["memory"] for item in state.get("candidates", [])
                     if approve_memories or (perception and item.get("content") == perception[1])]
         return {"version": 1, "approved": approved}
-    if name == "memory_web_audit_v2":
+    if name == "memory_web_audit_v3":
         source, claim = perception
         candidates = [{"proposition": claim, "source_slots": [row["slot"]], "participant_slots": []}
                       for row in payload["sources"] if row["kind"] == "memory" and row["text"] == source]
