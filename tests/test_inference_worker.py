@@ -10,7 +10,8 @@ import types
 
 import pytest
 
-from reliquary_hermes.inference_worker import HostedInferenceWorker, _decode_job
+from reliquary_hermes.client import HostUnavailable
+from reliquary_hermes.inference_worker import HostedInferenceWorker, _WORKER_PROTOCOL_VERSION, _decode_job
 from reliquary_hermes import setup
 from reliquary_hermes import register as register_plugin
 from reliquary_hermes.settings import NativeDecisionRoute
@@ -34,38 +35,60 @@ class FakeClient:
                 "data_b64": base64.b64encode(chunk).decode("ascii")}
 
 
-def test_worker_executes_embedding_with_query_document_identity_and_no_overrides(tmp_path):
-    class Llm:
-        async def aembed(self, inputs, **kwargs):
-            assert inputs == ["a", "b"]
-            assert set(kwargs) == {"input_type", "purpose", "timeout"}
-            assert kwargs["input_type"] == "query" and kwargs["purpose"] == "switchboard-query"
-            assert 19 < kwargs["timeout"] <= 20
-            return SimpleNamespace(vectors=[[0.1, 0.2], [0.3, 0.4]], dimensions=2,
-                provider="openai-api", model="text-embedding-3-small",
-                audit={"input_type_handling": "shared", "normalization": "none"}, usage=None)
+class CompletionFacade:
+    async def acomplete_structured(self, **kwargs):
+        return SimpleNamespace(parsed={"ready": True}, content_type="json",
+                               provider="fixture", model="fixture-chat")
 
-    worker = HostedInferenceWorker(Llm(), str(tmp_path))
-    result = asyncio.run(worker._execute("embed", {"inputs": ["a", "b"], "input_type": "query",
-        "purpose": "switchboard-query", "dimensions": 2}, time.monotonic() + 20))
-    assert result["status"] == "ok"
-    assert result["dimensions"] == 2 and result["provider"] == "openai-api"
-    assert result["vectors"] == [[0.1, 0.2], [0.3, 0.4]]
+
+def _worker_ready_to_bind(tmp_path):
+    worker = HostedInferenceWorker(CompletionFacade(), str(tmp_path))
+    worker._settings = SimpleNamespace(profile_id="profile-a")
+    worker._client = SimpleNamespace(_read_discovery=lambda: SimpleNamespace(
+        instance_id="instance-a", lease_id="lease-a"))
+    worker._configured_native_route = lambda: None
+    return worker
+
+
+def test_worker_binds_completion_facade_without_an_embedding_method(tmp_path):
+    worker = _worker_ready_to_bind(tmp_path)
+    identity = {"general": {"provider": "fixture", "model": "fixture-chat"}}
+
+    def bind(operation, body, **kwargs):
+        assert operation == "identity"
+        assert body == {"protocol_version": _WORKER_PROTOCOL_VERSION,
+                        "instance_id": "instance-a", "service_lease_id": "lease-a", **identity}
+        return {"state": "bound", "protocol_version": _WORKER_PROTOCOL_VERSION,
+                "lease_epoch": 1, "identity": identity}
+
+    worker._call = bind
+    worker._bind_identity()
+    assert worker._identity == identity and worker._lease_epoch == 1
+
+
+@pytest.mark.parametrize("legacy_reply", [None, {"state": "bound", "lease_epoch": 1}])
+def test_worker_rejects_a_host_with_the_prior_wire_contract(tmp_path, legacy_reply):
+    worker = _worker_ready_to_bind(tmp_path)
+
+    def bind(*args, **kwargs):
+        if legacy_reply is None:
+            raise HostUnavailable("invalid_request")
+        return legacy_reply
+
+    worker._call = bind
+    with pytest.raises((ContractError, HostUnavailable), match="inference_protocol_mismatch"):
+        worker._bind_identity()
+    assert worker._identity is None and worker._lease_epoch is None
 
 
 def test_worker_heartbeat_wait_does_not_block_model_completion(tmp_path):
-    class Llm:
-        async def aembed(self, inputs, **kwargs):
-            await asyncio.sleep(0)
-            return SimpleNamespace(vectors=[[0.1]], dimensions=1, provider="openai-api", model="embed-v1",
-                audit={"input_type_handling": "shared", "normalization": "none"})
-
-    worker = HostedInferenceWorker(Llm(), str(tmp_path))
+    worker = HostedInferenceWorker(CompletionFacade(), str(tmp_path))
     worker._client = SimpleNamespace()
-    job = {"operation": "embed", "deadline": time.monotonic() + 5}
+    job = {"operation": "complete_structured", "deadline": time.monotonic() + 5}
     started = time.monotonic()
     result = asyncio.run(worker._execute_with_heartbeat(job, {
-        "inputs": ["query"], "input_type": "query", "purpose": "test",
+        "instructions": "Return readiness.", "input": [{"type": "text", "text": "synthetic"}],
+        "json_schema": {"type": "object"}, "schema_name": "ready", "purpose": "test",
     }))
     assert result["status"] == "ok" and time.monotonic() - started < 1.0
 
@@ -101,7 +124,7 @@ def test_stop_tolerates_a_concurrently_closed_async_runner(tmp_path):
 def test_idle_configuration_change_reprobes_before_claiming_old_identity(tmp_path):
     worker = HostedInferenceWorker(object(), str(tmp_path))
     worker._settings = SimpleNamespace(profile_id="profile-a")
-    worker._identity = {"general": {}, "embedding": {}}
+    worker._identity = {"general": {}}
     worker._lease_epoch = 2
     worker._configuration_revision = worker._configuration_stamp()
     (tmp_path / "config.yaml").write_text("model: changed\n", encoding="utf-8")
@@ -163,16 +186,10 @@ def test_selection_change_during_call_rejects_result_before_publication(tmp_path
     assert worker._identity is None
 
 
-def test_worker_rejects_malformed_embedding_result_and_provider_semantics(tmp_path):
-    class Llm:
-        async def aembed(self, inputs, **kwargs):
-            return SimpleNamespace(vectors=[[float("nan")]], dimensions=1, provider="openai-api",
-                                   model="m", audit={"input_type_handling": "shared", "normalization": "none"})
-
-    worker = HostedInferenceWorker(Llm(), str(tmp_path))
-    with pytest.raises(ContractError, match="inference_invalid_response"):
-        asyncio.run(worker._execute("embed", {"inputs": ["a"], "input_type": "document", "purpose": "test"},
-                                    time.monotonic() + 10))
+def test_worker_rejects_embeddings_as_a_broker_operation(tmp_path):
+    worker = HostedInferenceWorker(CompletionFacade(), str(tmp_path))
+    with pytest.raises(ContractError, match="invalid_inference_operation"):
+        asyncio.run(worker._execute("embed", {}, time.monotonic() + 10))
 
 
 def test_worker_structured_call_preserves_schema_and_only_returns_parsed_value(tmp_path):
@@ -300,34 +317,36 @@ def test_claim_is_bound_to_registered_profile_and_lease(tmp_path):
     worker._settings = SimpleNamespace(profile_id="profile-a")
     worker._lease_epoch = 3
     claim = {"state": "claimed", "job_id": "job-1", "correlation_id": "corr-1",
-             "operation": "embed", "profile_id": "profile-a", "instance_id": "instance-a",
+             "operation": "complete_structured", "profile_id": "profile-a", "instance_id": "instance-a",
              "lease_epoch": 3, "deadline_ms": 1000,
              "request": {"part_count": 1, "total_bytes": 10, "sha256": "a" * 64}}
     parsed = worker._validate_claim(claim, "instance-a")
-    assert parsed["operation"] == "embed" and parsed["lease_epoch"] == 3
+    assert parsed["operation"] == "complete_structured" and parsed["lease_epoch"] == 3
     claim["profile_id"] = "profile-b"
     with pytest.raises(ContractError, match="invalid_inference_claim"):
         worker._validate_claim(claim, "instance-a")
 
 
-def test_setup_defaults_ignore_legacy_processing_and_environment_config(tmp_path, monkeypatch):
+def test_setup_checks_the_saved_pointer_without_mutating_it(tmp_path, monkeypatch):
     state = tmp_path / "reliquary"
     state.mkdir()
     processing = state / "processing.json"
-    prior = b'{"config_path":"C:/old/reliquary.cfg"}\n'
+    prior = canonical({"config_path": str(tmp_path.parent / "older.cfg")})
+    monkeypatch.setenv("RELIQUARY_CONFIG_PATH", str(tmp_path / "ignored.cfg"))
+    assert setup._embedding_status(tmp_path, None) == "embedding_unconfigured"
     processing.write_bytes(prior)
-    cfg = tmp_path / "reliquary.cfg"
-    cfg.write_bytes(b"legacy route config")
-    monkeypatch.setenv("RELIQUARY_CONFIG_PATH", str(cfg))
 
-    owners, _binary, defaults = setup._defaults(tmp_path)
-    candidate = setup._candidate(tmp_path, {"main_rel": str(tmp_path / "main.rel"),
-        "active_phy": str(tmp_path / "active.phy")}, owners, defaults)
-    assert "config_path" not in defaults and "config_path" not in candidate
-    assert processing.read_bytes() == prior and cfg.read_bytes() == b"legacy route config"
-    with pytest.raises(ContractError, match="invalid_fields"):
-        setup._candidate(tmp_path, {"main_rel": str(tmp_path / "main.rel"),
-            "active_phy": str(tmp_path / "active.phy"), "config_path": str(cfg)}, owners, defaults)
+    class NativeCheck:
+        stdout = b'{"embedding_error":null}'
+
+    def check(home, binary, operation, request, *, timeout):
+        assert home == tmp_path and operation == "setup-embedding-check"
+        assert request == {"config_path": None}
+        return NativeCheck()
+
+    monkeypatch.setattr(setup, "_host_setup", check)
+    assert setup._embedding_status(tmp_path, None) is None
+    assert processing.read_bytes() == prior
 
 
 def test_worker_connect_starts_service_and_attaches_sessionless_runtime(tmp_path, monkeypatch):
@@ -372,7 +391,8 @@ def test_generic_plugin_context_starts_worker_without_memory_provider_slot(tmp_p
     provider.ReliquaryMemoryProvider = lambda: object()
     monkeypatch.setitem(sys.modules, "reliquary_hermes.provider", provider)
     monkeypatch.setattr(worker_module, "HostedInferenceWorker", FakeWorker)
-    context = SimpleNamespace(llm=object(), on_unload=callbacks.append)
+    llm = SimpleNamespace(acomplete_structured=lambda: None, aembed=lambda: None)
+    context = SimpleNamespace(llm=llm, on_unload=callbacks.append)
     register_plugin(context)
     assert started == [True] and len(callbacks) == 1
     callbacks[0]()

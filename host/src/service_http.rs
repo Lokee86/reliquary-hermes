@@ -20,6 +20,7 @@ pub(crate) const RETRIEVAL_PREPARE: &str = "/v1/retrieval/prepare";
 pub(crate) const RETRIEVAL_TOOL: &str = "/v1/retrieval/tool";
 pub(crate) const SOURCE: &str = "/v1/source";
 pub(crate) const SOURCE_STATUS: &str = "/v1/source/status";
+pub(crate) const EGO: &str = "/v1/ego";
 pub(crate) const DASHBOARD_READ: &str = "/v1/dashboard/read";
 pub(crate) const DASHBOARD_TOPOLOGY: &str = "/v1/dashboard/topology";
 pub(crate) const SETUP_STATUS: &str = "/v1/setup/status";
@@ -265,6 +266,7 @@ fn parse_headers(bytes: &[u8], expected_host: &str) -> Result<RequestHeaders, Ht
     }
     let path = match parsed.path {
         Some(ATTACH) => ATTACH,
+        Some(EGO) => EGO,
         Some(REQUEST) => REQUEST,
         Some(RETRIEVAL_PREPARE) => RETRIEVAL_PREPARE,
         Some(RETRIEVAL_TOOL) => RETRIEVAL_TOOL,
@@ -583,14 +585,8 @@ mod tests {
             "profile_id": "wrong-profile",
             "instance_id": instance,
             "service_lease_id": lease,
-            "general": {"provider": "openai-api", "model": "fixture-general"},
-            "embedding": {
-                "provider": "openai-api",
-                "model": "fixture-embedding",
-                "dimensions": 3,
-                "input_type_handling": "shared",
-                "normalization": "none"
-            }
+            "protocol_version": crate::hosted_inference::WORKER_PROTOCOL_VERSION,
+            "general": {"provider": "openai-api", "model": "fixture-general"}
         }))
         .unwrap();
         let tag = mac(

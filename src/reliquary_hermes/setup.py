@@ -8,7 +8,7 @@ import subprocess
 from . import setup_paths
 from .capture_policy import ENROLLMENT_FILE, capture_cutoff, history_supported
 from .client import OWNER_OPEN_SECONDS, HostClient, HostUnavailable
-from .native_host import BUNDLED_HOST_ERRORS, packaged_host_path
+from .native_host import BUNDLED_HOST_ERRORS, host_environment, packaged_host_path
 from .projects import active_projects, inventory, routing_available
 from .setup_wire import switch_review as parse_switch_review, switch_status as parse_switch_status
 from .settings import (
@@ -23,6 +23,16 @@ _CREATE_ROLES = {"general_rel": "main_rel", "project_rel": "project_rel", "phy":
 _CREATE_ERRORS = {b"owner_already_exists", b"invalid_owner_path", b"owner_creation_failed",
                   b"owner_created_unverified"}
 _TOPOLOGY = "topology-v1.json"
+_PROCESSING = "processing.json"
+_EMBEDDING_ERRORS = {
+    "embedding_unconfigured", "embedding_config_invalid", "embedding_credentials_unavailable",
+}
+_EMBEDDING_MESSAGES = {
+    "embedding_unconfigured": "Select a Reliquary config with an explicit embedding route for this profile.",
+    "embedding_config_invalid": "Check this profile's Reliquary embedding configuration.",
+    "embedding_credentials_unavailable": "Check the embedding credential in the OS credential store.",
+    "embedding_path_outside_profile": "Choose a Reliquary config file inside this Hermes profile.",
+}
 _UNCONFIRMED = {"host_timeout", "host_incomplete_response", "invalid_host_response",
                 "invalid_setup_response", "host_connection_refused"}
 
@@ -82,7 +92,7 @@ def status(home):
     _, binary, defaults = _defaults(home)
     detected = binary.is_absolute() and binary.is_file()
     result = {"configured": configured, "capture_status": capture_status, "runtime_detected": detected,
-              "defaults": defaults}
+              "defaults": defaults, "embedding_error": _embedding_status(home, binary)}
     if detected and (_state_dir(home) / _TOPOLOGY).is_file():
         current = _disk_switch_status(home, binary)
         if current is not None:
@@ -129,16 +139,62 @@ def _owner_report(value):
             identifier(row[field])
 
 
-def _host_setup(home, binary, operation, request):
+def _host_setup(home, binary, operation, request, *, timeout=OWNER_OPEN_SECONDS):
     require(binary.is_absolute() and binary.is_file(), "runtime_unavailable")
     wire = canonical(request)
     require(len(wire) <= MAX_WIRE_BYTES, "setup_request_too_large")
-    environment = {name: os.environ[name] for name in ("SystemRoot", "WINDIR") if name in os.environ}
-    environment.update({name: str(home) for name in ("TEMP", "TMP", "TMPDIR")})
+    environment = host_environment(home)
     flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     return subprocess.run([str(binary), operation, "--state-dir", str(_state_dir(home))],
                           input=wire, capture_output=True, cwd=home, env=environment,
-                          creationflags=flags, timeout=OWNER_OPEN_SECONDS, check=True)
+                          creationflags=flags, timeout=timeout, check=True)
+
+
+def _check_embedding(home, binary, config_path=None):
+    try:
+        result = _host_setup(home, binary, "setup-embedding-check", {"config_path": config_path},
+                             timeout=8.0)
+        error = obj(decode(result.stdout), {"embedding_error"})["embedding_error"]
+        require(error is None or error in _EMBEDDING_ERRORS, "invalid_embedding_status")
+        return error
+    except ContractError as exc:
+        if str(exc) == "runtime_unavailable":
+            return "runtime_unavailable"
+        return "embedding_config_invalid"
+    except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+        return "embedding_config_invalid"
+
+
+def _embedding_status(home, binary):
+    pointer = _state_dir(home) / _PROCESSING
+    if not (pointer.exists() or pointer.is_symlink()):
+        return "embedding_unconfigured"
+    return _check_embedding(home, binary)
+
+
+def configure_embedding(home, candidate):
+    """Select one profile-local config through the existing setup admission."""
+    from hermes_cli.config import is_managed
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from utils import atomic_json_write
+
+    home = profile_home(home)
+    config = Path(_local_path(obj(candidate, {"config_path"})["config_path"])).resolve()
+    require(config.is_relative_to(home), "embedding_path_outside_profile")
+    scope = set_hermes_home_override(home)
+    try:
+        require(not is_managed(), "managed_setup")
+        with profile_setup_lock(home):
+            _, binary, _ = _defaults(home)
+            error = _check_embedding(home, binary, str(config))
+            if error is not None:
+                raise ContractError(error)
+            state = _state_dir(home)
+            state.mkdir(mode=0o700, exist_ok=True)
+            atomic_json_write(state / _PROCESSING, {"config_path": str(config)}, mode=0o600, fsync_dir=True)
+    finally:
+        reset_hermes_home_override(scope)
+    return {"embedding_error": None}
 
 
 def _preflight(home, binary, request):
@@ -429,7 +485,8 @@ def cli_setup(home):
     """Collect local choices from the Hermes CLI and report the shared result."""
     try:
         home = profile_home(home)
-        defaults = status(home)["defaults"]
+        profile = status(home)
+        defaults = profile["defaults"]
         print("Configure the existing Reliquary owners and local host.")
         candidate = {}
         for key, prompt in (("main_rel", "Absolute path to the existing main REL"),
@@ -442,6 +499,13 @@ def cli_setup(home):
             identifier(project)
             projects[project] = input(f"Absolute REL path for {project}: ").strip()
         candidate["projects"] = projects
+        if profile["embedding_error"] in _EMBEDDING_MESSAGES:
+            print(_EMBEDDING_MESSAGES[profile["embedding_error"]])
+        config_path = input("Profile-local Reliquary embedding config path (blank to keep current setting): ").strip()
+        if config_path:
+            configure_embedding(home, {"config_path": config_path})
+            if profile["configured"]:
+                print("Embedding config saved. Restart this profile's Reliquary service to load it.")
         if (_state_dir(home) / _TOPOLOGY).is_file():
             review = validate(home, candidate)
             if not review["valid"]:
@@ -455,5 +519,6 @@ def cli_setup(home):
     except (EOFError, KeyboardInterrupt):
         print("Reliquary setup cancelled.")
     except (OSError, RuntimeError, ValueError) as exc:
-        message = BUNDLED_HOST_ERRORS.get(str(exc), "Reliquary setup could not validate or save this profile's configuration.")
+        message = _EMBEDDING_MESSAGES.get(str(exc)) or BUNDLED_HOST_ERRORS.get(
+            str(exc), "Reliquary setup could not validate or save this profile's configuration.")
         print(message)

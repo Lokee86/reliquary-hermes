@@ -8,11 +8,26 @@ Record the pinned Hermes lifecycle, source identity, privacy and plugin surfaces
 
 ## Overview
 
-### Authenticated inference extension
+### Current stock Hermes target
+
+The supported stock Hermes baseline is `v0.23.4` at `8fc0374447313e276f6b9a2764bfc750190c966a`. Reliquary uses the active profile's `ctx.llm.acomplete_structured` method from `agent/plugin_llm.py`. [Verification](verification.md#stock-hermes-native-embedding-target)
+
+The completion worker uses stock `ctx.llm` only for ordinary/structured completions and negotiates worker `protocol_version=2`. `host/src/embedding_route.rs` selects the separate native Switchboard route from the existing `processing.json` CVCFG pointer. `vendor/reliquary/crates/reliquary-switchboard/src/protected_config.rs::ResolvedEmbeddingRoute` resolves only the embedding slot and referenced protected credential; `transport.rs::ConfiguredEmbeddingEndpoint` uses `OpenAiReady`, binds the endpoint hash, and sends distinct query/document modes. The broker carries completion and opt-in Perception requests. Embedding vectors and their provider credentials stay in the native host. [Inference protocol](protocol.md#hosted-inference)
+
+Embedding support does not imply any of these separate host features:
+
+- Trusted history/native original-creation proof and privacy-filtered export still gate automatic capture and explicit history import. Do not read the transcript database directly to bypass a missing capability.
+- Trusted session project attribution still gates dedicated routing; without it, new sessions use General and existing accepted bindings remain intact.
+- A committed transcript-removal journal remains a separate authority for durable delete/rewind recovery; historical removal-pin evidence does not establish that stock v0.23.4 supplies it.
+- Desktop native mutation admission and bounded byte-transport SDK support remain separate from completion and embedding availability; Web fallback, List and inspector retain their documented capability gates.
+
+The following historical probes use their own revisions for the MemoryProvider ABC, trusted history, and transcript-removal contracts.
+
+### Historical authenticated inference extension
 
 The independent embedding API is audited at Hermes `168a923023a7018be3dbf66530531dd20b1834b9`, submitted as [Hermes PR #154202](https://github.com/NousResearch/hermes-agent/pull/154202). `PluginContext.llm` supplies `complete_structured/acomplete_structured` and additive `embed/aembed`. The embedding selection belongs to `auxiliary.embedding`; override trust gates, profile-scoped credentials, pool recovery, and unsupported-grant rejection remain in Hermes. The upstream gate passed 359 distinct tests and all 16 repository checks using deterministic local models and test credentials.
 
-`HERMES_INFERENCE_REVISION` pins that capability audit separately from the existing history/ABC protocol baseline below. It is not a claim that the inference PR changes the history contract. Runtime registration checks the actual facade capability, and older builds report `embedding_unavailable`. The dedicated worker inherits the owning profile and secret context, has its own scope-free runtime lease, and invokes no raw provider API or credential-copy interface. Root receives only signed correlated results and validates schemas and vector shape again. [Inference protocol](protocol.md#hosted-inference)
+Historically, `HERMES_INFERENCE_REVISION` pinned that extension audit separately from the history/ABC baseline below. That route checked `embed/aembed` and reported `embedding_unavailable` on older builds. These are extension-era facts, not prerequisites or error semantics for the current native embedding target. The dedicated completion worker still inherits its owning profile/secret context and a scope-free runtime lease. [Current inference protocol](protocol.md#hosted-inference)
 
 The 2026-11-08 HP01-R1 audit repins the HP01 contract to stable Hermes v0.23.0. Local source probes exercise persistence, provider egress and committed lifecycle dispatch against synthetic history in isolated profiles.
 
@@ -22,7 +37,7 @@ The audited Hermes revision is stable `v0.23.0` at `2bd378ed1b8d6bf2192cb26e0a55
 
 Historical pin evidence comes from `cf4f3a7396814ffcaef69d9af09f7cfdade3ddbe` in the October canary worktree. The standalone contract started at `428f297604afc4fe43765001e9d4939bae617861` on `hp01/freeze-hermes-contract`. The native 2.1 implementation spec linked by the README governs this audit.
 
-The observations below apply to the stable SHA. `Discovery.validate` enforces a single exact host revision and protocol version. An upgrade requires a new audit and contract test run. The real-process probe verifies stable discovery and rejects the historical pin.
+The observations below apply to the historical v0.23.0 stable SHA. Its `Discovery.validate` enforced a single exact host revision and protocol version. An upgrade requires a new audit and contract test run; the historical real-process probe verified that baseline and rejected the earlier canary pin. This is not evidence of current v0.23.4 discovery acceptance.
 
 ## Actual lifecycle surface
 
@@ -45,7 +60,7 @@ HU06 derives `desktop_native_mutations` from the authenticated setup-status requ
 
 The pinned `agent/turn_context.py` turn prologue calls `on_turn_start` before `MemoryManager.prefetch_all` and asks the manager to describe the returned recall for the indicator. The manager gives external prefetch an eight-second default budget. Provider tools register OpenAI-style schemas and return a JSON string through the manager's profile-scoped dispatch. Reliquary reserves a shorter loopback retrieval budget and resets recall state when the session or turn changes.
 
-The lifecycle signatures and context helpers remain compatible. The ABC adds optional profile creation and rename hooks and provider-backed dashboard config methods. Reliquary uses its existing setup path and needs no adapter for those additions. The primary context owns ingestion. A delegation result enters through its parent-authorized path. Per-turn author and group metadata describe the source actor. The explicitly active PHY supplies the stable Reliquary `user_id`. Content without trusted attribution to that user stays REL-only, including unknown or unmapped participants.
+The lifecycle signatures and context helpers remain compatible. The ABC adds optional profile creation and rename hooks and provider-backed dashboard config methods. Reliquary uses its existing setup path and needs no adapter for those additions. The primary context owns ingestion. A delegation result enters through its parent-authorized path. Per-turn author and group metadata describe the source actor. The registered PHY supplies the stable Reliquary `user_id` at session admission. The host must also verify the author of each personal Memory's source turn.
 
 ## Project membership and provider admission
 
@@ -63,7 +78,9 @@ The project-routing capability requires a Hermes host to persist explicit first-
 
 The stable finalizer skips memory sync for a vetoed turn. On a later completed turn, `sync_turn` can still carry an earlier vetoed prompt in a row's display metadata. The new withheld-prompt filtering in the manager applies to other hooks. `capture_snapshot` copies the placeholder content and discards display metadata, as verified by the stable probe.
 
-The callback is a live handoff. The stable provider interface supplies no authorized catch-up export or cursor for missed turns or lifecycle events. The CLI session export is a separate backup surface with different redaction behavior. The state-store reader is used only as audit evidence. Messages missing required UID/time fail copy validation. Unverified actor attribution stays REL-only. Missing branch and revision remain null, and the snapshot digest covers only the permitted copied view with its profile/session namespace, IDs, roles and times.
+The callback is a live handoff. The stable provider interface supplies no authorized catch-up export or cursor for missed turns or lifecycle events. The CLI session export is a separate backup surface with different redaction behavior. The state-store reader is used only as audit evidence. Messages missing required UID/time fail copy validation. Insomnia holds personal proposals when actor attribution is unverified. Missing branch and revision remain null, and the snapshot digest covers only the permitted copied view with its profile/session namespace, IDs, roles and times.
+
+The [completed-turn attribution patch](../patches/hermes-168a923-copied-turn-attribution.patch) applies to clean Hermes `168a923023a7018be3dbf66530531dd20b1834b9`. It includes the HU08 history export contract for that revision and records native creation provenance when the local Gateway creates a chat or commits a reset. It adds `COPIED_TURN_ATTRIBUTION_VERSION = 1` and the optional `source_turn` callback keyword. It forwards the persisted UID only when Hermes can identify the exact row created for that turn in the existing filtered handoff. The owner flag requires an authenticated canonical local direct viewer admission from the profile owner. Explicit sender labels, bot turns, messaging participants and automation provide no profile-owner authority. The adapter preserves any available author label for that row as provenance.
 
 A queued callback is an input to the import workflow. The durable checkpoint is the accepted product import receipt.
 
@@ -113,6 +130,11 @@ These existing host gates provide the HU03 v1 dashboard authentication boundary.
 ## Product boundary audit
 
 The accepted G4 product exposes opaque owner handles, trusted host admission, management/maintenance and selected queue/host types. HP02 must expose narrow existing workflows through public Root/Gateway/Application operations. The temporary `HACK` receipt bridge belongs inside the Rust host at the selected-Memory result-return boundary. The standalone Python provider transport carries retrieval and source operations. The Rust host depends on public `reliquary-memory` for domain work.
+
+## Stock Ego request hook
+
+Hermes v0.23.0 calls `ContextEngine.select_context` after assembling the system prompt, transcript and prefill. The Reliquary directory plugin registers its engine through the general plugin API on opted-in profiles. The memory collector still recognizes the same standalone MemoryProvider entry point. The engine inherits the stock compressor and changes its request copy only. It reuses Hermes' SOUL loader for the exact prefix and preserves the existing prompt suffix. It uses a conservative UTF-8 byte counter, output reservation and tool allowance because the stock selection hook receives messages and the context window.
+
 
 ## Related docs
 

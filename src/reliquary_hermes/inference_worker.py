@@ -22,6 +22,8 @@ from .settings import (
 from .validation import ContractError, canonical, choice, digest, identifier, integer, obj, require, text
 
 logger = logging.getLogger(__name__)
+_WORKER_PROTOCOL_VERSION = 2
+_PROTOCOL_MISMATCH = "inference_protocol_mismatch"
 _PART_BYTES = 64 * 1024
 _MAX_JOB_BYTES = 8 * 1024 * 1024
 _MAX_PARTS = (_MAX_JOB_BYTES + _PART_BYTES - 1) // _PART_BYTES
@@ -41,10 +43,11 @@ def _field(value: Any, key: str, default: Any = None) -> Any:
 def _safe_error_code(error: BaseException) -> str:
     if isinstance(error, TimeoutError):
         return "inference_timeout"
+    if isinstance(error, (HostUnavailable, ContractError)) and str(error) == _PROTOCOL_MISMATCH:
+        return _PROTOCOL_MISMATCH
     code = getattr(error, "code", None)
-    known = {"embedding_unconfigured", "embedding_unsupported", "embedding_failed", "embedding_timeout",
-             "embedding_invalid_response", "inference_deadline", "inference_invalid_response",
-             "inference_backpressure", "inference_identity_changed", "inference_unavailable"}
+    known = {"inference_deadline", "inference_invalid_response", "inference_backpressure",
+             "inference_identity_changed", "inference_unavailable"}
     return code if type(code) is str and code in known else "inference_failed"
 
 
@@ -113,7 +116,6 @@ class HostedInferenceWorker:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._active_task: asyncio.Task | None = None
         self._last_heartbeat = 0.0
-        self._reported_capability_failure = False
         self._unavailable_logged = False
         self._configuration_revision: tuple[int, int, int, int] | None = None
 
@@ -150,6 +152,7 @@ class HostedInferenceWorker:
                 discovery = client._read_discovery()
                 if discovery is not None:
                     client.inference_call("worker-error", {
+                        "protocol_version": _WORKER_PROTOCOL_VERSION,
                         "worker_id": self._worker_id, "profile_id": self._settings.profile_id,
                         "instance_id": discovery.instance_id, "service_lease_id": discovery.lease_id,
                         "error_code": "inference_unavailable",
@@ -194,22 +197,8 @@ class HostedInferenceWorker:
         )
         require(_field(structured, "content_type") == "json" and
                 _field(structured, "parsed") == {"ready": True}, "inference_unavailable")
-        general = {"provider": identifier(_field(structured, "provider")),
-                   "model": text(_field(structured, "model"), 256)}
-        embedded = await self._llm.aembed([_PROBE_TEXT], input_type="document",
-                                          purpose="reliquary_readiness_probe", timeout=30.0)
-        vectors = _field(embedded, "vectors")
-        dimensions = integer(_field(embedded, "dimensions"), 1, 65536)
-        require(type(vectors) is list and len(vectors) == 1 and type(vectors[0]) is list and
-                len(vectors[0]) == dimensions, "inference_unavailable")
-        audit = _field(embedded, "audit", {})
-        handling = _field(audit, "input_type_handling")
-        normalization = _field(audit, "normalization")
-        require(handling == "shared" and normalization == "none", "inference_unavailable")
-        embedding = {"provider": identifier(_field(embedded, "provider")),
-                     "model": text(_field(embedded, "model"), 256), "dimensions": dimensions,
-                     "input_type_handling": "shared", "normalization": "none"}
-        return {"general": general, "embedding": embedding}
+        return {"general": {"provider": identifier(_field(structured, "provider")),
+                            "model": text(_field(structured, "model"), 256)}}
 
     def _bind_identity(self) -> None:
         revision = self._configuration_stamp()
@@ -221,22 +210,24 @@ class HostedInferenceWorker:
         require(not self._stop.is_set(), "inference_cancelled")
         require(revision == self._configuration_stamp(), "inference_configuration_changed")
         scope = (self._instance_id(), self._service_lease_id())
-        bound = self._call("identity", {"instance_id": self._instance_id(),
-                                         "service_lease_id": self._service_lease_id(),
-                                         **identity})
+        try:
+            bound = self._call("identity", {"protocol_version": _WORKER_PROTOCOL_VERSION,
+                                             "instance_id": scope[0], "service_lease_id": scope[1],
+                                             **identity})
+        except HostUnavailable as error:
+            if str(error) == "invalid_request":
+                raise HostUnavailable(_PROTOCOL_MISMATCH) from None
+            raise
         require(not self._stop.is_set(), "inference_cancelled")
+        require(bound.get("protocol_version") == _WORKER_PROTOCOL_VERSION, _PROTOCOL_MISMATCH)
         require(bound.get("state") == "bound", "inference_unavailable")
         epoch = integer(bound.get("lease_epoch"), 1, (1 << 63) - 1)
         require(bound.get("identity") == identity, "inference_identity_mismatch")
         self._identity, self._lease_epoch, self._bound_scope = identity, epoch, scope
         self._configuration_revision = revision
         self._native_route = route
-        logger.info("Reliquary hosted inference bound: general=%r/%r embedding=%r/%r "
-                    "dimensions=%d input_type_handling=%s normalization=%s",
-                    identity["general"]["provider"], identity["general"]["model"],
-                    identity["embedding"]["provider"], identity["embedding"]["model"],
-                    identity["embedding"]["dimensions"], identity["embedding"]["input_type_handling"],
-                    identity["embedding"]["normalization"])
+        logger.info("Reliquary completion worker bound to %r/%r",
+                    identity["general"]["provider"], identity["general"]["model"])
 
     def _configured_native_route(self) -> NativeDecisionRoute | None:
         try:
@@ -309,20 +300,6 @@ class HostedInferenceWorker:
             try:
                 if self._client is None:
                     self._connect()
-                if not callable(getattr(self._llm, "acomplete_structured", None)) or \
-                        not callable(getattr(self._llm, "aembed", None)):
-                    if not self._unavailable_logged:
-                        logger.warning("Reliquary hosted inference unavailable (%s)", "embedding_unavailable")
-                        self._unavailable_logged = True
-                    self._report_unavailable("embedding_unavailable")
-                    if self._reported_capability_failure:
-                        try:
-                            self._client.detach_runtime()
-                        except (HostUnavailable, ContractError, OSError):
-                            pass
-                        return
-                    self._stop.wait(2.0)
-                    continue
                 if self._identity is None:
                     self._bind_identity()
                 self._poll_once()
@@ -356,22 +333,6 @@ class HostedInferenceWorker:
                 client.detach_runtime()
             except (HostUnavailable, ContractError, OSError):
                 pass
-
-    def _report_unavailable(self, error_code: str) -> None:
-        try:
-            assert self._settings is not None
-            discovery = self._client._read_discovery()
-            if discovery is None:
-                raise HostUnavailable("host_unavailable")
-            reply = self._client.inference_call("worker-error", {
-                "worker_id": self._worker_id, "profile_id": self._settings.profile_id,
-                "instance_id": discovery.instance_id, "service_lease_id": discovery.lease_id,
-                "error_code": error_code,
-            }, timeout=3.0)
-            require(reply.get("state") == "accepted", "inference_unavailable")
-            self._reported_capability_failure = True
-        except (HostUnavailable, ContractError, OSError):
-            logger.warning("Reliquary hosted inference worker could not report capability status.")
 
     def _poll_once(self) -> None:
         assert self._settings is not None and self._identity is not None and self._lease_epoch is not None
@@ -411,11 +372,10 @@ class HostedInferenceWorker:
                 bound_identity = {"provider": self._identity["native_decision"]["route_id"],
                                   "model": _NATIVE_DECISION_MODEL}
             else:
-                bound_identity = self._identity["embedding" if operation == "embed" else "general"]
+                bound_identity = self._identity["general"]
             identity_changed = (self._configuration_revision != self._configuration_stamp() or
                                 result["provider"] != bound_identity["provider"] or
-                                result["model"] != bound_identity["model"] or
-                                (operation == "embed" and result["dimensions"] != bound_identity["dimensions"]))
+                                result["model"] != bound_identity["model"])
             if identity_changed:
                 result = {"status": "error", "error_code": "inference_identity_changed"}
                 self._identity = None
@@ -472,7 +432,7 @@ class HostedInferenceWorker:
                 value["instance_id"] == instance_id,
                 "invalid_inference_claim")
         require(value["lease_epoch"] == self._lease_epoch, "inference_lease_stale")
-        operation = choice(value["operation"], {"complete_structured", "embed", "native_decision"})
+        operation = choice(value["operation"], {"complete_structured", "native_decision"})
         manifest = obj(value["request"], {"part_count", "total_bytes", "sha256"})
         part_count = integer(manifest["part_count"], 1, _MAX_PARTS)
         total_bytes = integer(manifest["total_bytes"], 1, _MAX_JOB_BYTES)
@@ -546,35 +506,7 @@ class HostedInferenceWorker:
         if operation == "native_decision":
             return await asyncio.wait_for(self._execute_native_decision(raw, min(timeout, 30.0)),
                                           timeout=min(timeout, 30.0))
-        required = {"inputs", "input_type", "purpose"}
-        allowed = required | {"dimensions"}
-        require(required <= set(raw) <= allowed, "invalid_inference_request")
-        inputs = raw["inputs"]
-        require(type(inputs) is list and 1 <= len(inputs) <= 128, "invalid_inference_request")
-        inputs = [text(item, _MAX_JOB_BYTES) for item in inputs]
-        require(sum(len(item.encode("utf-8")) for item in inputs) <= 1024 * 1024,
-                "invalid_inference_request")
-        input_type = choice(raw["input_type"], {"query", "document"})
-        kwargs = {"input_type": input_type, "purpose": text(raw["purpose"], 128), "timeout": timeout}
-        expected_dimensions = integer(raw["dimensions"], 1, 65536) if "dimensions" in raw else None
-        result = await asyncio.wait_for(self._llm.aembed(inputs, **kwargs), timeout=timeout)
-        vectors = _field(result, "vectors")
-        dimensions = integer(_field(result, "dimensions"), 1, 65536)
-        require(expected_dimensions is None or dimensions == expected_dimensions,
-                "inference_invalid_response")
-        require(type(vectors) is list and len(vectors) == len(inputs), "inference_invalid_response")
-        clean_vectors = []
-        for vector in vectors:
-            require(type(vector) is list and len(vector) == dimensions and
-                    all(type(value) in (float, int) and math.isfinite(value) for value in vector),
-                    "inference_invalid_response")
-            clean_vectors.append([float(value) for value in vector])
-        audit = _field(result, "audit", {})
-        require(_field(audit, "input_type_handling") == "shared" and
-                _field(audit, "normalization") == "none", "inference_invalid_response")
-        return {"status": "ok", "vectors": clean_vectors, "provider": identifier(_field(result, "provider")),
-                "model": text(_field(result, "model"), 256), "dimensions": dimensions,
-                "usage": _usage(result)}
+        raise ContractError("invalid_inference_operation")
 
     async def _execute_native_decision(self, raw: dict, timeout: float) -> dict[str, Any]:
         import httpx
@@ -616,7 +548,7 @@ class HostedInferenceWorker:
         require(not self._stop.is_set(), "inference_cancelled")
         status = result.get("status")
         if status == "ok":
-            payload = {key: result[key] for key in ("parsed", "vectors", "provider", "model", "dimensions", "usage")
+            payload = {key: result[key] for key in ("parsed", "provider", "model", "usage")
                        if key in result}
             raw = canonical(payload)
             if not 0 < len(raw) <= _MAX_JOB_BYTES:
@@ -628,7 +560,7 @@ class HostedInferenceWorker:
             else:
                 count = (len(raw) + _PART_BYTES - 1) // _PART_BYTES
                 manifest = {"part_count": count, "total_bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
-                identity = {key: result[key] for key in ("provider", "model", "dimensions", "usage")
+                identity = {key: result[key] for key in ("provider", "model", "usage")
                             if key in result}
                 start = {"status": "ok", **identity, **manifest}
         else:

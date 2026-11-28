@@ -14,14 +14,14 @@ from time import monotonic, sleep
 
 import pytest
 
-from hosted_hermes_worker import configure_hermes, start_hermes_worker, worker_command
+from hosted_hermes_worker import EMBEDDING_KEY, configure_embeddings, start_hermes_worker, worker_command
 from hosted_inference_probe import NATIVE_DECISION_KEY, hosted_model, native_reply
-from reliquary_hermes import client as client_module
+from reliquary_hermes import client as client_module, setup
 from reliquary_hermes.client import HostClient, HostUnavailable
 from reliquary_hermes.outbox import SourceOutbox
 from reliquary_hermes.settings import TOKEN_VAR, save_settings
 from reliquary_hermes.source_removals import reconcile_removals
-from reliquary_hermes.validation import canonical, decode
+from reliquary_hermes.validation import ContractError, canonical, decode
 from test_host_client import TOKEN
 from test_hp03_host import binaries as binaries
 from test_hp03_host import config, owner, stop
@@ -29,7 +29,8 @@ from test_hp04_host import PRINCIPAL, PROFILE, SESSION, TEXT, _queue, _turn, _wh
 from test_hp05_retrieval import _dashboard_binding, _dashboard_exchange, _dashboard_status
 
 
-DIMENSIONS = 20000
+# Three full-precision vectors remain below Switchboard's 1-MiB response cap.
+DIMENSIONS = 14000
 DEFAULT_QUERY = "amber checklist"
 
 
@@ -48,6 +49,17 @@ def audit(home):
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def stop_worker_and_host(worker, client):
+    # Keep startup and teardown under the signed runtime lease even when
+    # the worker and the client share one Windows host process.
+    if client._runtime_lease is None:
+        client.attach_runtime(None)
+    assert worker_command(worker, "stop")["registered"] is False
+    client.detach_runtime()
+    assert client._process.wait(timeout=15) == 0
+    assert not (client._state_dir / "discovery.json").exists()
 
 
 def query_request(turn, text=DEFAULT_QUERY):
@@ -152,14 +164,42 @@ def test_real_hermes_hosted_inference_processing_recall_identity_and_restart(
         assert outbox.acknowledge(job, receipt)
         pending = client.read_source_status(SESSION)
         assert pending["state"] == "unavailable" and pending["receipt"] == receipt
-        worker = start_hermes_worker(home, inference_checkout, url, cleanup, dimensions=DIMENSIONS)
+        worker = start_hermes_worker(home, inference_checkout, url, cleanup)
         log = home / "hosted-worker.log"
         def diagnostic():
             return (log.read_text(encoding="utf-8", errors="replace"), model["calls"], model["errors"],
                     native_log.read_text(encoding="utf-8", errors="replace"))
-        wait_for(lambda: any(row.get("dimensions") == DIMENSIONS for row in audit(home)), diagnostic=diagnostic)
+        wait_for(lambda: audit(home), diagnostic=diagnostic)
         assert not (state / "processing.json").exists()
         assert not list(home.rglob("*.cfg"))
+        wait_for(lambda: client.read_source_status(SESSION).get("embedding_error") == "embedding_unconfigured",
+                 diagnostic=diagnostic)
+        assert query(client, "missing-config") == "embedding_unconfigured"
+        assert client.deliver_source_job(job) == receipt
+
+        def reopen(current, after_stop=None):
+            stop_worker_and_host(worker, current)
+            if after_stop is not None:
+                after_stop()
+            fresh = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
+            cleanup.callback(lambda: stop(fresh._process) if fresh._process is not None else None)
+            fresh.attach(SESSION)
+            fresh.attach_runtime(None)
+            assert worker_command(worker, "start")["registered"] is True
+            return fresh
+
+        (state / "processing.json").write_text('{"config_path":"relative.cfg"}', encoding="utf-8")
+        client = reopen(client)
+        wait_for(lambda: query(client, "invalid-config") == "embedding_config_invalid", diagnostic=diagnostic)
+        assert client.deliver_source_job(job) == receipt
+        pointer = state / "processing.json"
+        invalid_pointer = pointer.read_bytes()
+        with pytest.raises(ContractError, match="embedding_path_outside_profile"):
+            setup.configure_embedding(home, {"config_path": str(tmp_path / "outside.cfg")})
+        assert pointer.read_bytes() == invalid_pointer
+        processing = configure_embeddings(home, url, cli, dimensions=DIMENSIONS, select=False)
+        assert setup.configure_embedding(home, {"config_path": str(processing)}) == {"embedding_error": None}
+        client = reopen(client)
 
         wait_for(lambda: client.read_source_status(SESSION)["state"] == "complete", diagnostic=diagnostic)
         assert client.deliver_source_job(job) == receipt
@@ -181,37 +221,33 @@ def test_real_hermes_hosted_inference_processing_recall_identity_and_restart(
         assert {"insomnia_authority_disposition_ledger", "insomnia_memory_wording",
                 "dream_pair_classification", "dream_pair_verification", "entity_resolution",
                 "entity_admission", "decision_response"} <= schemas, schemas
-        calls = audit(home)
-        assert {"query", "document"} <= {row.get("input_type") for row in calls}
-        assert model["large_reply"], "real vector results must cross the 256-KiB wire boundary"
+        assert {row["method"] for row in audit(home)} == {"acomplete_structured"}
+        assert {"search_query", "search_document"} <= {
+            row["input_type"] for row in model["embedding_calls"]}
+        assert "embed" not in schemas
+        assert model["large_reply"], "Switchboard handled the large provider response directly"
         [marker] = list((state / "embedding-identities-v1").glob("*.json"))
         original_marker = marker.read_bytes()
         identity = json.loads(original_marker)
         assert identity["dimensions"] == DIMENSIONS and identity["model"] == "fixture-embedding"
-        assert identity["input_type_handling"] == "shared" and identity["normalization"] == "none"
-        # Keep the service alive independently while deliberately unloading its
-        # inference worker. Processing above ran with only the worker's lease.
+        assert identity["input_type_handling"] == "search_query_document" and identity["normalization"] == "none"
+        # Keep the service alive independently while unloading its worker.
         client.attach_runtime(None)
 
         # The new selection deliberately emits identical vectors. Provenance, rather
         # than numeric probe equality, must prevent reuse, including after restart.
-        configure_hermes(home, url, embedding_model="fixture-embedding-b", dimensions=DIMENSIONS)
-        wait_for(lambda: any(row.get("model") == "fixture-embedding-b" for row in audit(home)), diagnostic=diagnostic)
+        configure_embeddings(home, url, cli, model="fixture-embedding-b", dimensions=DIMENSIONS)
+        client = reopen(client)
         wait_for(lambda: client.read_source_status(SESSION).get("embedding_error") == "embedding_identity_stale",
                  diagnostic=diagnostic)
         assert query(client, "changed") == "embedding_identity_stale"
         assert marker.read_bytes() == original_marker
         assert client.deliver_source_job(job) == receipt
-        assert worker_command(worker, "stop")["registered"] is False
-        stop(client._process)
-        restarted = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
-        cleanup.callback(lambda: stop(restarted._process) if restarted._process is not None else None)
-        restarted.attach(SESSION)
-        restarted.attach_runtime(None)
-        assert worker_command(worker, "start")["registered"] is True
+        restarted = reopen(client)
         wait_for(lambda: query(restarted, "restart-stale") == "embedding_identity_stale", diagnostic=diagnostic)
         assert restarted.deliver_source_job(job) == receipt
-        configure_hermes(home, url, dimensions=DIMENSIONS)
+        configure_embeddings(home, url, cli, dimensions=DIMENSIONS)
+        restarted = reopen(restarted)
         wait_for(lambda: isinstance(query(restarted, "restored"), dict), diagnostic=diagnostic)
         assert marker.read_bytes() == original_marker
 
@@ -222,32 +258,118 @@ def test_real_hermes_hosted_inference_processing_recall_identity_and_restart(
         wait_for(lambda: isinstance(query(restarted, "new-chat-model"), dict), diagnostic=diagnostic)
         assert marker.read_bytes() == original_marker
 
-        # Authentication remains Hermes-owned. A provider-side revocation cannot
-        # fall back to a Reliquary credential, and recovery retains vector identity.
+        # Chat and embeddings have separate credentials and cannot substitute for
+        # one another. Neither revocation changes the durable vector identity.
         model["revoked"] = True
         assert isinstance(query(restarted, "revoked"), str)
         assert restarted.deliver_source_job(job) == receipt
         model["revoked"] = False
         successful_query(restarted, "renewed")
         assert marker.read_bytes() == original_marker
+        model["embedding_revoked"] = True
+        assert isinstance(query(restarted, "embedding-revoked"), str)
+        assert restarted.deliver_source_job(job) == receipt
+        model["embedding_revoked"] = False
+        successful_query(restarted, "embedding-renewed")
+
+        def source_documents():
+            # Runtime reopen performs public compatibility probes, not reindexing.
+            return [text for row in model["embedding_calls"] if row["input_type"] == "search_document"
+                    for text in row["inputs"]
+                    if any(TEXT[uid] in text for uid in ("accepted", "appended", "traveler"))]
+
+        documents = source_documents()
+        assert documents
+        rotated = "synthetic-switchboard-embedding-key-rotated"
+        model["embedding_key"] = rotated
+        configure_embeddings(home, url, cli, dimensions=DIMENSIONS, key=rotated)
+        restarted = reopen(restarted)
+        wait_for(lambda: isinstance(query(restarted, "rotated-ready"), dict), diagnostic=diagnostic)
+        successful_query(restarted, "rotated-key")
+        assert marker.read_bytes() == original_marker
+        assert source_documents() == documents
+        assert restarted.deliver_source_job(job) == receipt
+
+        # Existing vectors with no provenance marker are never silently adopted.
+        restarted = reopen(restarted, marker.unlink)
+        wait_for(lambda: query(restarted, "unbound") == "embedding_identity_unbound", diagnostic=diagnostic)
+        assert not marker.exists()
+        assert restarted.deliver_source_job(job) == receipt
+        restarted = reopen(restarted, lambda: marker.write_bytes(original_marker))
+        wait_for(lambda: isinstance(query(restarted, "marker-ready"), dict), diagnostic=diagnostic)
+        successful_query(restarted, "marker-restored")
         assert worker_command(worker, "stop")["registered"] is False
         assert isinstance(query(restarted, "no-worker"), str)
         assert worker_command(worker, "start")["registered"] is True
         wait_for(lambda: isinstance(query(restarted, "reconnected"), dict), diagnostic=diagnostic)
         assert _dashboard_status(restarted, SESSION)["accepted_source_cursor"] == job.snapshot.snapshot_digest
         assert restarted.deliver_source_job(job) == receipt
-        assert not (state / "processing.json").exists() and not list(home.rglob("*.cfg"))
+        assert json.loads((state / "processing.json").read_text(encoding="utf-8")) == {
+            "config_path": str(processing)}
+        assert EMBEDDING_KEY not in (home / ".env").read_text(encoding="utf-8")
+        assert rotated not in log.read_text(encoding="utf-8")
+        assert EMBEDDING_KEY not in native_log.read_text(encoding="utf-8", errors="replace")
+
+
+def test_embedding_routes_are_profile_local(tmp_path, binaries, inference_checkout):
+    binary, cli = binaries
+    with hosted_model(2) as (first_url, first_model), hosted_model(2) as (second_url, second_model), ExitStack() as cleanup:
+        clients, homes, workers, jobs = [], [], [], []
+        second_key = "synthetic-second-profile-embedding-key"
+        second_model["embedding_key"] = second_key
+        for index, url in enumerate((first_url, second_url)):
+            home = tmp_path / f"profile-{index}"
+            home.mkdir()
+            homes.append(home)
+            rel, phy = home / "main.rel", home / "active.phy"
+            owner(cli, "rel", rel)
+            owner(cli, "phy", phy)
+            state = home / "reliquary"
+            config(state, rel, phy, profile=PROFILE)
+            save_settings(home, {"profile_id": PROFILE, "principal_id": PRINCIPAL,
+                "main_rel": str(rel), "active_phy": str(phy), "binary": str(binary)})
+            (home / ".env").write_text(f"{TOKEN_VAR}={TOKEN}\n", encoding="utf-8")
+            if index == 0:
+                configure_embeddings(home, url, cli)
+            client = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
+            clients.append(client)
+            cleanup.callback(lambda client=client: stop(client._process) if client._process is not None else None)
+            client.attach(SESSION)
+            client.attach_runtime(None)
+            workers.append(start_hermes_worker(home, inference_checkout, url, cleanup))
+            outbox = SourceOutbox(state, PROFILE, PRINCIPAL)
+            job = _queue(outbox, ["accepted"])
+            receipt = _when_ready(client, job)
+            assert outbox.acknowledge(job, receipt)
+            jobs.append((job, receipt))
+        wait_for(lambda: clients[0].read_source_status(SESSION)["state"] == "complete")
+        successful_query(clients[0], "first-profile")
+        wait_for(lambda: clients[1].read_source_status(SESSION).get("embedding_error") == "embedding_unconfigured")
+        assert query(clients[1], "no-profile-fallback") == "embedding_unconfigured"
+        assert not second_model["embedding_calls"]
+        assert clients[1].deliver_source_job(jobs[1][0]) == jobs[1][1]
+        stop_worker_and_host(workers[1], clients[1])
+        configure_embeddings(homes[1], second_url, cli, model="second-profile-embedding", key=second_key)
+        second = HostClient(homes[1] / "reliquary", PROFILE, PRINCIPAL, TOKEN, binary=binary)
+        cleanup.callback(lambda: stop(second._process) if second._process is not None else None)
+        second.attach(SESSION)
+        second.attach_runtime(None)
+        assert worker_command(workers[1], "start")["registered"] is True
+        wait_for(lambda: second.read_source_status(SESSION)["state"] == "complete")
+        successful_query(second, "second-profile")
+        successful_query(clients[0], "first-profile-still-isolated")
+        assert {row["model"] for row in first_model["embedding_calls"]} == {"fixture-embedding"}
+        assert {row["model"] for row in second_model["embedding_calls"]} == {"second-profile-embedding"}
+        assert second.deliver_source_job(jobs[1][0]) == jobs[1][1]
 
 
 @pytest.mark.parametrize("committed_removals", [False, True], ids=["legacy", "committed"])
 def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
-        tmp_path, inference_checkout, monkeypatch, request, committed_removals):
-    value = os.environ.get("HP03_HOST_BINARY")
-    if not value:
-        pytest.skip("Set HP03_HOST_BINARY to the native host built against the pinned Core")
-    binary = Path(value).resolve(strict=True)
-    cli = os.environ.get("HP03_RELIQUARY_CLI")
+        tmp_path, binaries, inference_checkout, monkeypatch, request, committed_removals):
+    binary, cli = binaries
     if committed_removals:
+        # This regression needs the separately pinned committed-removal authority;
+        # stock 0.23.4 supplies inference but does not expose that lifecycle API.
         checkout = request.getfixturevalue("removal_checkout")
         monkeypatch.syspath_prepend(str(checkout))
         import hermes_state
@@ -317,6 +439,7 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
         return decision
 
     with hosted_model(2, perception=(source, claim), embed=embed, decide=decide) as (url, model), ExitStack() as cleanup:
+        configure_embeddings(home, url, cli)
         client = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
         cleanup.callback(lambda: stop(client._process) if client._process is not None else None)
         client.attach(SESSION)
@@ -387,11 +510,19 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
         assert after["memory_ids"] == [] and after["observations"] == [observation]
         assert sum(call["state"].get("claim") == claim for call in model["native_calls"]) == 1
 
-        model["approve_memories"] = True
-        assert query(reader, "perception-unrelated", unrelated_query) == "no_recall_results"
-        assert {claim, paraphrase, unrelated_query} <= embedded
-        mixed = successful_query(reader, "perception-mixed", paraphrase)
-        assert memory["memory_id"] in mixed["memory_ids"] and mixed["observations"] == [observation]
+        def inspect_durable_turn(uid):
+            nonlocal reader
+            # The standalone reader needs the owner lease released on Windows.
+            assert worker_command(worker, "stop")["registered"] is False
+            wait_for(lambda: not discovery.exists(), diagnostic=diagnostic)
+            turn = _turn(cli, rel, conversation, uid)
+            assert worker_command(worker, "start")["registered"] is True
+            wait_for(discovery.exists, diagnostic=diagnostic)
+            reader = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
+            reader.attach(SESSION)
+            wait_for(lambda: isinstance(query(reader, f"cli-reopen-{next(turns)}", paraphrase), dict),
+                     diagnostic=diagnostic)
+            return turn
 
         if committed_removals:
             with session_db(home / "state.db") as db:
@@ -403,7 +534,7 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
                 assert archived["observations"] == [observation]
                 assert _copied_memory_detail(reader, memory)["provenance"][0]["message_uid"] == "accepted"
                 if cli:
-                    assert _turn(cli, rel, conversation, "accepted")["availability"] == "available"
+                    assert inspect_durable_turn("accepted")["availability"] == "available"
                 assert db.set_session_archived(SESSION, False)
                 challenge_row = append_source(db, "challenge", 2)
 
@@ -443,6 +574,9 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
             # local job. Core must return the same receipt and cut.
             assert worker_command(worker, "stop")["registered"] is False
             wait_for(lambda: not discovery.exists(), diagnostic=diagnostic)
+            if cli:
+                assert _turn(cli, rel, conversation, "challenge")["content"] is None
+                assert _turn(cli, rel, conversation, "accepted")["content"] == source
             assert worker_command(worker, "start")["registered"] is True
             wait_for(discovery.exists, diagnostic=diagnostic)
             reader = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
@@ -455,9 +589,6 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
             assert outbox.next_job() is None
             _copied_memory_detail(reader, withdrawn, removed=True)
             assert _copied_memory_detail(reader, memory)["body"]["content"] == source
-            if cli:
-                assert _turn(cli, rel, conversation, "challenge")["content"] is None
-                assert _turn(cli, rel, conversation, "accepted")["content"] == source
             model["approve_memories"] = True
             retained = successful_query(reader, "perception-after-rewind", paraphrase)
             assert memory["memory_id"] in retained["memory_ids"] and challenge not in retained["context"]
@@ -473,7 +604,7 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
             fresh = wait_for(lambda: _copied_memories(reader).get("fresh"), diagnostic=diagnostic)
             assert _copied_memory_detail(reader, fresh)["provenance"][0]["message_uid"] == "fresh"
             if cli:
-                assert _turn(cli, rel, conversation, "fresh")["content"] == TEXT["fresh"]
+                assert inspect_durable_turn("fresh")["content"] == TEXT["fresh"]
 
         assert reader.prepare_retrieval(query_request("perception-before-deletion", paraphrase))
         if committed_removals:
@@ -493,10 +624,88 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
         if committed_removals:
             _copied_memory_detail(reader, memory, removed=True)
             _copied_memory_detail(reader, fresh, removed=True)
-            if cli:
-                assert all(_turn(cli, rel, conversation, uid)["content"] is None
-                           for uid in ("accepted", "appended", "challenge", "fresh"))
         assert phy.read_bytes() == phy_bytes
         assert NATIVE_DECISION_KEY not in (home / "hosted-worker.log").read_text(encoding="utf-8")
         assert worker_command(worker, "stop")["registered"] is False
         wait_for(lambda: not discovery.exists(), diagnostic=diagnostic)
+        if committed_removals and cli:
+            assert all(_turn(cli, rel, conversation, uid)["content"] is None
+                       for uid in ("accepted", "appended", "challenge", "fresh"))
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_native_active_phy_observation_uses_ordinary_mixed_recall(
+        tmp_path, stock_release_checkout, monkeypatch, pending):
+    directory = os.environ.get("HP_PHY_RECALL_FIXTURE_DIR")
+    if not directory:
+        pytest.skip("Set HP_PHY_RECALL_FIXTURE_DIR to the disposable Core mixed-recall fixture")
+    fixture = Path(directory)
+    host = os.environ.get("HP03_HOST_BINARY")
+    cli = os.environ.get("HP03_RELIQUARY_CLI")
+    if not host or not cli:
+        pytest.skip("Set HP03_HOST_BINARY and HP03_RELIQUARY_CLI for native host recall verification")
+    binary = Path(host).resolve(strict=True)
+    monkeypatch.syspath_prepend(str(stock_release_checkout))
+    rel, phy = tmp_path / "mixed.rel", tmp_path / "active.phy"
+    copyfile(fixture / "mixed.rel", rel)
+    copyfile(fixture / ("pending.phy" if pending else "current.phy"), phy)
+    home = tmp_path / "profile"
+    home.mkdir()
+    state = home / "reliquary"
+    config(state, rel, phy, profile=PROFILE)
+    save_settings(home, {"profile_id": PROFILE, "principal_id": PRINCIPAL,
+        "main_rel": str(rel), "active_phy": str(phy), "binary": str(binary)})
+    (home / ".env").write_text(f"{TOKEN_VAR}={TOKEN}\n", encoding="utf-8")
+    original_phy = sha256(phy.read_bytes()).digest()
+
+    with hosted_model(2) as (url, model), ExitStack() as cleanup:
+        configure_embeddings(home, url, Path(cli).resolve(strict=True))
+        client = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
+        cleanup.callback(lambda: stop(client._process) if client._process is not None else None)
+        client.attach(SESSION)
+        start_hermes_worker(home, stock_release_checkout, url, cleanup)
+        attempts = count()
+
+        def ordinary(limit=10):
+            request = decode(query_request(f"phy-{next(attempts)}", "needle zephyr"))
+            request["arguments"]["limit"] = limit
+            try:
+                response = client.request(canonical(request), recall_tool=True)
+            except HostUnavailable as error:
+                return str(error)
+            result = decode(response.result_json)
+            return result if response.status == "ok" else result["code"]
+
+        def recalled():
+            result = ordinary()
+            return result if isinstance(result, dict) else None
+
+        result = wait_for(recalled, diagnostic=lambda: (ordinary(), model["calls"], model["errors"], audit(home)))
+        memory_hits = [hit for hit in result["ranked"] if hit["kind"] == "memory"]
+        assert len(memory_hits) == 2, result
+        assert len({hit["owner_id"] for hit in memory_hits}) == 2
+        assert len({hit["id"] for hit in memory_hits}) == 1
+        assert len({hit["body_id"] for hit in memory_hits}) == 2
+        assert {(row["owner_id"], row["memory_id"]) for row in result["provenance"]} == {
+            (hit["owner_id"], hit["id"]) for hit in memory_hits
+        }
+        if pending:
+            assert not result.get("observations") and "Zephyr delivery was approved." not in result["context"]
+        else:
+            [claim] = result["observations"]
+            [ranked_claim] = [hit for hit in result["ranked"] if hit["kind"] == "observation"]
+            [private] = [hit for hit in memory_hits if hit["owner_id"] == claim["owner_id"]]
+            assert ranked_claim["owner_id"] == claim["owner_id"]
+            assert ranked_claim["id"] == claim["observation_id"]
+            assert all(reference["owner_id"] == private["owner_id"] for reference in claim["evidence"])
+            assert claim["claim"] == "Zephyr delivery was approved."
+        limited = ordinary(limit=1)
+        assert isinstance(limited, dict) and len(limited["ranked"]) == 1, limited
+        forged = decode(query_request("wrong-principal", "needle zephyr"))
+        forged["principal_id"] = "another-principal"
+        discovery = client._read_discovery()
+        assert discovery is not None
+        denied = decode(client._exchange(
+            discovery, "/v1/retrieval/tool", canonical(forged), monotonic() + 5))
+        assert denied["status"] == "denied" and denied["result"]["code"] == "denied"
+    assert sha256(phy.read_bytes()).digest() == original_phy

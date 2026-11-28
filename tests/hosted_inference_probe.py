@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from threading import Thread
 
-from hosted_hermes_worker import decode_hermes_sdk_request
+from hosted_hermes_worker import EMBEDDING_KEY, decode_hermes_sdk_request
 from reliquary_hermes.validation import canonical
 from test_hp04_host import _fixture_reply
 
@@ -14,18 +14,24 @@ NATIVE_DECISION_KEY = "synthetic-profile-jev-key"
 
 
 @contextmanager
-def hosted_model(dimensions, *, perception=None, embed=None, decide=None):
+def hosted_model(dimensions, *, perception=None, embed=None, decide=None, complete=None, chat=None):
     state = {"calls": [], "errors": [], "revoked": False, "large_reply": False,
-             "native_calls": [], "approve_memories": True}
+             "native_calls": [], "approve_memories": True, "embedding_calls": [],
+             "embedding_key": EMBEDDING_KEY, "embedding_revoked": False}
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             native = self.path == "/decisions"
-            key = NATIVE_DECISION_KEY if native else "synthetic-hosted-inference-key"
+            embedding = self.path == "/embedding-provider/embeddings"
+            if not (native or embedding or self.path.endswith("/chat/completions")):
+                self.send_error(404)
+                return
+            key = (NATIVE_DECISION_KEY if native else state["embedding_key"] if embedding
+                   else "synthetic-hosted-inference-key")
             if self.headers.get("Authorization") != f"Bearer {key}":
                 self.send_error(401)
                 return
-            if state["revoked"]:
+            if (state["embedding_revoked"] if embedding else state["revoked"]):
                 self.send_response(401)
                 body = b'{"error":{"message":"Synthetic credential revoked","type":"authentication_error"}}'
             else:
@@ -35,19 +41,28 @@ def hosted_model(dimensions, *, perception=None, embed=None, decide=None):
                         assert perception is not None
                         state["native_calls"].append(raw)
                         body = canonical((decide or native_reply)(raw))
+                    elif chat and self.path.endswith("/chat/completions") and not raw.get("response_format"):
+                        if not isinstance(raw.get("model"), str) or not raw.get("messages"):
+                            self.send_error(400)
+                            return
+                        state["calls"].append({"schema_name": "conversation", "model": raw["model"]})
+                        return self.conversation(raw, chat)
                     else:
-                        assert self.path.endswith(("/chat/completions", "/embeddings"))
                         request = decode_hermes_sdk_request(raw)
                         name = request.get("schema_name", "embed")
-                        state["calls"].append({"schema_name": name, "model": request["model"]})
+                        assert (name == "embed") == embedding, "completion/embedding route crossed"
                         if name == "embed":
                             assert request["dimensions"] == dimensions
+                            assert request["input_type"] in {"search_document", "search_query"}
+                            state["embedding_calls"].append(request)
                             result = {"model": request["model"], "data": [
                                 {"index": index, "embedding": (
                                     embed(text) if embed else [0.12345678901234567] * dimensions)}
                                 for index, text in enumerate(request["inputs"])]}
                         else:
-                            answer = reply(request, perception, approve_memories=state["approve_memories"])
+                            state["calls"].append({"schema_name": name, "model": request["model"]})
+                            answer = complete(request) if complete else reply(
+                                request, perception, approve_memories=state["approve_memories"])
                             result = {"choices": [{"message": {"content": json.dumps(answer)}}],
                                       "model": request["model"]}
                         body = canonical(result)
@@ -64,6 +79,30 @@ def hosted_model(dimensions, *, perception=None, embed=None, decide=None):
                 self.wfile.write(body)
             except (BrokenPipeError, ConnectionResetError):
                 pass
+
+        def conversation(self, raw, text):
+            header = {"id": "live-fixture", "created": 1, "model": raw["model"]}
+            message = {"role": "assistant", "content": text}
+            usage = {"prompt_tokens": 100, "completion_tokens": 4, "total_tokens": 104}
+            if raw.get("stream"):
+                chunks = [
+                    {**header, "object": "chat.completion.chunk",
+                     "choices": [{"index": 0, "delta": message, "finish_reason": None}]},
+                    {**header, "object": "chat.completion.chunk", "usage": usage,
+                     "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+                ]
+                data = ("".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
+                        + "data: [DONE]\n\n").encode()
+                content_type = "text/event-stream"
+            else:
+                data = canonical({**header, "object": "chat.completion", "usage": usage,
+                                  "choices": [{"index": 0, "message": message, "finish_reason": "stop"}]})
+                content_type = "application/json"
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
 
         def log_message(self, *_args):
             pass
@@ -128,7 +167,7 @@ def reply(request, perception=None, *, approve_memories=True):
         approved = [item["memory"] for item in state.get("candidates", [])
                     if approve_memories or (perception and item.get("content") == perception[1])]
         return {"version": 1, "approved": approved}
-    if name == "memory_web_audit_v2":
+    if name == "memory_web_audit_v3":
         source, claim = perception
         candidates = [{"proposition": claim, "source_slots": [row["slot"]], "participant_slots": []}
                       for row in payload["sources"] if row["kind"] == "memory" and row["text"] == source]

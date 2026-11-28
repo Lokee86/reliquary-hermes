@@ -24,6 +24,15 @@ BUNDLED_HOST_ERRORS = {
 }
 
 
+def host_environment(scratch: Path) -> dict[str, str]:
+    # The native host needs the OS credential service. Provider credentials
+    # and the rest of Hermes' environment stay in the parent process.
+    allowed = ("SystemRoot", "WINDIR", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR")
+    environment = {name: os.environ[name] for name in allowed if name in os.environ}
+    environment.update({name: str(scratch) for name in ("TEMP", "TMP", "TMPDIR")})
+    return environment
+
+
 def _at_least(version: str, minimum: tuple[int, int]) -> bool:
     try:
         return tuple(map(int, version.split(".")[:2])) >= minimum

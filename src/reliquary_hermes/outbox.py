@@ -764,6 +764,8 @@ def _snapshot_payload(snapshot):
         "source_revision": snapshot.source_revision, "snapshot_digest": snapshot.snapshot_digest,
         "availability": snapshot.availability, "messages": messages,
     }
+    if snapshot.turn_author_json is not None:
+        value["turn_author"] = decode(snapshot.turn_author_json)
     require(SourceSnapshot.parse(value) == snapshot and bool(messages), "invalid_source_snapshot")
     payload = canonical(value)
     require(len(payload) <= _MAX_SNAPSHOT_BYTES, "source_wire_limit")

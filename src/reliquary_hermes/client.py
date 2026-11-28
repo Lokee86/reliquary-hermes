@@ -12,7 +12,7 @@ import time
 from urllib.parse import urlsplit
 
 from .authority import Discovery
-from .native_host import bundle_at_launch, prune_unused_hosts
+from .native_host import bundle_at_launch, host_environment, prune_unused_hosts
 from .protocol import Request, Response
 from .setup_wire import switch_review as parse_switch_review, switch_status as parse_switch_status
 from .validation import (ContractError, MAX_WIRE_BYTES, canonical, choice, decode, digest,
@@ -113,6 +113,16 @@ class HostClient:
         """Create a fresh client sharing profile authority but no runtime lease state."""
         return HostClient(self._state_dir, self._profile_id, self._principal_id, self._token,
                           binary=self._binary)
+
+    def ego_call(self, operation: str, body: dict) -> dict:
+        discovery = self._read_discovery()
+        if discovery is None:
+            raise HostUnavailable("host_unavailable")
+        reply = self._exchange(discovery, "/v1/ego", canonical({
+            "profile_id": self._profile_id, "principal_id": self._principal_id,
+            "operation": operation, "body": body,
+        }), time.monotonic() + _CONNECT_SECONDS + _REQUEST_SECONDS)
+        return decode(reply)
 
     def _runtime_call(self, path: str, value: dict) -> dict:
         discovery = self._read_discovery()
@@ -339,8 +349,23 @@ class HostClient:
         if self._binary is None or not self._binary.is_absolute() or not self._binary.is_file():
             raise HostUnavailable("host_not_configured")
         bundle = bundle_at_launch(self._state_dir, self._binary)
-        environment = {name: os.environ[name] for name in ("SystemRoot", "WINDIR") if name in os.environ}
-        environment.update({name: str(self._state_dir) for name in ("TEMP", "TMP", "TMPDIR")})
+        environment = host_environment(self._state_dir)
+        from .capture_policy import history_supported
+        from .settings import ego_enabled, phy_perception_enabled
+        from .source_capture import turn_attribution_supported
+
+        if history_supported() and turn_attribution_supported():
+            environment["RELIQUARY_HERMES_AUTOMATIC_PHY"] = "1"
+        try:
+            if ego_enabled(self._state_dir.parent):
+                environment["RELIQUARY_HERMES_EGO"] = "1"
+        except (ContractError, OSError, ImportError, AttributeError):
+            pass
+        try:
+            if phy_perception_enabled(self._state_dir.parent):
+                environment["RELIQUARY_HERMES_PHY_PERCEPTION"] = "1"
+        except (ContractError, OSError, ImportError, AttributeError):
+            pass
         platform = ({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt"
                     else {"start_new_session": True})
         try:
@@ -537,10 +562,13 @@ class HostClient:
         try:
             result = decode(reply)
             fields = {"session_id", "state", "receipt", "import_id", "owner_id", "snapshot_digest"}
-            require(fields <= set(result) <= fields | {"embedding_error"}, "invalid_source_status")
+            require(fields <= set(result) <= fields | {"embedding_error", "diagnostic"}, "invalid_source_status")
+            if "diagnostic" in result:
+                require(result["diagnostic"] == "source_personal_attribution_unverified", "invalid_source_status")
             if result.get("embedding_error") is not None:
                 choice(result["embedding_error"], {"embedding_identity_stale", "embedding_identity_unbound",
-                    "embedding_identity_unavailable", "embedding_unavailable", "inference_unavailable", "inference_stale"})
+                    "embedding_identity_unavailable", "embedding_unconfigured", "embedding_config_invalid",
+                    "embedding_credentials_unavailable", "inference_unavailable", "inference_stale"})
             require(result["session_id"] == session and result["state"] in {
                 "none", "staged", "processing", "complete", "failed", "tombstoned", "unavailable"},
                 "invalid_source_status")
@@ -562,8 +590,9 @@ class HostClient:
         arguments = {}
         if job.kind == "snapshot":
             source = decode(job.snapshot_json)
-            view = {key: source[key] for key in
-                    ("profile_id", "session_id", "branch_id", "source_revision", "messages")}
+            from .source import source_document
+
+            view = source_document(source)
             arguments = {"snapshot_digest": job.snapshot.snapshot_digest,
                          "source_json": canonical(view).decode("utf-8")}
         elif job.kind == "terminal":

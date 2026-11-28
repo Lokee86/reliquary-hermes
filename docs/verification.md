@@ -2,6 +2,29 @@
 
 ## Purpose
 
+Record reproducible checks for the standalone provider, native host, and dashboard.
+
+## Overview
+
+### Stock Hermes native embedding target
+
+The stock smoke uses Hermes v0.23.4 at `8fc0374447313e276f6b9a2764bfc750190c966a`. It runs the real completion facade with disposable profiles, synthetic HTTP providers, and copied or fresh REL and PHY files. A signed synthetic source fixture stages a durable receipt before Switchboard is configured. The tests check processing and recall after configuration and restart, typed query and document requests, exact receipt replay, and the original identity marker after key rotation. The mismatch and unbound cases exercise the embedding owner guard. Two concurrent profiles use independent configuration files and embedding credentials. Stock can recall existing active-PHY material and assemble Ego requests. Automatic publication from a new chat waits for Hermes to supply trusted history eligibility and to include exact completed-turn attribution in the provider callback. [Host audit](host-audit.md#current-stock-hermes-target)
+
+Set `HP_INFERENCE_HERMES_CHECKOUT` to that stock checkout, `HP03_HOST_BINARY` to the rebuilt native host, and `HP03_RELIQUARY_CLI` to the CLI from the vendored Core revision, `5e33607208a48d730e706aad8a07a47f53734e48`. The CLI provisions disposable owners and configuration, and verifies Archive turns after the native host releases its writer lease. Set `HP01_HERMES_CHECKOUT` to the independent historical ABC revision for the broader Python suite. The committed rewind case uses `HP_REMOVAL_HERMES_CHECKOUT` and `PYTHONPATH` pointing at the audited transcript-removal build in a separate pytest process. [Configuration and recovery](local-service.md#native-switchboard-embedding-route)
+
+```powershell
+$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = '1'
+$env:PYTHONDONTWRITEBYTECODE = '1'
+python -B -m pytest -q --basetemp=.pytest_tmp
+cargo test --manifest-path host/Cargo.toml --locked --offline -j 1 -- --test-threads=1
+```
+
+The Windows packaging smoke exercises the source-build script and an installed host on disposable profile data. The catalog publication workflow owns exact-source verification of the four Linux and macOS binaries and their attestations. [Native release packages](#native-release-packages)
+
+### Historical evidence
+
+The following release preparation and hosted-embedding-extension results predate the stock/native split. They are retained as historical evidence, not current acceptance results or a requirement to install the Hermes embedding extension.
+
 ### Catalog release preparation, 2026-11-11
 
 The first complete Windows test compilation at `140a6356dc970dc5326af1d98cb9b01ac7efff48` passed 104 native tests, with one ignored large synthetic characterization. That native source is identical to `20d398459a91de3b67eb6cee12bd325f1a304c56`. The workflow was stopped after 40 minutes during its separate full-release recompilation; no release artifact or attestation is claimed for that run. The replacement workflow builds and tests one shared release profile at CI-only optimization level 1 with two compiler jobs, separate step limits, and cache saving after trusted failed builds. The local production source-build script retains the default full-release profile. The final artifact and attestation remain separate release gates recorded in the PR.
@@ -14,11 +37,7 @@ The first public Native host run at source commit `d04ddf716524a7028c0f7f09036ff
 
 The rights holder then approved publishing the four required Lodestone source/license files. The follow-up package includes only that subset, verifies its pinned Git blobs, records its original hashes, and changes Root to a local path dependency. Cargo metadata with `--locked --offline --no-deps` passes. Full offline dependency resolution stops on an uncached public crate; the public workflow supplies the clean native build gate. Python dependencies are declared in `plugin.yaml`, and test tooling uses `pytest.ini`. Without a root Python project, Hermes PM synthesizes a small dependency member instead of copying the nested native source tree into its Python workspace or hashing future native build caches, avoiding Windows path-length failures and unnecessary rebuilds of the Python environment.
 
-Record reproducible checks for the standalone provider and dashboard contracts.
-
-## Overview
-
-### Hosted inference migration gate
+### Historical hosted inference migration gate
 
 The upstream `ctx.llm.embed/aembed` PR is [Hermes #154202](https://github.com/NousResearch/hermes-agent/pull/154202), pinned at `168a923023a7018be3dbf66530531dd20b1834b9`. Its facade/transport tests passed 83 cases, plugin task/picker tests passed 47, and auxiliary-client/credential regression tests passed 229 (359 distinct tests). All 16 Hermes repository checks passed. Tests use synthetic loopback providers and isolated profile credentials; no live provider or Memory corpus was probed.
 
@@ -67,9 +86,25 @@ The paraphrase case pairs `Deployment follows golden procedures.` with `The Lant
 
 The updated Windows fixture passed in 55.02 seconds with Core `8d0b432dafc023b31dade2c06c46b75c1ab266bf` and Hermes `168a923023a7018be3dbf66530531dd20b1834b9`. The same run completed review after a fresh host start, preserved the delayed `source_terminal` disclosure fence, and confirmed the disposable PHY bytes matched. The run log is `.test-temp/native-jev-paraphrase-review-distinct.log`.
 
-For the real inference fixture, set `HP_INFERENCE_HERMES_CHECKOUT` to the exact upstream inference revision. Keep `HP01_HERMES_CHECKOUT` on the independent audited history/ABC baseline. Use a disposable patched Hermes history checkout for `HU08_HERMES_INSTALLED_CHECKOUT`; never use a live profile as test state. Set `HP03_HOST_BINARY` and `HP03_RELIQUARY_CLI` to binaries built against the same isolated Root source. All temporary owner copies, logs, and caches stay in the worktrees; pytest uses `.pytest/_tmp`.
+For the historical extension-era inference fixture, set `HP_INFERENCE_HERMES_CHECKOUT` to its exact inference revision. Keep `HP01_HERMES_CHECKOUT` on the independent audited history/ABC baseline. Use a disposable patched Hermes history checkout for `HU08_HERMES_INSTALLED_CHECKOUT`; never use a live profile as test state. Set `HP03_HOST_BINARY` and `HP03_RELIQUARY_CLI` to binaries built against the same isolated Root source. These are historical fixture requirements, not the stock/native acceptance matrix above. Keep all temporary owner copies, logs, and caches in the assigned worktree; current pytest runs use `.pytest_tmp`.
 
 HP01 verifies the pinned Hermes interfaces and the Python provider, owner routing and copied-source fixtures. HP02 verifies the selected-return bridge, copied-source import and dashboard product operations through the public Root API.
+
+The signed `test_native_active_phy_observation_uses_ordinary_mixed_recall` process cases use `HP03_HOST_BINARY`, `HP03_RELIQUARY_CLI`, `EGO_STOCK_HERMES_CHECKOUT` and `HP_PHY_RECALL_FIXTURE_DIR`. Generate `mixed.rel`, `current.phy` and `pending.phy` with the Core scoped recall test by setting its `RELIQUARY_TEST_SCOPED_RECALL_FIXTURE_DIR`. Run `python -B -m pytest -q --basetemp=.pytest_tmp tests/test_hosted_inference_e2e.py -k active_phy_observation`. The cases use copies of both owners. They cover the ordinary signed query, a shared limit, duplicate Memory IDs with exact owner-qualified bodies, pending claim withholding, and principal denial. The Rust registry test exercises the old turn fence when only the PHY changes.
+
+With Core `da03bac76282152e778f52403b51cd103217d68c` and the audited Hermes SDK, both signed cases passed in 18.79 seconds. The focused registry switch test, all four selected-return cases, all three copied-source cases, and 127 Python protocol and client tests passed. The signed cases also confirmed byte-for-byte preservation of the read-only active PHY.
+
+## Automatic personal-memory publication
+
+Run `tests/test_automatic_phy_memory.py` with `HP03_HOST_BINARY`, `HP03_RELIQUARY_CLI` and `HP_INFERENCE_HERMES_CHECKOUT`. The signed switch case stages a receipt before configuring its native embedding route. The signed tests use disposable REL and PHY files and deterministic structured model responses. They cover delivery after a switch, restart between staging and processing, mixed recall after another chat attaches, stable IDs, and explicit holds for unknown, bot and foreign authors.
+
+Set `HP_PHY_ATTRIBUTION_HERMES_CHECKOUT` to a disposable Hermes `168a923023a7018be3dbf66530531dd20b1834b9` checkout with the [completed-turn attribution patch](../patches/hermes-168a923-copied-turn-attribution.patch) applied. The patch includes trusted history export for this revision. The ordinary-chat test removes the minimum-version field from its copied fixture manifest to load the older capability checkout. It installs the provider in a disposable profile and sends a real Hermes CLI chat through a loopback model. It verifies signed recall of both Memories and their source principal without manually enqueuing a copied snapshot.
+
+All seven cases passed on Windows with the pinned Core and patched Hermes SDK. The ordinary chat filed the Lantern checklist in the REL and the peppermint tea preference in the registered PHY, then returned both through signed recall. The same suite recovered the accepted PHY and the exact Memory IDs after restart and verified the inactive PHY bytes. The patched Hermes provider, canonical creation, reset fencing and peer attribution tests passed 102 cases.
+
+The matched Windows integration suite passed 473 Python tests with 11 platform or fixture skips. The locked native host suite passed 132 tests with its existing scale characterization ignored. A separate run on the pinned Hermes removal checkout passed both committed-source removal and signed Perception replay checks. The loopback fixture answers the Memory Web audit v3 contract used by the current Core. The standalone CLI checks run after the service releases the REL writer lease and inspect the durable Archive at each cut.
+
+The pinned Core passed 915 workspace tests, 38 detached CLI and consumer tests, and the 48-turn G4 fresh-process acceptance. The exact production dependency graph, semantic architecture policy and documentation gates passed. The semantic gate also detected the deliberately forbidden Gateway-to-Application dependency in its negative control.
 
 ## Standalone checks
 
@@ -80,11 +115,11 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 $env:PYTHONDONTWRITEBYTECODE='1'
 $env:HP01_HERMES_CHECKOUT='C:\!bin\workspace\hermes-agent-reliquary-hp01-v023'
 $env:PYTHONPATH=$env:HP01_HERMES_CHECKOUT
-python -B -m pytest -q --basetemp .pytest/_tmp
+python -B -m pytest -q --basetemp=.pytest_tmp
 git diff --check
 ```
 
-The checkout must be at the exact SHA in [host audit](host-audit.md). It supplies `agent.memory_provider` during test collection. Without `HP01_HERMES_CHECKOUT`, checkout-based probes skip explicitly. The Python suite uses deterministic inputs and keeps pytest state in this worktree. The shared documentation checker and commit comparison commands are in the [documentation policy](documentation-policy.md).
+The historical HP01 checkout in this example uses v0.23.0 and supplies `agent.memory_provider` during test collection. Without `HP01_HERMES_CHECKOUT`, checkout-based probes skip explicitly. The Python suite uses deterministic inputs and keeps pytest state in this worktree. Run the stock/native gate above separately on Hermes v0.23.4. [Host audit](host-audit.md) · [Documentation checker and commit comparison](documentation-policy.md)
 
 ## Scope-free REL setup and restart
 
@@ -765,6 +800,11 @@ This receipt does not establish that an already-open Desktop process reloaded th
 The installed directory plugin ran in an isolated, already configured Windows profile using Hermes `168a923023a7018be3dbf66530531dd20b1834b9` with the repository's Desktop byte bridge and Electron 44.9.3. On a fresh host start, it opened copies of the same 28-day graph snapshot used in the Web receipt above. The initial frame had 2,191 expected, resident and drawn nodes in all 13 node chunks, with zero downsampling. A pointer click on a hovered node opened the matching Memory ID with its body and History in the Inspector. Both owners and their copies retained their input checksums.
 
 The previous eight-request client could saturate the host's two ordinary request slots. The renderer now issues at most two chunk requests at once. The Python bridge retries signed, retryable backpressure responses within the original request deadline. Desktop gives the initial owner binding request time to finish a native open. The test installed the nested provider and generated Desktop bundle together. The opt-in `fullGraph` fixture in `desktop/tests/live-smoke.mjs` checks the initial draw counts and matches the clicked Memory to the hover tooltip. The pinned Python run passed 420 tests with 31 optional platform and process cases skipped. Dashboard typechecking, all 26 Node tests and the shared Web/Desktop build passed. Local evidence is under `C:/!bin/workspace-data/reliquary-verification-2026-11-20/desktop`.
+
+## Ego
+
+The focused stock fixture runs the normal agent against a loopback Chat Completions stub. It checks directory-plugin and MemoryProvider discovery, leading Identity replacement, the preserved prompt suffix and user message, single insertion of Pins and summaries, legacy notes exclusion, and prefix-mismatch fallback. Set `EGO_STOCK_HERMES_CHECKOUT` to a clean v0.23.4 or v0.23.5 checkout. The native case uses `EGO_HOST_BINARY`, `HP03_RELIQUARY_CLI`, and copies of `EGO_FIXTURE_REL` and `EGO_FIXTURE_PHY`. It processes a separate synthetic source through stock Hermes completions and a dedicated native Switchboard embedding endpoint, then checks ordinary recall alongside Ego. It also checks the capture hold when the stock release lacks the trusted history and exact-turn capabilities. Passing probes save their original messages and outgoing requests in `ego-wire-capture.json` inside the disposable profile. The registry test exercises revision-bound Identity approval, priority-only Pin changes and writable-PHY switch admission.
+
 
 ## Related docs
 

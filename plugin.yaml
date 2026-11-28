@@ -1,9 +1,9 @@
 name: reliquary
-version: "0.3.4"
-description: "Local Reliquary memory and source provenance with Hermes-owned inference and an interactive relationship graph."
+version: "0.3.5"
+description: "Local Reliquary memory and source provenance with Hermes completions, Reliquary embeddings, and an interactive relationship graph."
 author: Lokee86
-kind: exclusive
-requires_hermes: ">=0.23.0"
+kind: standalone
+requires_hermes: ">=0.23.4"
 python_dependencies:
   - "jsonschema>=4,<5"
 provides_tools: []

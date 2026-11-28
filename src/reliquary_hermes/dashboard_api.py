@@ -33,6 +33,10 @@ _SETUP_ERRORS = {
     "unsupported_bundled_host": (503, "runtime_unavailable"),
     "missing_bundled_host": (503, "runtime_unavailable"),
     "preflight_unavailable": (503, "preflight_unavailable"),
+    "embedding_path_outside_profile": (400, "embedding_path_outside_profile"),
+    "embedding_unconfigured": (422, "embedding_unconfigured"),
+    "embedding_config_invalid": (422, "embedding_config_invalid"),
+    "embedding_credentials_unavailable": (422, "embedding_credentials_unavailable"),
     "service_restart_required": (409, "service_restart_required"),
     "source_capture_setup_required": (503, "source_capture_setup_required"),
     "managed_setup": (403, "managed_setup"),
@@ -385,7 +389,7 @@ async def _setup_request(request: Request, operation: str, *read_args):
     home = _host_home(request)
     args = (home, *read_args)
     kwargs = {}
-    if operation in {"validate", "apply", "create"}:
+    if operation in {"validate", "apply", "create", "configure_embedding"}:
         if not _same_origin(request):
             raise HTTPException(status_code=403, detail="same_origin_required")
         content_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
@@ -393,13 +397,16 @@ async def _setup_request(request: Request, operation: str, *read_args):
             raise HTTPException(status_code=415, detail="setup_json_required")
         try:
             candidate = decode(await _read_bounded_body(request, limit=_SETUP_BODY_BYTES, error="setup_request_too_large"))
-            if operation != "create":
+            if operation in {"validate", "apply"}:
                 fields = _SETUP_FIELDS | {"switch_review"} if operation == "apply" else _SETUP_FIELDS
                 require(set(candidate) <= fields, "invalid_setup_candidate")
+            elif operation == "configure_embedding":
+                require(set(candidate) == {"config_path"}, "invalid_setup_candidate")
         except ContractError:
             raise HTTPException(status_code=400, detail="invalid_setup_request") from None
         args = (home, candidate)
-        kwargs = {} if operation == "create" else {"project_aware": True}
+        if operation in {"validate", "apply"}:
+            kwargs = {"project_aware": True}
 
     try:
         from . import setup
@@ -452,6 +459,11 @@ async def setup_pick_path(request: Request):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/setup-v1/embedding")
+async def setup_embedding(request: Request):
+    return await _setup_request(request, "configure_embedding")
+
+
 @router.post("/setup-v1/create")
 async def setup_create(request: Request):
     return await _setup_request(request, "create")
@@ -498,6 +510,51 @@ async def graph_render_v1(request: Request, operation: str):
         raise HTTPException(status_code=503, detail="graph_unavailable") from None
     media = "application/octet-stream" if operation in BINARY_OPERATIONS else "application/json"
     return Response(result, media_type=media, headers={"Cache-Control": "no-store"})
+
+
+_EGO_READS = {"status", "pins", "identities", "summary"}
+_EGO_WRITES = {"pin_create", "pin_modify", "pin_delete", "identity_create",
+               "identity_edit", "identity_select", "summary_edit"}
+
+
+@router.post("/ego-v1/{operation}")
+async def ego_v1(request: Request, operation: str):
+    """Use the existing profile and same-origin/native Inspector admission for Ego."""
+    _require_hermes_auth(request, "dashboard_admission_failed")
+    home = _host_home(request)
+    if operation not in _EGO_READS | _EGO_WRITES:
+        raise HTTPException(status_code=404, detail="ego_operation_unavailable")
+    writable = _same_origin(request)
+    if operation in _EGO_WRITES and not writable:
+        raise HTTPException(status_code=403, detail="same_origin_required")
+    content_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
+    if content_type != "application/json":
+        raise HTTPException(status_code=415, detail="ego_json_required")
+    try:
+        arguments = decode(await _read_bounded_body(request, limit=64 << 10,
+                                                    error="ego_request_too_large"))
+        require(type(arguments) is dict, "invalid_ego_request")
+    except ContractError:
+        raise HTTPException(status_code=400, detail="invalid_ego_request") from None
+
+    def execute():
+        settings = read_settings(home)
+        client = HostClient(settings.state_dir, settings.profile_id, settings.principal_id, read_token(home))
+        return client.ego_call(operation, arguments)
+
+    try:
+        result = await run_in_threadpool(execute)
+    except HostUnavailable as error:
+        status = {"host_denied": 403, "host_conflict": 409, "host_invalid": 400}.get(str(error), 503)
+        raise HTTPException(status_code=status, detail={
+            400: "invalid_ego_request", 403: "ego_scope_denied",
+            409: "ego_revision_changed", 503: "ego_unavailable",
+        }[status]) from None
+    except (ContractError, OSError):
+        raise HTTPException(status_code=503, detail="ego_unavailable") from None
+    if operation == "status":
+        result["writable"] = bool(result["enabled"] and writable)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/dashboard-v1")

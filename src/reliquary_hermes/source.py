@@ -6,6 +6,15 @@ from typing import Any
 from .validation import choice, content_digest, digest, identifier, obj, require, sequence, text
 
 
+def source_document(value):
+    """Return the source fields signed by the outbox digest."""
+    view = {key: value[key] for key in ("profile_id", "session_id", "branch_id",
+                                         "source_revision", "messages")}
+    if "turn_author" in value:
+        view["turn_author"] = value["turn_author"]
+    return view
+
+
 @dataclass(frozen=True)
 class SourceSnapshot:
     """Untrusted shape-checked snapshot candidate, not verified Hermes provenance.
@@ -20,12 +29,16 @@ class SourceSnapshot:
     snapshot_digest: str
     messages_json: bytes
     availability: str
+    turn_author_json: bytes | None = None
 
     @classmethod
     def parse(cls, value: Any) -> "SourceSnapshot":
         from .validation import canonical
-        v = obj(value, {"authority", "profile_id", "session_id", "branch_id", "source_revision",
-                        "snapshot_digest", "availability", "messages"})
+        fields = {"authority", "profile_id", "session_id", "branch_id", "source_revision",
+                  "snapshot_digest", "availability", "messages"}
+        if type(value) is dict and "turn_author" in value:
+            fields.add("turn_author")
+        v = obj(value, fields)
         require(v["authority"] == "hermes_source_copied_snapshot", "invalid_authority")
         profile, session = identifier(v["profile_id"]), identifier(v["session_id"])
         branch = None if v["branch_id"] is None else identifier(v["branch_id"])
@@ -48,11 +61,24 @@ class SourceSnapshot:
             if a["id"] is not None:
                 identifier(a["id"])
             require(type(a["is_bot"]) is bool or a["is_bot"] is None, "invalid_actor")
-        expected = content_digest({"profile_id": profile, "session_id": session, "branch_id": branch,
-                                   "source_revision": revision, "messages": messages})
+        turn_author = None
+        if "turn_author" in v:
+            witness = obj(v["turn_author"], {"message_uid", "id", "is_bot", "profile_owner"})
+            uid = identifier(witness["message_uid"])
+            require(any(m["message_uid"] == uid and m["role"] == "user" for m in messages),
+                    "invalid_turn_author")
+            if witness["id"] is not None:
+                identifier(witness["id"])
+            require(type(witness["profile_owner"]) is bool
+                    and (witness["is_bot"] is None or type(witness["is_bot"]) is bool)
+                    and (not witness["profile_owner"]
+                         or (witness["id"] is not None and witness["is_bot"] is False)),
+                    "invalid_turn_author")
+            turn_author = canonical(witness)
+        expected = content_digest(source_document(v))
         require(digest(v["snapshot_digest"]) == expected, "source_digest_mismatch")
         require(availability == "current" or not messages, "unavailable_source_content")
-        return cls(profile, session, branch, revision, expected, canonical(messages), availability)
+        return cls(profile, session, branch, revision, expected, canonical(messages), availability, turn_author)
 
     def require_current(self) -> None:
         """Check the claimed state only; this does not authenticate current source data."""

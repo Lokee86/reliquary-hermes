@@ -2,14 +2,14 @@
 
 ## Purpose
 
-This source-only snapshot pins Reliquary Core v0.2.2 at `9961f1bc1677b64f3ed97d608387aa3927093497`.
+This source-only snapshot pins Reliquary Core at `5e33607208a48d730e706aad8a07a47f53734e48`.
 The Hermes host uses the public `reliquary-memory` API for leased owner mounts.
 Core restores verified REL checkpoints, replays recent writes, and reads older history on demand.
-This revision includes same-REL Perception, hosted native decision binding, and typed Observation recall through shared hybrid retrieval, durable source deletion and rewind, and paged initial auditing with the version 1 progress record.
+This revision includes same-REL Perception, hosted native decision binding, and typed Observation recall through shared hybrid retrieval, durable source deletion and rewind, Ego package and controls, and paged initial auditing. The active PHY supports native verified claims, retained history and joint ordinary recall with REL owners. Automatic copied-source staging seals the original PHY, preserves trusted per-turn attribution through routed Insomnia publication, and settles the personal Memories for ordinary recall.
 
 ## Overview
 
-The snapshot contains 822 files from the pinned Core revision. It includes the Cargo workspace and lock,
+The snapshot contains 863 files from the pinned Core revision. It includes the Cargo workspace and lock,
 Rust sources and tests, the referenced G4 fixture, the MPL 2.0 license, and the pinned Quinn source and licenses.
 
 Cargo resolves `lodestone-core` and `lodestone-packed` at the public Git pin

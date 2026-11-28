@@ -1,6 +1,7 @@
 //! One profile-scoped local service and its owner registry.
 use crate::{
     embedding_binding::EmbeddingBindingStore,
+    embedding_route::EmbeddingRoute,
     graph_render_host::GraphRenderHost,
     hosted_inference::{Broker, IDENTITY, WORKER_ERROR},
     registry::{
@@ -9,7 +10,7 @@ use crate::{
     retrieval::RetrievalService,
     runtime::{HEARTBEAT_SECONDS, ReconciliationScope, RuntimeRegistry},
     service_http::{
-        ATTACH, DASHBOARD_READ, DASHBOARD_TOPOLOGY, FORBIDDEN, GRAPH_RENDER_EDGE_CHUNK,
+        ATTACH, DASHBOARD_READ, DASHBOARD_TOPOLOGY, EGO, FORBIDDEN, GRAPH_RENDER_EDGE_CHUNK,
         GRAPH_RENDER_ELIGIBLE, GRAPH_RENDER_INSPECT, GRAPH_RENDER_LOCATE,
         GRAPH_RENDER_NEIGHBORHOOD, GRAPH_RENDER_NODE_CHUNK, GRAPH_RENDER_PREPARE,
         GRAPH_RENDER_RESOLVE, HttpError, HttpRequest, HttpResponse, INVALID, MAX_WIRE_BYTES,
@@ -76,7 +77,8 @@ struct Service {
     deferred_invalidations: Mutex<BTreeSet<String>>,
     inference: Broker,
     runtime_binding: Mutex<()>,
-    embedding_bindings: EmbeddingBindingStore,
+    embedding: Result<EmbeddingRoute, &'static str>,
+    embedding_bindings: Arc<EmbeddingBindingStore>,
     blocking_workers: AtomicUsize,
     runtimes: Mutex<RuntimeRegistry>,
     closing: AtomicBool,
@@ -87,13 +89,50 @@ struct Service {
 }
 
 impl Service {
+    fn inference_unavailable_code(&self) -> Option<&'static str> {
+        self.embedding
+            .as_ref()
+            .err()
+            .copied()
+            .or_else(|| self.inference.unavailable_code())
+    }
+
+    fn ensure_source_embedding_owners(
+        &self,
+        instance: &Instance,
+        registry: &Registry,
+        owner: OwnerId,
+        destination: Option<OwnerId>,
+    ) -> Result<(), HttpError> {
+        self.ensure_embedding_owner(instance, owner)?;
+        if let Some(phy) = destination {
+            let processor = registry
+                .source_processor()
+                .filter(|_| registry.active_phy() == phy)
+                .ok_or_else(|| HttpError::new(409, "source_phy_inactive", true))?;
+            self.ensure_embedding_owner(processor, phy)?;
+        }
+        Ok(())
+    }
+
+    fn admit_phy_perception_embeddings(&self, registry: &Registry) {
+        if let Some(actor) = registry.phy_perception_actor() {
+            // The owner guard keeps the worker idle if old vectors have no
+            // binding or the active route disagrees with its durable marker.
+            let _ = self.ensure_embedding_owner(actor, registry.active_phy());
+        }
+    }
+
     fn ensure_embedding_owner(&self, instance: &Instance, owner: OwnerId) -> Result<(), HttpError> {
-        let identity = self
-            .inference
-            .embedding_binding()
+        if let Some(code) = self.inference_unavailable_code() {
+            return Err(HttpError::new(503, code, true));
+        }
+        let route = self
+            .embedding
+            .as_ref()
             .map_err(|code| HttpError::new(503, code, true))?;
         self.embedding_bindings
-            .ensure_owner(owner, &identity, || {
+            .ensure_owner(owner, &route.binding, || {
                 instance.has_active_vectors(owner).map_err(|_| ())
             })
             .map_err(|code| HttpError::new(503, code, true))
@@ -196,19 +235,27 @@ impl Service {
                 let (response, ()) = bind_identity_runtime(
                     &self.runtime_binding,
                     &self.inference,
+                    self.embedding.as_ref().ok(),
                     &request.body,
                     &self.discovery.profile_id,
                     &self.discovery.instance_id,
                     &self.discovery.lease_id,
                     |runtime, epoch| {
-                        self.registry
-                            .lock()
-                            .map_err(|_| UNAVAILABLE)?
+                        let Some(runtime) = runtime else {
+                            return Ok(());
+                        };
+                        let mut registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
+                        self.admit_phy_perception_embeddings(&registry);
+                        registry
+                            .set_ego_runtime(Some((epoch, Arc::clone(&runtime))))
+                            .map_err(attach_error)?;
+                        registry
                             .set_perception_runtime(
                                 (self.inference.native_epoch() == Some(epoch))
                                     .then(|| (epoch, Arc::clone(&runtime))),
                             )
                             .map_err(attach_error)?;
+                        drop(registry);
                         self.sources
                             .lock()
                             .map_err(|_| UNAVAILABLE)?
@@ -221,8 +268,9 @@ impl Service {
                         let mut sources = self.sources.lock().map_err(|_| UNAVAILABLE)?;
                         let mut runtimes = self.runtimes.lock().map_err(|_| UNAVAILABLE)?;
                         let instance = registry.instance().map_err(attach_error)?;
-                        sources.resume_all(&instance, &registry, &mut runtimes, |owner| {
-                            self.ensure_embedding_owner(&instance, owner).is_ok()
+                        sources.resume_all(&instance, &registry, &mut runtimes, |owner, phy| {
+                            self.ensure_source_embedding_owners(&instance, &registry, owner, phy)
+                                .is_ok()
                         })?;
                         Ok(())
                     },
@@ -242,9 +290,9 @@ impl Service {
                 &self.discovery.lease_id,
             )?;
             if request.path == WORKER_ERROR {
-                self.registry
-                    .lock()
-                    .map_err(|_| UNAVAILABLE)?
+                let mut registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
+                registry.set_ego_runtime(None).map_err(attach_error)?;
+                registry
                     .set_perception_runtime(None)
                     .map_err(attach_error)?;
             }
@@ -269,6 +317,12 @@ impl Service {
         let instance = &current;
         match request.path {
             ATTACH => self.attach(instance, &request.body),
+            EGO => {
+                let mut registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
+                crate::ego::execute(&mut registry, &request.body)
+                    .map(HttpResponse::ok)
+                    .map_err(attach_error)
+            }
             SOURCE => self.source(instance, &request.body),
             SOURCE_STATUS => self.source_status(instance, &request.body),
             DASHBOARD_READ => crate::dashboard::read(
@@ -341,6 +395,7 @@ impl Service {
                 let before = registry.switch_status().map_err(attach_error)?.generation;
                 let applied = registry.apply_switch(review).map_err(attach_error)?;
                 if before != applied.generation {
+                    self.admit_phy_perception_embeddings(&registry);
                     recall.invalidate_owner_bindings();
                     *graph = GraphRenderHost::default();
                 }
@@ -541,8 +596,9 @@ impl Service {
             .bind_session(&request.session_id, request.project_id.as_deref())
             .map_err(attach_error)?;
         if let Ok(mut sources) = self.sources.try_lock() {
-            sources.resume(instance, &registry, &request.session_id, |owner| {
-                self.ensure_embedding_owner(instance, owner).is_ok()
+            sources.resume(instance, &registry, &request.session_id, |owner, phy| {
+                self.ensure_source_embedding_owners(instance, &registry, owner, phy)
+                    .is_ok()
             });
         }
         Ok(HttpResponse::ok(json!({
@@ -580,15 +636,14 @@ impl Service {
             .and_then(|value| value.parse::<reliquary_memory::OwnerId>().ok());
         let embedding_error = match owner {
             Some(owner) if status["state"] != "tombstoned" && status["state"] != "none" => {
-                match self.inference.embedding_binding() {
-                    Err(code) => Some(code),
-                    Ok(identity) => self
-                        .embedding_bindings
-                        .status_owner(owner, &identity, || {
+                self.inference_unavailable_code().or_else(|| {
+                    let route = self.embedding.as_ref().ok()?;
+                    self.embedding_bindings
+                        .status_owner(owner, &route.binding, || {
                             instance.has_active_vectors(owner).map_err(|_| ())
                         })
-                        .unwrap_or(Some("embedding_identity_unavailable")),
-                }
+                        .unwrap_or(Some("embedding_identity_unavailable"))
+                })
             }
             _ => None,
         };
@@ -620,6 +675,10 @@ impl Service {
                 .unwrap_or_else(|| registry.legacy_phy())
         } else if request.operation.is_manual() {
             expected_phy.unwrap_or_else(|| registry.legacy_phy())
+        } else if request.operation == SourceAction::Snapshot {
+            registry
+                .session_phy(&request.session_id)
+                .map_err(attach_error)?
         } else {
             registry.active_phy()
         };
@@ -697,9 +756,16 @@ impl Service {
         let invalidate_retrieval = !request.operation.is_snapshot();
         let reconcile = request.fence_epoch.is_some();
         let session_id = request.session_id.clone();
-        let binding = SourceBinding { rel: owner, phy };
-        let response = sources.handle(instance, binding, request, fenced, || {
-            self.ensure_embedding_owner(instance, owner)
+        let binding = SourceBinding {
+            rel: owner,
+            phy,
+            processor: registry.source_processor(),
+            admitted_capture: request.operation == SourceAction::Snapshot
+                && request.lease_id.is_some(),
+        };
+        let response = sources.handle(instance, binding, request, fenced, |owner, phy| {
+            self.ensure_source_embedding_owners(instance, &registry, owner, phy)
+                .is_ok()
         });
         if reconcile && response.is_ok() && eligible_epoch.is_some() {
             runtimes
@@ -737,20 +803,18 @@ impl Service {
         {
             return Err(FORBIDDEN);
         }
-        if let Some(code) = self.inference.unavailable_code() {
-            return Err(HttpError::new(503, code, true));
-        }
         let registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
         let owner = registry
             .source_owner(&request.session_id, true)
             .map_err(attach_error)?;
+        let phy = registry.active_phy_recall();
         drop(registry);
         self.ensure_embedding_owner(instance, owner)?;
         let permit = RetrievalPermit::acquire(&self.retrieval_busy).ok_or(RETRIEVAL_BUSY)?;
         let mut slot = self.retrieval.try_lock().map_err(|_| UNAVAILABLE)?;
         let mut work = slot.take_for_work();
         drop(slot);
-        let response = work.prepare(&request, bytes, instance, owner);
+        let response = work.prepare(&request, bytes, instance, owner, phy);
         self.restore_retrieval(instance, work)?;
         drop(permit);
         response
@@ -818,9 +882,6 @@ impl Service {
                     request.error("unavailable", "source_ingest_unavailable", false)
                 }
                 Operation::MemoryQuery | Operation::RefineQuery | Operation::TraverseGraph => {
-                    if let Some(code) = self.inference.unavailable_code() {
-                        return Ok(HttpResponse::ok(request.error("unavailable", code, true)));
-                    }
                     let owner = match registry.source_owner(&request.session_id, true) {
                         Ok(owner) => owner,
                         Err(error) => {
@@ -831,6 +892,7 @@ impl Service {
                             )));
                         }
                     };
+                    let phy = registry.active_phy_recall();
                     drop(registry);
                     if let Err(error) = self.ensure_embedding_owner(instance, owner) {
                         return Ok(HttpResponse::ok(request.error(
@@ -871,6 +933,7 @@ impl Service {
                         instance,
                         &self.registry,
                         owner,
+                        phy,
                         &self.sources,
                         &self.runtimes,
                         retrieval_deadline,
@@ -924,15 +987,19 @@ pub(crate) fn setup_status(state_dir: &Path) -> Result<(), &'static str> {
 fn bind_identity_runtime<T>(
     gate: &Mutex<()>,
     broker: &Broker,
+    embedding: Option<&EmbeddingRoute>,
     body: &[u8],
     profile: &str,
     instance: &str,
     lease: &str,
-    install: impl FnOnce(Arc<reliquary_memory::ConfiguredRuntime>, u64) -> Result<T, HttpError>,
+    install: impl FnOnce(Option<Arc<reliquary_memory::ConfiguredRuntime>>, u64) -> Result<T, HttpError>,
 ) -> Result<(HttpResponse, T), HttpError> {
     let _gate = gate.lock().map_err(|_| UNAVAILABLE)?;
     let response = broker.handle(IDENTITY, body, profile, instance, lease)?;
-    let runtime = broker.bind_runtime().map_err(|_| UNAVAILABLE)?;
+    let runtime = embedding
+        .map(|route| broker.bind_runtime(route))
+        .transpose()
+        .map_err(|_| UNAVAILABLE)?;
     let epoch = match &response.body {
         crate::service_http::ResponseBody::Json { value, .. } => {
             value["lease_epoch"].as_u64().ok_or(UNAVAILABLE)?
@@ -1026,6 +1093,7 @@ mod admission_tests {
             bind_identity_runtime(
                 &first_gate,
                 &first_broker,
+                None,
                 &serde_json::to_vec(&body).unwrap(),
                 "profile-one",
                 "instance-one",
@@ -1052,6 +1120,7 @@ mod admission_tests {
             bind_identity_runtime(
                 &second_gate,
                 &second_broker,
+                None,
                 &serde_json::to_vec(&body).unwrap(),
                 "profile-one",
                 "instance-one",
@@ -1082,14 +1151,8 @@ mod admission_tests {
             "profile_id": "profile-one",
             "instance_id": "instance-one",
             "service_lease_id": "lease-one",
-            "general": {"provider": "openai-api", "model": generation_model},
-            "embedding": {
-                "provider": "openai-api",
-                "model": "text-embedding-3-small",
-                "dimensions": 3,
-                "input_type_handling": "shared",
-                "normalization": "none"
-            }
+            "protocol_version": crate::hosted_inference::WORKER_PROTOCOL_VERSION,
+            "general": {"provider": "openai-api", "model": generation_model}
         })
     }
 }
@@ -1130,7 +1193,7 @@ fn runtime_error(code: &'static str) -> HttpError {
     }
 }
 
-fn read_bounded(reader: impl Read, limit: usize) -> Result<Vec<u8>, &'static str> {
+pub(crate) fn read_bounded(reader: impl Read, limit: usize) -> Result<Vec<u8>, &'static str> {
     let mut bytes = Vec::new();
     reader
         .take(limit as u64 + 1)
@@ -1227,6 +1290,17 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
     );
     let runtimes = RuntimeRegistry::open(state_dir)?;
     let sources = SourceService::open(state_dir)?;
+    let embedding = EmbeddingRoute::for_profile(state_dir);
+    let embedding_bindings = Arc::new(EmbeddingBindingStore::open(state_dir)?);
+    let perception_bindings = Arc::clone(&embedding_bindings);
+    let perception_binding = embedding.as_ref().ok().map(|route| route.binding.clone());
+    registry
+        .set_perception_owner_guard(Arc::new(move |owner| {
+            perception_binding
+                .as_ref()
+                .is_some_and(|binding| perception_bindings.matches_owner(owner, binding))
+        }))
+        .map_err(|error| error.code())?;
     let service = Arc::new(Service {
         expected_host,
         discovery,
@@ -1242,7 +1316,8 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
         deferred_invalidations: Mutex::new(BTreeSet::new()),
         inference: Broker::new(),
         runtime_binding: Mutex::new(()),
-        embedding_bindings: EmbeddingBindingStore::open(state_dir)?,
+        embedding,
+        embedding_bindings,
         blocking_workers: AtomicUsize::new(0),
         runtimes: Mutex::new(runtimes),
         closing: AtomicBool::new(false),
@@ -1285,6 +1360,7 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
             && service.inference.native_epoch().is_none()
             && let Ok(mut registry) = service.registry.try_lock()
         {
+            let _ = registry.set_ego_runtime(None);
             let _ = registry.set_perception_runtime(None);
         }
         // Expiry is a liveness event, not an idle-time event. Persist fences
@@ -1302,8 +1378,10 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
                 && let Ok(mut sources) = service.sources.try_lock()
                 && let Ok(mut runtimes) = service.runtimes.try_lock()
             {
-                let _ = sources.resume_all(&instance, &registry, &mut runtimes, |owner| {
-                    service.ensure_embedding_owner(&instance, owner).is_ok()
+                let _ = sources.resume_all(&instance, &registry, &mut runtimes, |owner, phy| {
+                    service
+                        .ensure_source_embedding_owners(&instance, &registry, owner, phy)
+                        .is_ok()
                 });
             }
             next_source_resume = Instant::now() + Duration::from_secs(5);
@@ -1347,6 +1425,7 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
     }
     service.inference.stop();
     if let Ok(mut registry) = service.registry.lock() {
+        let _ = registry.set_ego_runtime(None);
         let _ = registry.set_perception_runtime(None);
     }
     drop(sender);

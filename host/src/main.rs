@@ -1,6 +1,8 @@
 //! Standalone HP03 loopback service. Standard input carries the startup secret.
 mod dashboard;
+mod ego;
 mod embedding_binding;
+mod embedding_route;
 mod graph_render;
 mod graph_render_binary;
 #[cfg(test)]
@@ -55,6 +57,7 @@ mod graph_render_style;
 mod graph_render_style_tests;
 #[cfg(test)]
 mod graph_render_tests;
+mod hosted_ego_tool;
 mod hosted_inference;
 mod registry;
 mod retrieval;
@@ -72,9 +75,9 @@ fn run() -> Result<(), &'static str> {
     let mut arguments = env::args_os().skip(1);
     let first = arguments.next();
     let (setup, state_dir_option) = match first.as_deref().and_then(OsStr::to_str) {
-        Some(mode @ ("setup-validate" | "setup-create" | "setup-status")) => {
-            (Some(mode), arguments.next())
-        }
+        Some(
+            mode @ ("setup-validate" | "setup-create" | "setup-status" | "setup-embedding-check"),
+        ) => (Some(mode), arguments.next()),
         _ => (None, first.clone()),
     };
     if state_dir_option.as_deref() != Some(OsStr::new("--state-dir")) {
@@ -88,6 +91,7 @@ fn run() -> Result<(), &'static str> {
         Some("setup-validate") => registry::setup_validation::run(&path),
         Some("setup-create") => registry::setup_validation::run_create(&path),
         Some("setup-status") => service::setup_status(&path),
+        Some("setup-embedding-check") => embedding_route::setup_check(&path),
         _ => service::run(&path),
     }
 }

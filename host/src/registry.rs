@@ -161,6 +161,14 @@ pub(crate) struct OwnerStatus {
 pub(crate) struct Registry {
     gateway: Gateway,
     perception_runtime: Option<(u64, Arc<ConfiguredRuntime>)>,
+    phy_perception_worker: Option<reliquary_memory::PhyPerceptionWorker>,
+    phy_perception_enabled: bool,
+    automatic_phy_enabled: bool,
+    active_phy_recall: reliquary_memory::ActivePhyRecall,
+    ego_runtime: Option<(u64, Arc<ConfiguredRuntime>)>,
+    ego_worker: Option<reliquary_memory::EgoWorkerHandle>,
+    ego_enabled: bool,
+    pub(crate) ego_approval: Option<crate::ego::IdentityApproval>,
     admissions: Admissions,
     credential: String,
     dashboard_intents: PathBuf,
@@ -179,6 +187,7 @@ struct Admissions {
     provider_control: HostAdmissionControl,
     dashboard_actor: Instance,
     dashboard_control: HostAdmissionControl,
+    phy_actor: Option<(Instance, HostAdmissionControl)>,
 }
 
 impl Registry {
@@ -187,27 +196,73 @@ impl Registry {
         state_dir: &Path,
         token: &str,
     ) -> Result<Self, RegistryError> {
+        let ego_enabled =
+            std::env::var_os("RELIQUARY_HERMES_EGO").is_some_and(|value| value == "1");
+        let phy_perception_enabled =
+            std::env::var_os("RELIQUARY_HERMES_PHY_PERCEPTION").is_some_and(|value| value == "1");
+        let automatic_phy_enabled =
+            std::env::var_os("RELIQUARY_HERMES_AUTOMATIC_PHY").is_some_and(|value| value == "1");
+        Self::open_with_features(
+            config,
+            state_dir,
+            token,
+            ego_enabled,
+            phy_perception_enabled,
+            automatic_phy_enabled,
+        )
+    }
+
+    #[cfg(test)]
+    fn open_with_ego(
+        config: OwnerConfig,
+        state_dir: &Path,
+        token: &str,
+        ego_enabled: bool,
+    ) -> Result<Self, RegistryError> {
+        Self::open_with_features(config, state_dir, token, ego_enabled, false, false)
+    }
+
+    fn open_with_features(
+        config: OwnerConfig,
+        state_dir: &Path,
+        token: &str,
+        ego_enabled: bool,
+        phy_perception_enabled: bool,
+        automatic_phy_enabled: bool,
+    ) -> Result<Self, RegistryError> {
+        let writable_phy = ego_enabled || phy_perception_enabled || automatic_phy_enabled;
         config.validate()?;
         let state_dir = state_dir.canonicalize().map_err(|_| store::UNAVAILABLE)?;
         let lease = acquire_service_lease(&state_dir)?;
         let topology_path = state_dir.join(TOPOLOGY_FILE);
         let gateway = Gateway::new();
-        let (topology, write) = topology::prepare_startup(&config, &topology_path, &gateway)?;
+        let (topology, write) =
+            topology::prepare_startup(&config, &topology_path, &gateway, writable_phy)?;
         let sessions_dir = state_dir.join("sessions-v1");
         store::sessions_dir(&sessions_dir, write != topology::StartupWrite::Create)?;
         let mounted_rels = match write {
-            topology::StartupWrite::Current => switch::mount_on_startup(&gateway, &topology)?,
+            topology::StartupWrite::Current => {
+                switch::mount_on_startup(&gateway, &topology, writable_phy)?
+            }
             topology::StartupWrite::Create | topology::StartupWrite::Upgrade => topology
                 .owners
                 .iter()
                 .filter_map(|(&id, owner)| (owner.kind == OwnerKind::Rel).then_some(id))
                 .collect(),
         };
-        let admissions = Admissions::new(&gateway, &topology, &mounted_rels, token)?;
+        let admissions = Admissions::new(&gateway, &topology, &mounted_rels, token, writable_phy)?;
         topology::publish_startup(&topology_path, &topology, write)?;
         Ok(Self {
             gateway,
             perception_runtime: None,
+            phy_perception_worker: None,
+            phy_perception_enabled,
+            automatic_phy_enabled,
+            active_phy_recall: reliquary_memory::ActivePhyRecall::new(topology.active_phy),
+            ego_runtime: None,
+            ego_worker: None,
+            ego_approval: None,
+            ego_enabled,
             admissions,
             credential: token.to_owned(),
             dashboard_intents: state_dir.join("dashboard-mutations-v1"),
@@ -220,6 +275,16 @@ impl Registry {
         })
     }
 
+    pub(crate) fn set_perception_owner_guard(
+        &self,
+        guard: Arc<dyn Fn(OwnerId) -> bool + Send + Sync>,
+    ) -> Result<(), RegistryError> {
+        self.require_current()?;
+        self.gateway
+            .set_perception_owner_guard(guard)
+            .map_err(owner_error)
+    }
+
     pub(crate) fn set_perception_runtime(
         &mut self,
         runtime: Option<(u64, Arc<ConfiguredRuntime>)>,
@@ -228,12 +293,117 @@ impl Registry {
         if self.perception_runtime.as_ref().map(|(epoch, _)| *epoch)
             != runtime.as_ref().map(|(epoch, _)| *epoch)
         {
+            self.phy_perception_worker.take();
             self.gateway
                 .set_perception_runtime(runtime.as_ref().map(|(_, runtime)| runtime.as_ref()))
                 .map_err(owner_error)?;
             self.perception_runtime = runtime;
         }
+        self.resume_phy_perception()?;
         Ok(())
+    }
+
+    fn writable_phy(&self) -> bool {
+        self.ego_enabled || self.phy_perception_enabled || self.automatic_phy_enabled
+    }
+
+    pub(crate) fn source_processor(&self) -> Option<&Instance> {
+        self.automatic_phy_enabled
+            .then_some(self.admissions.phy_actor.as_ref())
+            .flatten()
+            .map(|(actor, _)| actor)
+    }
+
+    pub(crate) fn phy_perception_actor(&self) -> Option<&Instance> {
+        self.phy_perception_enabled
+            .then_some(self.admissions.phy_actor.as_ref())
+            .flatten()
+            .map(|(actor, _)| actor)
+    }
+
+    fn resume_phy_perception(&mut self) -> Result<(), RegistryError> {
+        if !self.phy_perception_enabled
+            || self.perception_runtime.is_none()
+            || self.phy_perception_worker.is_some()
+        {
+            return Ok(());
+        }
+        let (actor, _) = self
+            .admissions
+            .phy_actor
+            .as_ref()
+            .ok_or(store::UNAVAILABLE)?;
+        self.phy_perception_worker = Some(
+            actor
+                .start_phy_perception(self.active_phy())
+                .map_err(owner_error)?,
+        );
+        Ok(())
+    }
+
+    pub(crate) fn set_ego_runtime(
+        &mut self,
+        runtime: Option<(u64, Arc<ConfiguredRuntime>)>,
+    ) -> Result<(), RegistryError> {
+        self.require_current()?;
+        if self.ego_runtime.as_ref().map(|(epoch, _)| *epoch)
+            != runtime.as_ref().map(|(epoch, _)| *epoch)
+        {
+            self.ego_worker.take();
+            self.ego_runtime = runtime;
+        }
+        if self.ego_worker.is_none() {
+            self.resume_ego_worker();
+        }
+        Ok(())
+    }
+
+    fn resume_ego_worker(&mut self) {
+        if self.restart_ego_worker().is_err() {
+            eprintln!("reliquary-hermes-host: ego_worker_unavailable");
+        }
+    }
+
+    fn restart_ego_worker(&mut self) -> Result<(), RegistryError> {
+        if !self.ego_enabled {
+            return Ok(());
+        }
+        let Some((_, runtime)) = &self.ego_runtime else {
+            return Ok(());
+        };
+        let Some((actor, _)) = &self.admissions.phy_actor else {
+            return Ok(());
+        };
+        let sources = self
+            .mounted_rels
+            .iter()
+            .copied()
+            .filter(|id| self.topology.current_rel(*id))
+            .collect::<Vec<_>>();
+        self.ego_worker = Some(
+            actor
+                .start_ego_worker(
+                    self.active_phy(),
+                    &sources,
+                    self.topology_path.parent().ok_or(store::UNAVAILABLE)?,
+                    runtime,
+                    |text| text.len() as u64,
+                )
+                .map_err(owner_error)?,
+        );
+        Ok(())
+    }
+
+    pub(crate) fn ego_actor(&self) -> Result<&Instance, RegistryError> {
+        self.require_current()?;
+        if !self.ego_enabled {
+            return Err(RegistryError::Denied("ego_disabled"));
+        }
+        self.admissions
+            .phy_actor
+            .as_ref()
+            .map(|(actor, _)| actor)
+            .ok_or(RegistryError::Denied("ego_profile_not_enabled"))
     }
 
     pub(crate) fn dashboard_actor(&self) -> &Instance {
@@ -272,6 +442,10 @@ impl Registry {
         self.topology.active_phy
     }
 
+    pub(crate) fn active_phy_recall(&self) -> reliquary_memory::ActivePhyRecall {
+        self.active_phy_recall.clone()
+    }
+
     pub(crate) fn legacy_phy(&self) -> OwnerId {
         self.topology.legacy.active_phy
     }
@@ -285,6 +459,11 @@ impl Registry {
 
     fn fence(&mut self) {
         self.fenced = true;
+        self.active_phy_recall.invalidate();
+        self.phy_perception_worker.take();
+        self.ego_worker.take();
+        self.ego_runtime.take();
+        self.ego_approval.take();
         if self.perception_runtime.take().is_some() {
             let _ = self.gateway.set_perception_runtime(None);
         }
@@ -324,6 +503,14 @@ impl Registry {
             rel_id: route.rel_id.to_string(),
             user_id,
         })
+    }
+
+    pub(crate) fn session_phy(&self, session_id: &str) -> Result<OwnerId, RegistryError> {
+        let route = self
+            .accepted_route(session_id)?
+            .ok_or(RegistryError::Denied("unbound_session"))?;
+        self.require_route_available(&route)?;
+        Ok(route.phy_id.unwrap_or(self.legacy_phy()))
     }
 
     pub(crate) fn is_bound(&self, session_id: &str) -> Result<bool, RegistryError> {
@@ -681,7 +868,7 @@ fn acquire_service_lease(state_dir: &Path) -> Result<File, RegistryError> {
     }
 }
 
-fn owner_error(error: ProductError) -> RegistryError {
+pub(crate) fn owner_error(error: ProductError) -> RegistryError {
     match error.kind() {
         ProductErrorKind::Unauthorized | ProductErrorKind::Revoked => {
             RegistryError::Denied("denied")

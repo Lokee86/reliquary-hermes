@@ -166,6 +166,7 @@ pub(crate) struct Snapshot {
     pub(crate) revision: Option<String>,
     pub(crate) evidence: Vec<Evidence>,
     pub(crate) messages: Vec<HermesCopiedMessage>,
+    pub(crate) turn_author: Option<TurnAuthor>,
 }
 
 #[derive(Deserialize)]
@@ -176,6 +177,17 @@ struct CopiedView {
     branch_id: Option<String>,
     source_revision: Option<String>,
     messages: Vec<Message>,
+    #[serde(default)]
+    turn_author: Option<TurnAuthor>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TurnAuthor {
+    pub(crate) message_uid: String,
+    id: Option<String>,
+    is_bot: Option<bool>,
+    pub(crate) profile_owner: bool,
 }
 
 #[derive(Deserialize)]
@@ -210,13 +222,23 @@ impl From<Role> for HermesCopiedRole {
 
 impl Snapshot {
     pub(crate) fn parse(request: &SourceRequest) -> Result<Self, HttpError> {
-        Self::parse_arguments(&request.arguments, &request.profile_id, &request.session_id)
+        let snapshot = Self::parse_arguments(
+            &request.arguments,
+            &request.profile_id,
+            &request.session_id,
+            &request.principal_id,
+        )?;
+        if request.operation.is_manual() && snapshot.turn_author.is_some() {
+            return Err(INVALID);
+        }
+        Ok(snapshot)
     }
 
     pub(crate) fn parse_arguments(
         arguments: &Value,
         profile: &str,
         session: &str,
+        principal: &str,
     ) -> Result<Self, HttpError> {
         let arguments: SnapshotArguments =
             serde_json::from_value(arguments.clone()).map_err(|_| INVALID)?;
@@ -264,12 +286,34 @@ impl Snapshot {
                 author: Some(row.author),
             });
         }
+        if let Some(author) = &view.turn_author {
+            let row = messages
+                .iter_mut()
+                .find(|row| {
+                    row.message_uid == author.message_uid
+                        && matches!(row.role, HermesCopiedRole::User)
+                })
+                .ok_or(INVALID)?;
+            if author.id.as_deref().is_some_and(|id| !valid_id(id))
+                || author.profile_owner
+                    && (author.id.as_deref() != Some(principal) || author.is_bot != Some(false))
+            {
+                return Err(INVALID);
+            }
+            // Continuity checks compare transcript rows. The witness is part of
+            // the signed snapshot, and previously admitted authors stay immutable.
+            row.author = Some(HermesCopiedAuthor {
+                id: author.id.clone(),
+                is_bot: author.is_bot,
+            });
+        }
         Ok(Self {
             digest,
             branch: view.branch_id,
             revision: view.source_revision,
             evidence,
             messages,
+            turn_author: view.turn_author,
         })
     }
 }

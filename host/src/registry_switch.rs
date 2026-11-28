@@ -56,16 +56,24 @@ impl Registry {
         }
 
         // Staged management admissions must wait for the new topology to commit.
+        self.phy_perception_worker.take();
+        self.ego_worker.take();
+        self.ego_approval.take();
         if self.perception_runtime.is_some() {
             self.gateway
                 .set_perception_runtime(None)
                 .map_err(owner_error)?;
         }
         let result = self.commit_switch(next);
-        if let Some((_, runtime)) = &self.perception_runtime {
-            if self.gateway.set_perception_runtime(Some(runtime)).is_err() {
-                self.fence();
-                return Err(RECOVERY_REQUIRED);
+        if !self.fenced {
+            self.resume_ego_worker();
+            if let Some((_, runtime)) = &self.perception_runtime {
+                if self.gateway.set_perception_runtime(Some(runtime)).is_err()
+                    || self.resume_phy_perception().is_err()
+                {
+                    self.fence();
+                    return Err(RECOVERY_REQUIRED);
+                }
             }
         }
         result
@@ -108,18 +116,26 @@ impl Registry {
 
         let previous_phy = self.active_phy();
         let previous_admissions = std::mem::replace(&mut self.admissions, admissions);
+        self.active_phy_recall.invalidate();
+        self.active_phy_recall = reliquary_memory::ActivePhyRecall::new(next.active_phy);
         self.topology = next;
         self.mounted_rels = mounted_rels;
 
-        let revoked = previous_admissions.revoke(&self.credential);
         let detached = if previous_phy != self.active_phy() {
-            previous_admissions
-                .provider_control
-                .detach_read_only_phylactery(previous_phy)
-                .map_err(owner_error)
+            if let Some((actor, control)) = &previous_admissions.phy_actor {
+                control
+                    .quiesce_writable_phylactery(actor, previous_phy)
+                    .map_err(owner_error)
+            } else {
+                previous_admissions
+                    .provider_control
+                    .detach_read_only_phylactery(previous_phy)
+                    .map_err(owner_error)
+            }
         } else {
             Ok(())
         };
+        let revoked = previous_admissions.revoke(&self.credential);
         if revoked.and(detached).is_err() {
             self.fence();
             return Err(RECOVERY_REQUIRED);
@@ -158,6 +174,7 @@ impl Registry {
                     &self.gateway,
                     owner,
                     &next.owners[&owner],
+                    self.writable_phy(),
                 )?);
             }
         }
@@ -166,14 +183,21 @@ impl Registry {
                 &self.gateway,
                 next.active_phy,
                 &next.owners[&next.active_phy],
+                self.writable_phy(),
             )?);
         }
-        let admissions = Admissions::new(&self.gateway, next, &mounted_rels, &self.credential)?;
+        let admissions = Admissions::new(
+            &self.gateway,
+            next,
+            &mounted_rels,
+            &self.credential,
+            self.writable_phy(),
+        )?;
         Ok((mounted_rels, admissions))
     }
 
     fn abort_switch(&mut self, staged: &[StagedMount], error: RegistryError) -> RegistryError {
-        if discard_mounts(&self.gateway, &self.credential, staged).is_err() {
+        if discard_mounts(&self.gateway, &self.credential, staged, self.writable_phy()).is_err() {
             self.fence();
             return RECOVERY_REQUIRED;
         }
@@ -187,6 +211,7 @@ impl Admissions {
         topology: &Topology,
         rels: &BTreeSet<OwnerId>,
         credential: &str,
+        writable_phy: bool,
     ) -> Result<Self, RegistryError> {
         let (dashboard, dashboard_control) =
             TrustedHostAdmission::new([HostCredentialBinding::new(
@@ -208,37 +233,62 @@ impl Admissions {
         .install(gateway)
         .map_err(owner_error)?;
         let provider_instance = provider.authenticate(credential).map_err(owner_error)?;
+        let phy_actor = if writable_phy {
+            let (admission, control) = TrustedHostAdmission::new([HostCredentialBinding::new(
+                &topology.principal_id,
+                credential,
+                rels.iter()
+                    .copied()
+                    .map(OwnerGrant::OperateRel)
+                    .chain([OwnerGrant::OperatePhylactery(topology.active_phy)]),
+            )])
+            .install(gateway)
+            .map_err(owner_error)?;
+            Some((
+                admission.authenticate(credential).map_err(owner_error)?,
+                control,
+            ))
+        } else {
+            None
+        };
         Ok(Self {
             provider,
             provider_instance,
             provider_control,
             dashboard_actor,
             dashboard_control,
+            phy_actor,
         })
     }
 
     pub(super) fn revoke(&self, credential: &str) -> Result<(), RegistryError> {
         let provider = self.provider_control.revoke(credential);
         let dashboard = self.dashboard_control.revoke(credential);
-        provider.and(dashboard).map_err(owner_error)
+        let phy = self
+            .phy_actor
+            .as_ref()
+            .map_or(Ok(()), |(_, control)| control.revoke(credential));
+        provider.and(dashboard).and(phy).map_err(owner_error)
     }
 }
 
 pub(super) fn mount_on_startup(
     gateway: &Gateway,
     topology: &Topology,
+    writable_phy: bool,
 ) -> Result<BTreeSet<OwnerId>, RegistryError> {
     mount_registered(
         gateway,
         topology.active_phy,
         &topology.owners[&topology.active_phy],
+        writable_phy,
     )?;
     let mut rels = BTreeSet::new();
     for (&owner, entry) in &topology.owners {
         if entry.kind != OwnerKind::Rel {
             continue;
         }
-        match mount_registered(gateway, owner, entry) {
+        match mount_registered(gateway, owner, entry, writable_phy) {
             Ok(_) => {
                 rels.insert(owner);
             }
@@ -253,6 +303,7 @@ fn mount_registered(
     gateway: &Gateway,
     expected: OwnerId,
     owner: &RegisteredOwner,
+    writable_phy: bool,
 ) -> Result<StagedMount, RegistryError> {
     let path = owner_file(&owner.path)?;
     if path != owner.path {
@@ -262,7 +313,7 @@ fn mount_registered(
         .mount_owner_path(
             &path,
             owner.kind,
-            owner.kind == OwnerKind::Rel,
+            owner.kind == OwnerKind::Rel || writable_phy,
             Some(expected),
         )
         .map_err(|error| match error.kind() {
@@ -276,12 +327,14 @@ fn discard_mounts(
     gateway: &Gateway,
     credential: &str,
     staged: &[StagedMount],
+    writable_phy: bool,
 ) -> Result<(), RegistryError> {
     if staged.is_empty() {
         return Ok(());
     }
     let grants = staged.iter().map(|&(owner, kind)| match kind {
         OwnerKind::Rel => OwnerGrant::ManageRel(owner),
+        OwnerKind::Phylactery if writable_phy => OwnerGrant::OperatePhylactery(owner),
         OwnerKind::Phylactery => OwnerGrant::ViewPhylactery(owner),
     });
     let (adapter, control) =
@@ -295,6 +348,9 @@ fn discard_mounts(
             OwnerKind::Rel => cleanup
                 .workspace_management(owner)
                 .and_then(|rel| rel.quiesce()),
+            OwnerKind::Phylactery if writable_phy => {
+                control.quiesce_writable_phylactery(&cleanup, owner)
+            }
             OwnerKind::Phylactery => control.detach_read_only_phylactery(owner),
         };
         result = result.and(removed.map_err(owner_error));

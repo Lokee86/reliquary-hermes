@@ -99,16 +99,33 @@ def read_settings(home: Path) -> Settings:
     return Settings(state, owners["profile_id"], owners["principal_id"], binary)
 
 
-def read_native_decision_route(home: Path) -> NativeDecisionRoute | None:
-    """Read literal route selectors from this Hermes profile's config.yaml."""
+def read_profile_config(home: Path) -> dict:
     from hermes_cli.config import read_raw_config_readonly
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
     scope = set_hermes_home_override(home)
     try:
-        reliquary = read_raw_config_readonly().get("reliquary", {})
+        return read_raw_config_readonly()
     finally:
         reset_hermes_home_override(scope)
+
+
+def ego_enabled(home: Path) -> bool:
+    config = read_profile_config(home)
+    context, memory = config.get("context"), config.get("memory")
+    return (isinstance(context, dict) and context.get("engine") == "reliquary-ego"
+            and isinstance(memory, dict) and memory.get("memory_enabled") is False
+            and memory.get("user_profile_enabled") is False)
+
+
+def phy_perception_enabled(home: Path) -> bool:
+    config = read_profile_config(home).get("reliquary")
+    return isinstance(config, dict) and config.get("phy_perception") is True
+
+
+def read_native_decision_route(home: Path) -> NativeDecisionRoute | None:
+    """Read literal route selectors from this Hermes profile's config.yaml."""
+    reliquary = read_profile_config(home).get("reliquary", {})
 
     if type(reliquary) is not dict or "perception" not in reliquary:
         return None
