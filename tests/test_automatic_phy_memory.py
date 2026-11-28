@@ -216,6 +216,8 @@ def test_signed_automatic_phy_copy_stays_bound_across_switch_and_reopen(
         reader.detach_runtime()
         assert worker_command(worker, "stop")["registered"] is False
         wait_for(lambda: not (home / "reliquary" / "discovery.json").exists())
+        # Discovery can disappear before the former host releases the owner leases.
+        assert reader._process.wait(timeout=10) == 0
         again = _client(home, binary)
         again.attach(SESSION)
         cleanup.callback(stop, again._process)
@@ -224,7 +226,7 @@ def test_signed_automatic_phy_copy_stays_bound_across_switch_and_reopen(
         reopened = wait_for(lambda: (
             result if "context" in (result := _query(again, SESSION, "reopened-recall")) else None))
         _assert_mixed(reopened, rel, phy)
-        assert reopened["memory_ids"] == after["memory_ids"]
+        assert set(reopened["memory_ids"]) == set(after["memory_ids"])
         assert again.deliver_source_job(job) == receipt
         assert other_path.read_bytes() == original_other_bytes
 

@@ -478,6 +478,7 @@ def test_hp05_pinned_provider_real_query_refine_traverse_prefetch_and_exact_retu
         assert len(result["memory_ids"]) == 1
         [memory_id] = result["memory_ids"]
         assert result["provenance"] == [{
+            "owner_id": dashboard_owner["owner_id"],
             "memory_id": memory_id,
             "source_snapshot_digests": [job.snapshot.snapshot_digest],
         }]
