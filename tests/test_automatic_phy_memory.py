@@ -262,14 +262,23 @@ def test_ordinary_hermes_chat_publishes_both_memories(automatic_profile):
     plugin = home / "plugins" / "reliquary"
     plugin.mkdir(parents=True)
     package = Path(__file__).resolve().parents[1]
-    for name in ("__init__.py", "plugin.yaml"):
-        copy2(package / name, plugin / name)
+    copy2(package / "__init__.py", plugin / "__init__.py")
+    # The audited attribution patch predates the catalog's stock release floor.
+    # Change only the copied test manifest to exercise this separate authority.
+    manifest = (package / "plugin.yaml").read_text(encoding="utf-8")
+    (plugin / "plugin.yaml").write_text(
+        "\n".join(line for line in manifest.splitlines() if not line.startswith("requires_hermes:")) + "\n",
+        encoding="utf-8",
+    )
     copytree(package / "src" / "reliquary_hermes", plugin / "src" / "reliquary_hermes",
              ignore=ignore_patterns("__pycache__"))
     state = home / "reliquary"
     (state / capture_policy.ENROLLMENT_FILE).write_bytes(canonical({"version": 1, "cutoff": time() - 30}))
-    environment = {key: value for key, value in os.environ.items() if not key.startswith("HERMES_")}
-    environment.update(HERMES_HOME=str(home), PYTHONPATH=str(checkout), PYTHONDONTWRITEBYTECODE="1")
+    process_variables = {"path", "systemroot", "windir", "comspec", "lang", "lc_all"}
+    environment = {key: value for key, value in os.environ.items() if key.lower() in process_variables}
+    environment.update(HERMES_HOME=str(home), PYTHONPATH=str(checkout), PYTHONDONTWRITEBYTECODE="1",
+                       HOME=str(home), USERPROFILE=str(home), TEMP=str(home), TMP=str(home),
+                       XDG_CACHE_HOME=str(home / "cache"))
     hermes = [sys.executable, "-B", "-m", "hermes_cli.main"]
 
     with hosted_model(2, complete=_answer, chat=RESPONSE) as (url, model), ExitStack() as cleanup:
