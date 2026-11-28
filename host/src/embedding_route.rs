@@ -48,14 +48,23 @@ impl EmbeddingRoute {
         let file = File::open(path).map_err(|_| INVALID)?;
         let bytes = read_bounded(file, MAX_POINTER_BYTES).map_err(|_| INVALID)?;
         let pointer: Pointer = decode(&bytes).map_err(|_| INVALID)?;
-        Self::open(&pointer.config_path)
+        Self::open(state_dir, &pointer.config_path)
     }
 
-    fn open(path: &Path) -> Result<Self, &'static str> {
-        if !path.is_absolute() || !path.is_file() {
+    fn open(state_dir: &Path, path: &Path) -> Result<Self, &'static str> {
+        if !path.is_absolute() {
             return Err(INVALID);
         }
-        let route = ResolvedEmbeddingRoute::from_path(path)
+        let profile = state_dir
+            .parent()
+            .ok_or(INVALID)?
+            .canonicalize()
+            .map_err(|_| INVALID)?;
+        let path = path.canonicalize().map_err(|_| INVALID)?;
+        if !path.starts_with(profile) || !path.is_file() {
+            return Err(INVALID);
+        }
+        let route = ResolvedEmbeddingRoute::from_path(&path)
             .map_err(|error| match error {
                 ConfiguredRuntimeError::Credential { .. }
                 | ConfiguredRuntimeError::MasterKey(_) => CREDENTIALS_UNAVAILABLE,
@@ -115,7 +124,7 @@ pub(crate) fn setup_check(state_dir: &Path) -> Result<(), &'static str> {
     let bytes = read_bounded(io::stdin().lock(), MAX_POINTER_BYTES)?;
     let request: CheckRequest = decode(&bytes).map_err(|_| "invalid_setup_request")?;
     let route = match request.config_path {
-        Some(path) => EmbeddingRoute::open(&path),
+        Some(path) => EmbeddingRoute::open(state_dir, &path),
         None => EmbeddingRoute::for_profile(state_dir),
     };
     serde_json::to_writer(

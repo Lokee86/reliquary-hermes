@@ -97,6 +97,27 @@ impl Service {
             .or_else(|| self.inference.unavailable_code())
     }
 
+    fn ensure_source_embedding_owners(
+        &self,
+        instance: &Instance,
+        registry: &Registry,
+        owner: OwnerId,
+    ) -> Result<(), HttpError> {
+        self.ensure_embedding_owner(instance, owner)?;
+        if let Some(processor) = registry.source_processor() {
+            self.ensure_embedding_owner(processor, registry.active_phy())?;
+        }
+        Ok(())
+    }
+
+    fn admit_phy_perception_embeddings(&self, registry: &Registry) {
+        if let Some(actor) = registry.phy_perception_actor() {
+            // The owner guard keeps the worker idle if old vectors have no
+            // binding or the active route disagrees with its durable marker.
+            let _ = self.ensure_embedding_owner(actor, registry.active_phy());
+        }
+    }
+
     fn ensure_embedding_owner(&self, instance: &Instance, owner: OwnerId) -> Result<(), HttpError> {
         if let Some(code) = self.inference_unavailable_code() {
             return Err(HttpError::new(503, code, true));
@@ -219,6 +240,7 @@ impl Service {
                             return Ok(());
                         };
                         let mut registry = self.registry.lock().map_err(|_| UNAVAILABLE)?;
+                        self.admit_phy_perception_embeddings(&registry);
                         registry
                             .set_ego_runtime(Some((epoch, Arc::clone(&runtime))))
                             .map_err(attach_error)?;
@@ -242,7 +264,8 @@ impl Service {
                         let mut runtimes = self.runtimes.lock().map_err(|_| UNAVAILABLE)?;
                         let instance = registry.instance().map_err(attach_error)?;
                         sources.resume_all(&instance, &registry, &mut runtimes, |owner| {
-                            self.ensure_embedding_owner(&instance, owner).is_ok()
+                            self.ensure_source_embedding_owners(&instance, &registry, owner)
+                                .is_ok()
                         })?;
                         Ok(())
                     },
@@ -367,6 +390,7 @@ impl Service {
                 let before = registry.switch_status().map_err(attach_error)?.generation;
                 let applied = registry.apply_switch(review).map_err(attach_error)?;
                 if before != applied.generation {
+                    self.admit_phy_perception_embeddings(&registry);
                     recall.invalidate_owner_bindings();
                     *graph = GraphRenderHost::default();
                 }
@@ -568,7 +592,8 @@ impl Service {
             .map_err(attach_error)?;
         if let Ok(mut sources) = self.sources.try_lock() {
             sources.resume(instance, &registry, &request.session_id, |owner| {
-                self.ensure_embedding_owner(instance, owner).is_ok()
+                self.ensure_source_embedding_owners(instance, &registry, owner)
+                    .is_ok()
             });
         }
         Ok(HttpResponse::ok(json!({
@@ -734,7 +759,7 @@ impl Service {
                 && request.lease_id.is_some(),
         };
         let response = sources.handle(instance, binding, request, fenced, || {
-            self.ensure_embedding_owner(instance, owner)
+            self.ensure_source_embedding_owners(instance, &registry, owner)
         });
         if reconcile && response.is_ok() && eligible_epoch.is_some() {
             runtimes
@@ -1348,7 +1373,9 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
                 && let Ok(mut runtimes) = service.runtimes.try_lock()
             {
                 let _ = sources.resume_all(&instance, &registry, &mut runtimes, |owner| {
-                    service.ensure_embedding_owner(&instance, owner).is_ok()
+                    service
+                        .ensure_source_embedding_owners(&instance, &registry, owner)
+                        .is_ok()
                 });
             }
             next_source_resume = Instant::now() + Duration::from_secs(5);

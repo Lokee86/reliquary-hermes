@@ -11,7 +11,7 @@ from time import time
 
 import pytest
 
-from hosted_hermes_worker import configure_hermes, start_hermes_worker, worker_command
+from hosted_hermes_worker import configure_embeddings, configure_hermes, start_hermes_worker, worker_command
 from hosted_inference_probe import hosted_model, reply
 from reliquary_hermes import capture_policy, source_capture
 from reliquary_hermes.client import HostClient, HostUnavailable
@@ -20,7 +20,7 @@ from reliquary_hermes.settings import TOKEN_VAR, save_settings
 from reliquary_hermes.validation import canonical, decode
 from test_host_client import TOKEN
 from test_hosted_inference_e2e import wait_for
-from test_hp03_host import config, stop
+from test_hp03_host import binaries, config, stop
 from test_hp04_host import PRINCIPAL, PROFILE, SESSION, _when_ready
 
 PROJECT = "Lantern uses the amber checklist."
@@ -63,11 +63,8 @@ def _answer(request):
 
 
 @pytest.fixture
-def automatic_profile(tmp_path, monkeypatch):
-    value = os.environ.get("HP03_HOST_BINARY")
-    if not value:
-        pytest.skip("Set HP03_HOST_BINARY to the native integration host")
-    binary = Path(value).resolve(strict=True)
+def automatic_profile(tmp_path, monkeypatch, binaries):
+    binary, cli = binaries
     # The signed fixture supplies the same private witness as the patched
     # Hermes path. The separate live case obtains it from Hermes itself.
     monkeypatch.setattr(capture_policy, "history_supported", lambda: True)
@@ -93,7 +90,7 @@ def automatic_profile(tmp_path, monkeypatch):
     save_settings(home, {"profile_id": PROFILE, "principal_id": PRINCIPAL,
                          "main_rel": str(rel), "active_phy": str(phy), "binary": str(binary)})
     (home / ".env").write_text(f"{TOKEN_VAR}={TOKEN}\n", encoding="utf-8")
-    return home, binary, rel_id, phy, phy_id, other_phy, other_id
+    return home, binary, cli, rel_id, phy, phy_id, other_phy, other_id
 
 
 def _client(home, binary):
@@ -175,7 +172,7 @@ def _assert_mixed(result, rel, phy):
 
 def test_signed_automatic_phy_copy_stays_bound_across_switch_and_reopen(
         automatic_profile, inference_checkout):
-    home, binary, rel, phy_path, phy, other_path, other = automatic_profile
+    home, binary, cli, rel, phy_path, phy, other_path, other = automatic_profile
     original_other_bytes = other_path.read_bytes()
     with hosted_model(2, complete=_answer) as (url, _model), ExitStack() as cleanup:
         client = _client(home, binary)
@@ -197,12 +194,16 @@ def test_signed_automatic_phy_copy_stays_bound_across_switch_and_reopen(
         switch(phy_path)
         receipt = _when_ready(client, job)
         assert queue.acknowledge(job, receipt)
-        assert client.read_source_status(SESSION)["state"] != "complete"
+        status = client.read_source_status(SESSION)
+        assert status["embedding_error"] == "embedding_unconfigured"
+        assert status["receipt"]
+        assert PERSONAL not in _query(client, SESSION, "unconfigured-embedding").get("context", "")
 
         # Process from the recorded receipt on a new service, after another
         # chat attaches. Restore the same owner, then register the worker.
         client.detach_runtime()
         stop(client._process)
+        configure_embeddings(home, url, cli)
         reader = _client(home, binary)
         reader.attach("next-chat")
         cleanup.callback(stop, reader._process)
@@ -233,9 +234,10 @@ def test_signed_automatic_phy_copy_stays_bound_across_switch_and_reopen(
 
 @pytest.mark.parametrize("mode", ["legacy", "unknown", "bot", "foreign"])
 def test_signed_unverified_personal_memory_is_held(automatic_profile, inference_checkout, mode):
-    home, binary, _rel, phy_path, _phy, _other_path, _other = automatic_profile
+    home, binary, cli, _rel, phy_path, _phy, _other_path, _other = automatic_profile
     original = phy_path.read_bytes()
     with hosted_model(2, complete=_answer) as (url, _model), ExitStack() as cleanup:
+        configure_embeddings(home, url, cli)
         client = _client(home, binary)
         client.attach(SESSION)
         cleanup.callback(stop, client._process)
@@ -256,7 +258,7 @@ def test_ordinary_hermes_chat_publishes_both_memories(automatic_profile):
     if not checkout:
         pytest.skip("Set HP_PHY_ATTRIBUTION_HERMES_CHECKOUT to the Hermes checkout with both capture patches")
     checkout = Path(checkout).resolve(strict=True)
-    home, binary, rel, _phy_path, phy, _other_path, _other = automatic_profile
+    home, binary, cli, rel, _phy_path, phy, _other_path, _other = automatic_profile
     plugin = home / "plugins" / "reliquary"
     plugin.mkdir(parents=True)
     package = Path(__file__).resolve().parents[1]
@@ -271,6 +273,7 @@ def test_ordinary_hermes_chat_publishes_both_memories(automatic_profile):
     hermes = [sys.executable, "-B", "-m", "hermes_cli.main"]
 
     with hosted_model(2, complete=_answer, chat=RESPONSE) as (url, model), ExitStack() as cleanup:
+        configure_embeddings(home, url, cli)
         reader = _client(home, binary)
         cleanup.callback(reader.cancel_startup)
         reader.connect_dashboard(None)

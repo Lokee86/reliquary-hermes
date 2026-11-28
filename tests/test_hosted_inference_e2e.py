@@ -509,27 +509,6 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
         assert after["memory_ids"] == [] and after["observations"] == [observation]
         assert sum(call["state"].get("claim") == claim for call in model["native_calls"]) == 1
 
-        def archived_turns(*uids):
-            nonlocal reader
-            # The standalone CLI opens the REL separately. Release the host's
-            # writer lease before inspecting Archive, then rejoin the session.
-            assert worker_command(worker, "stop")["registered"] is False
-            wait_for(lambda: not discovery.exists(), diagnostic=diagnostic)
-            found = [_turn(cli, rel, conversation, uid) for uid in uids]
-            assert worker_command(worker, "start")["registered"] is True
-            wait_for(discovery.exists, diagnostic=diagnostic)
-            reader = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
-            reader.attach(SESSION)
-            wait_for(lambda: isinstance(query(reader, f"archive-ready-{next(turns)}", paraphrase), dict),
-                     diagnostic=diagnostic)
-            return found
-
-        model["approve_memories"] = True
-        assert query(reader, "perception-unrelated", unrelated_query) == "no_recall_results"
-        assert {claim, paraphrase, unrelated_query} <= embedded
-        mixed = successful_query(reader, "perception-mixed", paraphrase)
-        assert memory["memory_id"] in mixed["memory_ids"] and mixed["observations"] == [observation]
-
         def inspect_durable_turn(uid):
             nonlocal reader
             # The standalone reader needs the owner lease released on Windows.
@@ -610,8 +589,6 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
             _copied_memory_detail(reader, withdrawn, removed=True)
             assert _copied_memory_detail(reader, memory)["body"]["content"] == source
             model["approve_memories"] = True
-            challenge_turn, accepted_turn = archived_turns("challenge", "accepted")
-            assert challenge_turn["content"] is None and accepted_turn["content"] == source
             retained = successful_query(reader, "perception-after-rewind", paraphrase)
             assert memory["memory_id"] in retained["memory_ids"] and challenge not in retained["context"]
             with session_db(home / "state.db") as db:

@@ -96,7 +96,7 @@ With Core `da03bac76282152e778f52403b51cd103217d68c` and the audited Hermes SDK,
 
 ## Automatic personal-memory publication
 
-Run `tests/test_automatic_phy_memory.py` with `HP03_HOST_BINARY` and `HP_INFERENCE_HERMES_CHECKOUT`. The signed tests use disposable REL and PHY files and deterministic structured model responses. They cover delivery after a switch, restart between staging and processing, mixed recall after another chat attaches, stable IDs, and explicit holds for unknown, bot and foreign authors.
+Run `tests/test_automatic_phy_memory.py` with `HP03_HOST_BINARY`, `HP03_RELIQUARY_CLI` and `HP_INFERENCE_HERMES_CHECKOUT`. The signed switch case stages a receipt before configuring its native embedding route. The signed tests use disposable REL and PHY files and deterministic structured model responses. They cover delivery after a switch, restart between staging and processing, mixed recall after another chat attaches, stable IDs, and explicit holds for unknown, bot and foreign authors.
 
 Set `HP_PHY_ATTRIBUTION_HERMES_CHECKOUT` to a disposable Hermes `168a923023a7018be3dbf66530531dd20b1834b9` checkout with the [completed-turn attribution patch](../patches/hermes-168a923-copied-turn-attribution.patch) applied. The patch includes trusted history export for this revision. The ordinary-chat test installs the provider in a disposable profile and sends a real Hermes CLI chat through a loopback model. It verifies signed recall of both Memories and their source principal without manually enqueuing a copied snapshot.
 

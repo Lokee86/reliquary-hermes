@@ -314,6 +314,13 @@ impl Registry {
             .map(|(actor, _)| actor)
     }
 
+    pub(crate) fn phy_perception_actor(&self) -> Option<&Instance> {
+        self.phy_perception_enabled
+            .then_some(self.admissions.phy_actor.as_ref())
+            .flatten()
+            .map(|(actor, _)| actor)
+    }
+
     fn resume_phy_perception(&mut self) -> Result<(), RegistryError> {
         if !self.phy_perception_enabled
             || self.perception_runtime.is_none()
