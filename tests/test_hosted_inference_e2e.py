@@ -393,6 +393,20 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
         mixed = successful_query(reader, "perception-mixed", paraphrase)
         assert memory["memory_id"] in mixed["memory_ids"] and mixed["observations"] == [observation]
 
+        def inspect_durable_turn(uid):
+            nonlocal reader
+            # The standalone reader needs the owner lease released on Windows.
+            assert worker_command(worker, "stop")["registered"] is False
+            wait_for(lambda: not discovery.exists(), diagnostic=diagnostic)
+            turn = _turn(cli, rel, conversation, uid)
+            assert worker_command(worker, "start")["registered"] is True
+            wait_for(discovery.exists, diagnostic=diagnostic)
+            reader = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
+            reader.attach(SESSION)
+            wait_for(lambda: isinstance(query(reader, f"cli-reopen-{next(turns)}", paraphrase), dict),
+                     diagnostic=diagnostic)
+            return turn
+
         if committed_removals:
             with session_db(home / "state.db") as db:
                 assert db.set_session_archived(SESSION, True)
@@ -403,7 +417,7 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
                 assert archived["observations"] == [observation]
                 assert _copied_memory_detail(reader, memory)["provenance"][0]["message_uid"] == "accepted"
                 if cli:
-                    assert _turn(cli, rel, conversation, "accepted")["availability"] == "available"
+                    assert inspect_durable_turn("accepted")["availability"] == "available"
                 assert db.set_session_archived(SESSION, False)
                 challenge_row = append_source(db, "challenge", 2)
 
@@ -443,6 +457,9 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
             # local job. Core must return the same receipt and cut.
             assert worker_command(worker, "stop")["registered"] is False
             wait_for(lambda: not discovery.exists(), diagnostic=diagnostic)
+            if cli:
+                assert _turn(cli, rel, conversation, "challenge")["content"] is None
+                assert _turn(cli, rel, conversation, "accepted")["content"] == source
             assert worker_command(worker, "start")["registered"] is True
             wait_for(discovery.exists, diagnostic=diagnostic)
             reader = HostClient(state, PROFILE, PRINCIPAL, TOKEN, binary=binary)
@@ -455,9 +472,6 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
             assert outbox.next_job() is None
             _copied_memory_detail(reader, withdrawn, removed=True)
             assert _copied_memory_detail(reader, memory)["body"]["content"] == source
-            if cli:
-                assert _turn(cli, rel, conversation, "challenge")["content"] is None
-                assert _turn(cli, rel, conversation, "accepted")["content"] == source
             model["approve_memories"] = True
             retained = successful_query(reader, "perception-after-rewind", paraphrase)
             assert memory["memory_id"] in retained["memory_ids"] and challenge not in retained["context"]
@@ -473,7 +487,7 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
             fresh = wait_for(lambda: _copied_memories(reader).get("fresh"), diagnostic=diagnostic)
             assert _copied_memory_detail(reader, fresh)["provenance"][0]["message_uid"] == "fresh"
             if cli:
-                assert _turn(cli, rel, conversation, "fresh")["content"] == TEXT["fresh"]
+                assert inspect_durable_turn("fresh")["content"] == TEXT["fresh"]
 
         assert reader.prepare_retrieval(query_request("perception-before-deletion", paraphrase))
         if committed_removals:
@@ -493,13 +507,13 @@ def test_native_jev_observation_is_disclosed_with_copied_evidence_after_restart(
         if committed_removals:
             _copied_memory_detail(reader, memory, removed=True)
             _copied_memory_detail(reader, fresh, removed=True)
-            if cli:
-                assert all(_turn(cli, rel, conversation, uid)["content"] is None
-                           for uid in ("accepted", "appended", "challenge", "fresh"))
         assert phy.read_bytes() == phy_bytes
         assert NATIVE_DECISION_KEY not in (home / "hosted-worker.log").read_text(encoding="utf-8")
         assert worker_command(worker, "stop")["registered"] is False
         wait_for(lambda: not discovery.exists(), diagnostic=diagnostic)
+        if committed_removals and cli:
+            assert all(_turn(cli, rel, conversation, uid)["content"] is None
+                       for uid in ("accepted", "appended", "challenge", "fresh"))
 
 
 @pytest.mark.parametrize("pending", [False, True])

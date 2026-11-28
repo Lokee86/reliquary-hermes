@@ -83,7 +83,7 @@ Set `HP_PHY_ATTRIBUTION_HERMES_CHECKOUT` to a disposable Hermes `168a923023a7018
 
 All seven cases passed on Windows with the pinned Core and patched Hermes SDK. The ordinary chat filed the Lantern checklist in the REL and the peppermint tea preference in the registered PHY, then returned both through signed recall. The same suite recovered the accepted PHY and the exact Memory IDs after restart and verified the inactive PHY bytes. The patched Hermes provider, canonical creation, reset fencing and peer attribution tests passed 102 cases.
 
-The locked native host suite passed 132 tests with its existing scale characterization ignored. The pinned committed-source removal and signed Perception replay checks also passed after updating the loopback fixture to answer the Memory Web audit v3 contract used by the current Core.
+The locked native host suite passed 132 tests with its existing scale characterization ignored. The pinned committed-source removal and signed Perception replay checks also passed after updating the loopback fixture to answer the Memory Web audit v3 contract used by the current Core. Their standalone CLI checks run after the service releases the REL writer lease and inspect the durable Archive at each cut.
 
 ## Standalone checks
 
