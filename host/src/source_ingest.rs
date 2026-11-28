@@ -228,7 +228,7 @@ impl SourceService {
         instance: &Instance,
         registry: &Registry,
         runtimes: &mut RuntimeRegistry,
-        mut embedding_allowed: impl FnMut(OwnerId) -> bool,
+        embedding_allowed: impl Fn(OwnerId, Option<OwnerId>) -> bool,
     ) -> Result<(), HttpError> {
         if self.runtime.is_none() {
             return Ok(());
@@ -242,10 +242,16 @@ impl SourceService {
             let Some(owner) = resumable_owner(registry, &session, Some(&owner_id), manual) else {
                 return true;
             };
-            if runtimes.has_fence("hermes", &session).unwrap_or(true) || !embedding_allowed(owner) {
+            if runtimes.has_fence("hermes", &session).unwrap_or(true) {
                 return true;
             }
-            if self.schedule(instance, owner, head, registry.source_processor()) {
+            if self.schedule(
+                instance,
+                owner,
+                head,
+                registry.source_processor(),
+                &embedding_allowed,
+            ) {
                 resumed += 1;
             }
             resumed < 130
@@ -259,7 +265,7 @@ impl SourceService {
         binding: SourceBinding<'_>,
         request: SourceRequest,
         reconciliation_required: bool,
-        bind_embedding_identity: impl FnOnce() -> Result<(), HttpError>,
+        embedding_allowed: impl Fn(OwnerId, Option<OwnerId>) -> bool,
     ) -> Result<HttpResponse, HttpError> {
         let snapshot = if request.operation.is_snapshot() {
             Some(Snapshot::parse(&request)?)
@@ -277,7 +283,6 @@ impl SourceService {
             &request,
             snapshot.as_ref().map(|snapshot| snapshot.digest.as_str()),
         )?;
-        let mut bind_embedding_identity = Some(bind_embedding_identity);
         let path = self.store.path(&request.session_id);
         let mut state = self.store.read(&path)?;
         state.session_id = Some(request.session_id.clone());
@@ -317,7 +322,7 @@ impl SourceService {
                 &request,
                 &mut state,
                 &path,
-                bind_embedding_identity.take(),
+                &embedding_allowed,
             )?;
             if let Some(accepted) = &state.accepted {
                 instance
@@ -361,7 +366,7 @@ impl SourceService {
                 &request,
                 &mut state,
                 &path,
-                bind_embedding_identity.take(),
+                &embedding_allowed,
             )?;
             if state.pending_rewind.is_none()
                 && let Some(head) = &state.accepted
@@ -431,7 +436,7 @@ impl SourceService {
             snapshot.ok_or(INVALID)?,
             &path,
             state,
-            bind_embedding_identity,
+            &embedding_allowed,
         )
     }
 
@@ -443,7 +448,7 @@ impl SourceService {
         mut snapshot: Snapshot,
         path: &Path,
         mut state: SourceState,
-        mut bind_embedding_identity: Option<impl FnOnce() -> Result<(), HttpError>>,
+        embedding_allowed: &impl Fn(OwnerId, Option<OwnerId>) -> bool,
     ) -> Result<HttpResponse, HttpError> {
         let owner = binding.rel;
         let reconciling = request.fence_epoch.is_some();
@@ -465,12 +470,14 @@ impl SourceService {
         if !reconciling
             && let Some(evidence) = self.store.read_receipt(path, &request.idempotency_key)?
         {
-            if let Some(accepted) = &state.accepted
-                && bind_embedding_identity
-                    .take()
-                    .is_some_and(|bind| bind().is_ok())
-            {
-                self.schedule(instance, owner, accepted, binding.processor);
+            if let Some(accepted) = &state.accepted {
+                self.schedule(
+                    instance,
+                    owner,
+                    accepted,
+                    binding.processor,
+                    embedding_allowed,
+                );
             }
             return Ok(receipt(request, hex(&evidence)));
         }
@@ -520,19 +527,26 @@ impl SourceService {
                 let evidence = accepted.receipt.ok_or(UNAVAILABLE)?;
                 self.store
                     .write_receipt(path, &request.idempotency_key, evidence)?;
-                if bind_embedding_identity
-                    .take()
-                    .is_some_and(|bind| bind().is_ok())
-                {
-                    self.schedule(instance, owner, accepted, binding.processor);
-                }
+                self.schedule(
+                    instance,
+                    owner,
+                    accepted,
+                    binding.processor,
+                    embedding_allowed,
+                );
                 return Ok(receipt(request, hex(&evidence)));
             }
             let status = instance
                 .native_import_status(owner, &accepted.import_id)
                 .map_err(|_| UNAVAILABLE)?;
             if !status.is_some_and(|status| status.state == NativeImportState::Completed) {
-                self.schedule(instance, owner, accepted, binding.processor);
+                self.schedule(
+                    instance,
+                    owner,
+                    accepted,
+                    binding.processor,
+                    embedding_allowed,
+                );
                 return Err(PENDING);
             }
             skip
@@ -600,12 +614,13 @@ impl SourceService {
         state.pending_snapshot = None;
         state.accepted = Some(candidate.clone());
         self.store.write(path, &state)?;
-        if bind_embedding_identity
-            .take()
-            .is_some_and(|bind| bind().is_ok())
-        {
-            self.schedule(instance, owner, &candidate, binding.processor);
-        }
+        self.schedule(
+            instance,
+            owner,
+            &candidate,
+            binding.processor,
+            embedding_allowed,
+        );
         Ok(receipt(request, hex(&staged.receipt_digest)))
     }
 
@@ -653,7 +668,7 @@ impl SourceService {
         request: &SourceRequest,
         state: &mut SourceState,
         path: &Path,
-        bind_embedding_identity: Option<impl FnOnce() -> Result<(), HttpError>>,
+        embedding_allowed: &impl Fn(OwnerId, Option<OwnerId>) -> bool,
     ) -> Result<(), HttpError> {
         let owner = binding.rel;
         if state.pending.is_some() {
@@ -690,10 +705,14 @@ impl SourceService {
             }
             self.store.write(path, state)?;
         }
-        if let Some(accepted) = &state.accepted
-            && bind_embedding_identity.is_some_and(|bind| bind().is_ok())
-        {
-            self.schedule(instance, owner, accepted, binding.processor);
+        if let Some(accepted) = &state.accepted {
+            self.schedule(
+                instance,
+                owner,
+                accepted,
+                binding.processor,
+                embedding_allowed,
+            );
         }
         Ok(())
     }
@@ -879,7 +898,7 @@ impl SourceService {
         instance: &Instance,
         registry: &Registry,
         session: &str,
-        embedding_allowed: impl FnOnce(OwnerId) -> bool,
+        embedding_allowed: impl Fn(OwnerId, Option<OwnerId>) -> bool,
     ) {
         let Ok(state) = self.store.read(&self.store.path(session)) else {
             return;
@@ -890,9 +909,14 @@ impl SourceService {
         if let Some(head) = state.accepted
             && let Some(owner) =
                 resumable_owner(registry, session, state.owner_id.as_deref(), state.manual)
-            && embedding_allowed(owner)
         {
-            self.schedule(instance, owner, &head, registry.source_processor());
+            self.schedule(
+                instance,
+                owner,
+                &head,
+                registry.source_processor(),
+                &embedding_allowed,
+            );
         }
     }
 
@@ -902,6 +926,7 @@ impl SourceService {
         owner: OwnerId,
         head: &SourceHead,
         processor: Option<&Instance>,
+        embedding_allowed: &impl Fn(OwnerId, Option<OwnerId>) -> bool,
     ) -> bool {
         let import_id = head.import_id.as_str();
         let actor = match head.processing_phy {
@@ -932,6 +957,9 @@ impl SourceService {
                 )
             })
         {
+            return false;
+        }
+        if !embedding_allowed(owner, head.processing_phy) {
             return false;
         }
         if let Ok(job) = actor.start_processing(

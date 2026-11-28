@@ -102,10 +102,15 @@ impl Service {
         instance: &Instance,
         registry: &Registry,
         owner: OwnerId,
+        destination: Option<OwnerId>,
     ) -> Result<(), HttpError> {
         self.ensure_embedding_owner(instance, owner)?;
-        if let Some(processor) = registry.source_processor() {
-            self.ensure_embedding_owner(processor, registry.active_phy())?;
+        if let Some(phy) = destination {
+            let processor = registry
+                .source_processor()
+                .filter(|_| registry.active_phy() == phy)
+                .ok_or_else(|| HttpError::new(409, "source_phy_inactive", true))?;
+            self.ensure_embedding_owner(processor, phy)?;
         }
         Ok(())
     }
@@ -263,8 +268,8 @@ impl Service {
                         let mut sources = self.sources.lock().map_err(|_| UNAVAILABLE)?;
                         let mut runtimes = self.runtimes.lock().map_err(|_| UNAVAILABLE)?;
                         let instance = registry.instance().map_err(attach_error)?;
-                        sources.resume_all(&instance, &registry, &mut runtimes, |owner| {
-                            self.ensure_source_embedding_owners(&instance, &registry, owner)
+                        sources.resume_all(&instance, &registry, &mut runtimes, |owner, phy| {
+                            self.ensure_source_embedding_owners(&instance, &registry, owner, phy)
                                 .is_ok()
                         })?;
                         Ok(())
@@ -591,8 +596,8 @@ impl Service {
             .bind_session(&request.session_id, request.project_id.as_deref())
             .map_err(attach_error)?;
         if let Ok(mut sources) = self.sources.try_lock() {
-            sources.resume(instance, &registry, &request.session_id, |owner| {
-                self.ensure_source_embedding_owners(instance, &registry, owner)
+            sources.resume(instance, &registry, &request.session_id, |owner, phy| {
+                self.ensure_source_embedding_owners(instance, &registry, owner, phy)
                     .is_ok()
             });
         }
@@ -758,8 +763,9 @@ impl Service {
             admitted_capture: request.operation == SourceAction::Snapshot
                 && request.lease_id.is_some(),
         };
-        let response = sources.handle(instance, binding, request, fenced, || {
-            self.ensure_source_embedding_owners(instance, &registry, owner)
+        let response = sources.handle(instance, binding, request, fenced, |owner, phy| {
+            self.ensure_source_embedding_owners(instance, &registry, owner, phy)
+                .is_ok()
         });
         if reconcile && response.is_ok() && eligible_epoch.is_some() {
             runtimes
@@ -1372,9 +1378,9 @@ pub(crate) fn run(state_dir: &Path) -> Result<(), &'static str> {
                 && let Ok(mut sources) = service.sources.try_lock()
                 && let Ok(mut runtimes) = service.runtimes.try_lock()
             {
-                let _ = sources.resume_all(&instance, &registry, &mut runtimes, |owner| {
+                let _ = sources.resume_all(&instance, &registry, &mut runtimes, |owner, phy| {
                     service
-                        .ensure_source_embedding_owners(&instance, &registry, owner)
+                        .ensure_source_embedding_owners(&instance, &registry, owner, phy)
                         .is_ok()
                 });
             }
