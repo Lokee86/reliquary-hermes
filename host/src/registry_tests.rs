@@ -944,7 +944,8 @@ fn active_phy_recall_fences_previous_turn_on_the_same_rel() {
 
     let fixture = Fixture::new();
     let mut registry =
-        Registry::open_with_features(fixture.config(), &fixture.state, TOKEN, false, true).unwrap();
+        Registry::open_with_features(fixture.config(), &fixture.state, TOKEN, false, true, false)
+            .unwrap();
     assert!(registry.writable_phy());
     assert!(registry.ego_actor().is_err());
     registry.bind_session("previous-chat", None).unwrap();

@@ -629,6 +629,10 @@ impl Service {
                 .unwrap_or_else(|| registry.legacy_phy())
         } else if request.operation.is_manual() {
             expected_phy.unwrap_or_else(|| registry.legacy_phy())
+        } else if request.operation == SourceAction::Snapshot {
+            registry
+                .session_phy(&request.session_id)
+                .map_err(attach_error)?
         } else {
             registry.active_phy()
         };
@@ -706,7 +710,13 @@ impl Service {
         let invalidate_retrieval = !request.operation.is_snapshot();
         let reconcile = request.fence_epoch.is_some();
         let session_id = request.session_id.clone();
-        let binding = SourceBinding { rel: owner, phy };
+        let binding = SourceBinding {
+            rel: owner,
+            phy,
+            processor: registry.source_processor(),
+            admitted_capture: request.operation == SourceAction::Snapshot
+                && request.lease_id.is_some(),
+        };
         let response = sources.handle(instance, binding, request, fenced, || {
             self.ensure_embedding_owner(instance, owner)
         });

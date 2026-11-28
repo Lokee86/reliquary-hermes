@@ -23,6 +23,8 @@ pub(crate) struct SourceHead {
     pub(crate) request_key: String,
     pub(crate) native_digest: [u8; 32],
     pub(crate) import_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) processing_phy: Option<OwnerId>,
     pub(crate) branch: Option<String>,
     pub(crate) evidence: Vec<Evidence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -96,7 +98,7 @@ impl SourceStore {
 
     pub(crate) fn visit_resumable_imports(
         &self,
-        mut visit: impl FnMut(String, String, String, bool, Option<OwnerId>) -> bool,
+        mut visit: impl FnMut(String, String, &SourceHead, bool, Option<OwnerId>) -> bool,
     ) {
         let Ok(mut entries) = self.resume_entries.lock() else {
             return;
@@ -139,7 +141,7 @@ impl SourceStore {
             if !visit(
                 session.to_owned(),
                 owner.to_owned(),
-                head.import_id.clone(),
+                head,
                 state.manual,
                 state.phy_id,
             ) {
@@ -267,6 +269,7 @@ mod resumable_import_tests {
                 request_key: "b".repeat(64),
                 native_digest: [1; 32],
                 import_id: format!("import-{session}"),
+                processing_phy: None,
                 branch: None,
                 evidence: Vec::new(),
                 rewind_anchor: None,
@@ -276,8 +279,8 @@ mod resumable_import_tests {
             store.write(&path, &state).unwrap();
         }
         let mut seen = Vec::new();
-        store.visit_resumable_imports(|session, owner, import_id, manual, phy| {
-            seen.push((session, owner, import_id, manual, phy));
+        store.visit_resumable_imports(|session, owner, head, manual, phy| {
+            seen.push((session, owner, head.import_id.clone(), manual, phy));
             seen.len() < 130
         });
         seen.sort();
@@ -320,6 +323,7 @@ mod resumable_import_tests {
                 request_key: "b".repeat(64),
                 native_digest: [1; 32],
                 import_id: format!("import-{index}"),
+                processing_phy: None,
                 branch: None,
                 evidence: Vec::new(),
                 rewind_anchor: None,

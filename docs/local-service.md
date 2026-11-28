@@ -6,7 +6,7 @@ Configure the standalone Hermes provider to attach to a local Reliquary service 
 
 ## Overview
 
-The pinned Hermes `MemoryProvider` starts an attachment in a context-bound background thread. Its client validates discovery, authenticates the host and receives the durable session binding. The host mounts configured RELs for writing through public Root and mounts the selected PHY read-only. It exposes a provider channel with actual owner status. User edits belong to a separate dashboard channel.
+The pinned Hermes `MemoryProvider` starts an attachment in a context-bound background thread. Its client validates discovery, authenticates the host and receives the durable session binding. The host mounts configured RELs for writing through public Root. Automatic personal-memory processing opens the registered PHY with a writer lease for the internal worker. Model-facing reads retain their separate grant. It exposes a provider channel with actual owner status. User edits belong to a separate dashboard channel.
 
 Each configured profile has a separate local service and credential. Multiple sessions in one profile share the service. Each project REL is a distinct child of the main REL in the service registry. New sessions with trusted Hermes project attribution bind to the matching dedicated REL when one is configured. Other new sessions use General memory. The audited and installed Hermes hosts lack the attribution hook and use General for new attachments. The same explicit PHY selection can serve different bot profiles without changing the integration `user_id`.
 
@@ -16,7 +16,7 @@ Each configured profile has a separate local service and credential. Multiple se
 
 The directory package is named `reliquary` on every surface. Its root entry registers the memory provider and lifecycle observer. The web router resolves the provider's dashboard module through Hermes. Use the native executable built for the same source revision as the plugin. [Native host workflow](../.github/workflows/native.yml)
 
-Version 0.2.0 opens REL and PHY files with the retained history produced by Reliquary's offline 2.1 migration. Select the migrated REL and its paired PHY in Setup using the native host from this package. The host opens the REL for normal writes and mounts the PHY read-only. [Bundled Core revision](../vendor/reliquary/SOURCE-PROVENANCE.md)
+Version 0.2.0 opens REL and PHY files with the retained history produced by Reliquary's offline 2.1 migration. Select the migrated REL and its paired PHY in Setup using the native host from this package. The bundled host opens the REL for normal writes and enables a PHY writer when an authorized PHY workflow is configured. [Bundled Core revision](../vendor/reliquary/SOURCE-PROVENANCE.md)
 
 Setup and host startup may take over a minute on a large retained history. An owner open has a three-minute deadline. Setup can validate the files and start the service in one request.
 
@@ -105,7 +105,13 @@ An authenticated `owner_status` request reports the bound REL's processing state
 
 Setup records the profile's automatic capture cutoff in private `reliquary/capture-enrollment-v1.json`. An already configured profile enrolls at its first provider initialization after upgrade. Setup retries and owner changes reuse the recorded cutoff. Keep it with the profile's backups. If `source_capture_setup_required` persists, check the profile state and restore the enrollment record from a trusted backup. A missing or invalid record in a running provider disables new capture until the profile can reopen with valid enrollment. Recall remains available under its existing grants.
 
+### Automatic capture and PHY processing
+
 Automatic capture checks native original-creation and root provenance on the exact Hermes session row. It admits independent conversations created after enrollment. The compatibility gate pauses new capture on Hermes builds without the trusted history contract. Historical resumes, portable restores, copied branches and compression continuations are ineligible. A callback with a pre-enrollment message timestamp or a Hermes compression summary fails as a whole. The worker delivers previously persisted jobs under their original source identities.
+
+With the [completed-turn attribution capability](host-audit.md#source-identity-and-copy-limitations), authenticated local owner turns can publish project Memories into the session REL and personal Memories into its registered PHY. Restart the local service after enabling this Hermes capability, so it opens the PHY with the internal writer grant. Copied jobs retain the signed session's original PHY and resume there after a switch back and reauthorization. The job settles the personal Memories in the PHY for ordinary recall before reporting completion. Unknown, foreign, bot and older authors cannot authorize personal filing. Their personal proposals are held and signed source status reports `source_personal_attribution_unverified`. A held episode follows the existing native import fence for its REL.
+
+### Manual history import
 
 After connecting owners, open **Sources → Import Existing Sessions** in Web or Desktop. Select specific conversations and an authorized General or project REL, then review and confirm. A staged receipt proves the source was accepted. Complete indicates that Root finished processing through Hermes inference. Re-selecting a completed import verifies its saved receipt against the authorized host, reconnecting if the manual worker stopped that host. A different owner, snapshot digest or receipt is rejected without requeueing. Desktop confirmation requires verified native mutation admission. The source export supports up to 128 complete text rows and reports unavailable when the conversation's stored identity or lineage cannot be represented safely.
 

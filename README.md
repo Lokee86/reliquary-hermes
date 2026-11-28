@@ -36,7 +36,7 @@ Prior routes JSON, `processing.json`, `reliquary.cfg`, and any old plugin provid
 
 The web dashboard supports setup and writes after Hermes admits the active profile and browser origin. Stock Desktop supports browsing; setup and writes enable only when Hermes forwards verified native admission. Desktop graph rendering additionally needs Hermes' bounded byte-transport SDK capability. List and the Memory inspector remain available when it is absent. See the [host capability evidence](docs/verification.md#hu06-stock-and-fixed-hermes-acceptance).
 
-Project-specific routing and automatic source capture are capability-gated. Hosts without trusted project attribution use General memory for new sessions. Hosts without the trusted history contract pause automatic capture. Imported Memories without accepted source provenance may be visible in the dashboard while production recall refuses them.
+Project-specific routing and automatic source capture are capability-gated. Hosts without trusted project attribution use General memory for new sessions. Hosts without the trusted history contract pause automatic capture. Automatic personal-memory publication also requires Hermes' trusted completed-turn attribution capability. Verified local owner turns can produce personal Memories in the PHY and project Memories in the session REL. See [automatic capture and PHY processing](docs/local-service.md#automatic-capture-and-phy-processing). Imported Memories without accepted source provenance may be visible in the dashboard while production recall refuses them.
 
 ## Data and process disclosure
 

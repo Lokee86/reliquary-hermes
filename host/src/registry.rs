@@ -163,6 +163,7 @@ pub(crate) struct Registry {
     perception_runtime: Option<(u64, Arc<ConfiguredRuntime>)>,
     phy_perception_worker: Option<reliquary_memory::PhyPerceptionWorker>,
     phy_perception_enabled: bool,
+    automatic_phy_enabled: bool,
     active_phy_recall: reliquary_memory::ActivePhyRecall,
     ego_runtime: Option<(u64, Arc<ConfiguredRuntime>)>,
     ego_worker: Option<reliquary_memory::EgoWorkerHandle>,
@@ -199,12 +200,15 @@ impl Registry {
             std::env::var_os("RELIQUARY_HERMES_EGO").is_some_and(|value| value == "1");
         let phy_perception_enabled =
             std::env::var_os("RELIQUARY_HERMES_PHY_PERCEPTION").is_some_and(|value| value == "1");
+        let automatic_phy_enabled =
+            std::env::var_os("RELIQUARY_HERMES_AUTOMATIC_PHY").is_some_and(|value| value == "1");
         Self::open_with_features(
             config,
             state_dir,
             token,
             ego_enabled,
             phy_perception_enabled,
+            automatic_phy_enabled,
         )
     }
 
@@ -215,7 +219,7 @@ impl Registry {
         token: &str,
         ego_enabled: bool,
     ) -> Result<Self, RegistryError> {
-        Self::open_with_features(config, state_dir, token, ego_enabled, false)
+        Self::open_with_features(config, state_dir, token, ego_enabled, false, false)
     }
 
     fn open_with_features(
@@ -224,8 +228,9 @@ impl Registry {
         token: &str,
         ego_enabled: bool,
         phy_perception_enabled: bool,
+        automatic_phy_enabled: bool,
     ) -> Result<Self, RegistryError> {
-        let writable_phy = ego_enabled || phy_perception_enabled;
+        let writable_phy = ego_enabled || phy_perception_enabled || automatic_phy_enabled;
         config.validate()?;
         let state_dir = state_dir.canonicalize().map_err(|_| store::UNAVAILABLE)?;
         let lease = acquire_service_lease(&state_dir)?;
@@ -252,6 +257,7 @@ impl Registry {
             perception_runtime: None,
             phy_perception_worker: None,
             phy_perception_enabled,
+            automatic_phy_enabled,
             active_phy_recall: reliquary_memory::ActivePhyRecall::new(topology.active_phy),
             ego_runtime: None,
             ego_worker: None,
@@ -288,7 +294,14 @@ impl Registry {
     }
 
     fn writable_phy(&self) -> bool {
-        self.ego_enabled || self.phy_perception_enabled
+        self.ego_enabled || self.phy_perception_enabled || self.automatic_phy_enabled
+    }
+
+    pub(crate) fn source_processor(&self) -> Option<&Instance> {
+        self.automatic_phy_enabled
+            .then_some(self.admissions.phy_actor.as_ref())
+            .flatten()
+            .map(|(actor, _)| actor)
     }
 
     fn resume_phy_perception(&mut self) -> Result<(), RegistryError> {
@@ -473,6 +486,14 @@ impl Registry {
             rel_id: route.rel_id.to_string(),
             user_id,
         })
+    }
+
+    pub(crate) fn session_phy(&self, session_id: &str) -> Result<OwnerId, RegistryError> {
+        let route = self
+            .accepted_route(session_id)?
+            .ok_or(RegistryError::Denied("unbound_session"))?;
+        self.require_route_available(&route)?;
+        Ok(route.phy_id.unwrap_or(self.legacy_phy()))
     }
 
     pub(crate) fn is_bound(&self, session_id: &str) -> Result<bool, RegistryError> {

@@ -351,7 +351,12 @@ class HostClient:
         bundle = bundle_at_launch(self._state_dir, self._binary)
         environment = {name: os.environ[name] for name in ("SystemRoot", "WINDIR") if name in os.environ}
         environment.update({name: str(self._state_dir) for name in ("TEMP", "TMP", "TMPDIR")})
+        from .capture_policy import history_supported
         from .settings import ego_enabled, phy_perception_enabled
+        from .source_capture import turn_attribution_supported
+
+        if history_supported() and turn_attribution_supported():
+            environment["RELIQUARY_HERMES_AUTOMATIC_PHY"] = "1"
         try:
             if ego_enabled(self._state_dir.parent):
                 environment["RELIQUARY_HERMES_EGO"] = "1"
@@ -558,7 +563,9 @@ class HostClient:
         try:
             result = decode(reply)
             fields = {"session_id", "state", "receipt", "import_id", "owner_id", "snapshot_digest"}
-            require(fields <= set(result) <= fields | {"embedding_error"}, "invalid_source_status")
+            require(fields <= set(result) <= fields | {"embedding_error", "diagnostic"}, "invalid_source_status")
+            if "diagnostic" in result:
+                require(result["diagnostic"] == "source_personal_attribution_unverified", "invalid_source_status")
             if result.get("embedding_error") is not None:
                 choice(result["embedding_error"], {"embedding_identity_stale", "embedding_identity_unbound",
                     "embedding_identity_unavailable", "embedding_unavailable", "inference_unavailable", "inference_stale"})
@@ -583,8 +590,9 @@ class HostClient:
         arguments = {}
         if job.kind == "snapshot":
             source = decode(job.snapshot_json)
-            view = {key: source[key] for key in
-                    ("profile_id", "session_id", "branch_id", "source_revision", "messages")}
+            from .source import source_document
+
+            view = source_document(source)
             arguments = {"snapshot_digest": job.snapshot.snapshot_digest,
                          "source_json": canonical(view).decode("utf-8")}
         elif job.kind == "terminal":

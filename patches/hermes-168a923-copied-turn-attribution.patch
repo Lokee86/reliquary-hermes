@@ -1,0 +1,433 @@
+diff --git a/agent/memory_manager.py b/agent/memory_manager.py
+index c32ceca9bd..57c8eecbc8 100644
+--- a/agent/memory_manager.py
++++ b/agent/memory_manager.py
+@@ -458,12 +458,13 @@ class MemoryManager:
+ 
+     def sync_all(self, user_content: str, assistant_content: str, *, session_id: str = "",
+                  messages: Optional[list[dict[str, Any]]] = None,
+-                 turn_author: Optional[dict[str, Any]] = None) -> None:
++                 turn_author: Optional[dict[str, Any]] = None,
++                 source_turn: Optional[dict[str, Any]] = None) -> None:
+         """Sync a completed turn to all providers on the background worker.
+ 
+         Never inline: a provider's ``sync_turn`` may block for minutes, which kept ``run_conversation``
+         open after the user saw the response. The single worker also serializes writes (turn N before N+1).
+-        ``turn_author`` reaches only providers whose ``sync_turn`` accepts it.
++        Author metadata reaches only providers whose ``sync_turn`` accepts it.
+ 
+         Everything forwarded is provider egress: turn strings AND the ``messages`` transcript slice
+         (tool outputs included) go through ``_redact_for_provider`` so secrets are never archived
+@@ -477,7 +478,8 @@ class MemoryManager:
+             return
+         clean_user_content, assistant_content, redacted_messages = _redact_for_provider(
+             clean_user_content, assistant_content, messages)
+-        optional_kwargs = {"messages": redacted_messages, "turn_author": turn_author}
++        optional_kwargs = {"messages": redacted_messages, "turn_author": turn_author,
++                           "source_turn": source_turn}
+ 
+         def _sync(provider: MemoryProvider) -> None:
+             kwargs: dict[str, Any] = {"session_id": session_id}
+diff --git a/agent/memory_provider.py b/agent/memory_provider.py
+index c27bf9ffad..83c97ec96f 100644
+--- a/agent/memory_provider.py
++++ b/agent/memory_provider.py
+@@ -17,6 +17,8 @@ from typing import Any, Callable, Dict, List, Optional
+ 
+ logger = logging.getLogger(__name__)
+ 
++COPIED_TURN_ATTRIBUTION_VERSION = 1
++
+ 
+ def ctx_bound(fn: Callable[..., Any]) -> Callable[..., Any]:
+     """Bind ``fn`` to the CALLER's contextvars for another thread/executor. Profile isolation
+@@ -158,9 +160,14 @@ class MemoryProvider(ABC):
+         self, user_content: str, assistant_content: str, *,
+         session_id: str = "", messages: Optional[list[dict[str, Any]]] = None,
+         turn_author: Optional[dict[str, Any]] = None,
++        source_turn: Optional[dict[str, Any]] = None,
+     ) -> None:
+-        """Persist a completed turn (non-blocking). ``messages`` is the OpenAI-style list so far.
+-        ``turn_author`` (``{"id", "name", "is_bot"}``) is who wrote the user side; the manager sends it only to signatures that accept it."""
++        """Persist a completed turn (non-blocking) from the filtered provider transcript.
++
++        ``turn_author`` is the host's author label. ``source_turn`` identifies the exact
++        committed user row by ``message_uid``. Its ``profile_owner`` flag attests to an
++        authenticated local conversation admission. Both keywords are optional.
++        """
+ 
+     @abstractmethod
+     def get_tool_schemas(self) -> list[dict[str, Any]]:
+diff --git a/agent/turn_context.py b/agent/turn_context.py
+index 006f71ae0d..8b92bf458f 100644
+--- a/agent/turn_context.py
++++ b/agent/turn_context.py
+@@ -636,6 +636,7 @@ def _bind_turn_identity(
+     ids. Returns ``(effective_task_id, turn_id)``."""
+     agent._stream_callback = stream_callback  # picked up by _interruptible_api_call
+     agent._persist_user_message_idx = None
++    agent._memory_source_user_row = None
+     agent._persist_user_message_override = persist_user_message
+     agent._persist_user_message_timestamp = persist_user_timestamp
+     agent._persist_user_message_platform_id = persist_user_platform_id
+@@ -1284,6 +1285,7 @@ def build_turn_context(
+     append_message(messages, user_msg)
+     current_turn_user_idx = len(messages) - 1
+     agent._persist_user_message_idx = current_turn_user_idx
++    agent._memory_source_user_row = user_msg
+ 
+     agent._user_turn_count += 1
+     # Turn-initiator state for per-request provider headers: the first API call of this
+diff --git a/gateway/session_ingress.py b/gateway/session_ingress.py
+index f8f0752e6b..51a1223ac4 100644
+--- a/gateway/session_ingress.py
++++ b/gateway/session_ingress.py
+@@ -18,6 +18,8 @@ admission_author = ContextVar('admission_author', default=None)
+ executing_admission = ContextVar('executing_admission', default=False)
+ # The live session while the executing turn is one its viewer submitted (``is_viewer_input``), else None.
+ viewer_turn: ContextVar = ContextVar('viewer_turn', default=None)
++# Trusted source authorship for the exact turn mirrored to a memory provider.
++profile_owner_turn: ContextVar = ContextVar('profile_owner_turn', default=False)
+ # Set by a busy-path caller that must be released once its input is durably queued.
+ busy_acceptance = ContextVar('busy_acceptance', default=None)
+ # Set beside it by a caller that must also know when the row is durably committed (a busy burst's
+@@ -327,9 +329,20 @@ async def execute_admission(authority, ref, row):
+         # its session must not move it onto the fresh conversation (main's /new cancelled its task).
+         event._claimed_owner = (ref.session_id, row['generation'])
+     author = event.metadata.get('turn_author')
+-    author_token = admission_author.set(author if author is not None else row_turn_author(local_policy, row))
++    author = author if author is not None else row_turn_author(local_policy, row)
+     from gateway.session_operator import is_viewer_input
+-    viewer_token = viewer_turn.set(live if is_viewer_input(row) else None)
++    from gateway.owner_identity import host_owner_subject
++    from gateway.session_policy import DAYBREAK_LABELS
++    viewer = is_viewer_input(row)
++    payload = row['payload']
++    profile_owner = (viewer and live.source.platform == Platform.LOCAL and live.source.chat_type == 'dm'
++                     and not live.source.is_bot and author is None and local_policy is not None
++                     and local_policy.source in DAYBREAK_LABELS
++                     and not {'local_operator_v1', 'kanban_card_v1', 'unattended'} & payload.keys()
++                     and row['principal_id'] == host_owner_subject())
++    author_token = admission_author.set(author)
++    viewer_token = viewer_turn.set(live if viewer else None)
++    profile_owner_token = profile_owner_turn.set(profile_owner)
+     api_token = api_execution.set(None)
+     captured = {}
+     result_token = execution_result.set(captured)
+@@ -395,6 +408,7 @@ async def execute_admission(authority, ref, row):
+         api_execution.reset(api_token)
+         admission_author.reset(author_token)
+         viewer_turn.reset(viewer_token)
++        profile_owner_turn.reset(profile_owner_token)
+ 
+ 
+ def _launch_body_if_launch_owner(authority):
+diff --git a/hermes_state_common.py b/hermes_state_common.py
+index 899f74f2b6..e49e6db004 100644
+--- a/hermes_state_common.py
++++ b/hermes_state_common.py
+@@ -484,6 +484,9 @@ CREATE TABLE IF NOT EXISTS sessions (
+     system_prompt TEXT,
+     system_prompt_hash TEXT,
+     parent_session_id TEXT,
++    provenance_created_at REAL,
++    provenance_root_session_id TEXT,
++    provenance_restored INTEGER NOT NULL DEFAULT 0,
+     started_at REAL NOT NULL,
+     ended_at REAL,
+     end_reason TEXT,
+diff --git a/hermes_state_local.py b/hermes_state_local.py
+index fd39d4c1bf..cdafd8a7b7 100644
+--- a/hermes_state_local.py
++++ b/hermes_state_local.py
+@@ -11,6 +11,13 @@ API_BINDING_PREFIX = 'gateway.api.binding.v1.'
+ API_DECLARED_PREFIX = 'gateway.api.conversation.v1.'
+ 
+ 
++def stamp_local_history_root(db, conn, session_id):
++    """Record provenance for a fresh canonical conversation in its creation transaction."""
++    if getattr(db, 'HISTORY_EXPORT_VERSION', None) in (1, 2):
++        conn.execute('UPDATE sessions SET provenance_created_at=started_at, '
++                     'provenance_root_session_id=id WHERE id=?', (session_id,))
++
++
+ def commit_local_session(db, *, epoch, receipt):
+     """Reserve the row, route and immutable policy together, before publication. A staged receipt's
+     ``on_create`` (owner memory, never stored) is published by the transaction that creates the row
+@@ -72,6 +79,8 @@ def commit_local_session(db, *, epoch, receipt):
+             (sid, policy['source'], created, receipt['principal_id'], route,
+              entry['origin']['chat_id'], policy['model'], _row_cwd(policy), db._own_profile_name(),
+              _json(entry['origin']), started))
++        if 'legacy_session_id' not in receipt:
++            stamp_local_history_root(db, conn, sid)
+         conn.execute("INSERT INTO gateway_routing(scope,session_key,entry_json,updated_at) VALUES('',?,?,?)",
+                      (route, _json(entry), started))
+         conn.execute('INSERT INTO state_meta(key,value) VALUES(?,?)', (key, encoded))
+diff --git a/hermes_state_local_lineage.py b/hermes_state_local_lineage.py
+index d6c26730b2..cc95bdd6e5 100644
+--- a/hermes_state_local_lineage.py
++++ b/hermes_state_local_lineage.py
+@@ -6,7 +6,7 @@ not re-key idempotency digests, queued inputs, subscribers or uncertain claims.
+ import json
+ import time
+ 
+-from hermes_state_local import POLICY_PREFIX
++from hermes_state_local import POLICY_PREFIX, stamp_local_history_root
+ from hermes_state_runtime import RuntimeStoreError, _epoch, _json
+ import itertools
+ 
+@@ -191,6 +191,7 @@ def reset_local_target(db, *, epoch, parent_session_id, entry):
+             child_session_id=entry['session_id'], source=policy['source'], model=policy['model'],
+             model_config={'_reset_from': parent_session_id}, system_prompt=None,
+             cwd=policy['cwd'], profile_name=parent['profile_name'])
++        stamp_local_history_root(db, conn, entry['session_id'])
+         conn.execute("UPDATE sessions SET ended_at=?,end_reason='session_reset' WHERE id=?",
+                      (time.time(), parent_session_id))
+         db._bump_conversation_generation(conn, parent_session_id, 'session_reset')
+diff --git a/hermes_state_messages.py b/hermes_state_messages.py
+index f7ba486edd..e5a1b0ff47 100644
+--- a/hermes_state_messages.py
++++ b/hermes_state_messages.py
+@@ -46,6 +46,7 @@ _MESSAGE_WRITE_COLUMNS = tuple(
+     re.findall(r"\w+", _INSERT_MESSAGE_SQL.split("(", 1)[1].split(")", 1)[0])
+ )
+ _MESSAGE_SCHEMA_KEYS = frozenset(_MESSAGE_WRITE_COLUMNS) | {"id", "compacted", "display_order"}
++
+ _BUMP_GENERATION_SQL = """
+             INSERT INTO conversation_generations (source, session_key, generation)
+             VALUES (?, ?, 1)
+@@ -1435,6 +1436,131 @@ class SessionMessagesMixin(SessionDetachedResultsMixin, SessionTodoResultMixin,
+                 rows.reverse()
+         return [self._row_to_message_dict(row, warn_context="get_messages", summary_flag=True) for row in rows]
+ 
++    HISTORY_EXPORT_VERSION = 2
++
++    def export_history(self, session_id: str, *, profile_id: str, max_messages: int | None = None) -> dict[str, Any]:
++        """Return an owner-scoped, bounded, provider-redacted transcript copy for explicit history import.
++
++        This read API never changes or resumes the source session. It supports only unambiguous top-level
++        sessions whose current display transcript is complete within the caller's bound. Compression and
++        copied branches require lineage-aware aggregation and are unavailable in v1.
++        """
++        def unavailable(reason: str) -> dict[str, Any]:
++            return {"status": "unavailable", "reason": reason, "profile_id": profile_id,
++                    "session_id": session_id, "started_at": None, "messages": []}
++
++        if not isinstance(session_id, str) or not session_id.strip():
++            return unavailable("history_session_unavailable")
++        if max_messages is not None and (type(max_messages) is not int or max_messages < 1):
++            return unavailable("history_unsupported")
++        bound = max_messages
++        try:
++            owner = self._own_profile_name()
++            if not owner or profile_id != owner:
++                return unavailable("history_session_unavailable")
++            session = self.get_session(session_id)
++            if not session or session.get("profile_name") != owner:
++                return unavailable("history_session_unavailable")
++            if session.get("hidden") or session.get("archived"):
++                return unavailable("history_session_unavailable")
++            if session.get("provenance_restored") or session.get("source") == "import":
++                return unavailable("history_session_unavailable")
++            if session.get("source") == "tool":
++                return unavailable("history_unsupported")
++            from hermes_state_local_migration import NOT_CLIENT_LABELS
++            source = str(session.get("source") or "").strip()
++            if not source or source in NOT_CLIENT_LABELS:
++                return unavailable("history_unsupported")
++            from hermes_state_sessions import _parse_model_config
++            config = _parse_model_config(session.get("model_config"))
++            if (session.get("_branched_from") or config.get("_branched_from") or config.get("_delegate_from")):
++                return unavailable("history_unsupported")
++            if session.get("parent_session_id") or session.get("end_reason") in {"compression", "branched"}:
++                return unavailable("history_unsupported")
++            from hermes_state_mutation_binding import BINDING_PREFIX
++            if self._read_one("SELECT 1 FROM state_meta WHERE key = ?", (BINDING_PREFIX + session_id,)):
++                return unavailable("history_session_unavailable")
++
++            # Include compacted display rows (the canonical visible history), exclude rewind/inactive rows,
++            # and ask for one beyond the hard ceiling so truncation is never reported as success.
++            rows = self.get_messages(session_id, include_compacted=True, limit=None if bound is None else bound + 1)
++            if bound is not None and len(rows) > bound:
++                return unavailable("history_too_large")
++            if not rows:
++                return unavailable("history_identity_unavailable")
++            normalized = []
++            seen_uids = set()
++            import math
++
++            def contains_data_url(value):
++                if isinstance(value, str):
++                    return "data:" in value.lower()
++                if isinstance(value, dict):
++                    return any(contains_data_url(v) for v in value.values())
++                if isinstance(value, (list, tuple)):
++                    return any(contains_data_url(v) for v in value)
++                return False
++
++            for row in rows:
++                uid = row.get("message_uid")
++                stamp = row.get("timestamp")
++                role = row.get("role")
++                if (not isinstance(uid, str) or not uid.strip() or uid in seen_uids
++                        or not isinstance(stamp, (int, float)) or not math.isfinite(stamp)
++                        or role not in {"user", "assistant", "tool"}):
++                    return unavailable("history_identity_unavailable")
++                if row.get("_compressed_summary") or row.get("absorbed_message_uids"):
++                    return unavailable("history_unsupported")
++                if not isinstance(row.get("content"), str):
++                    return unavailable("history_unsupported")
++                seen_uids.add(uid)
++                # Keep the whole logical row (including API-content and display sidecars) for byte
++                # accounting and secret learning; drop physical row/session IDs and visibility state.
++                item = {key: value for key, value in row.items() if key not in {
++                    "id", "session_id", "active", "compacted", "display_order", "observed",
++                    "display_identity",
++                }}
++                if contains_data_url(item):
++                    return unavailable("history_unsupported")
++                normalized.append(item)
++
++            try:
++                json.dumps(
++                    normalized, ensure_ascii=False, allow_nan=False, separators=(",", ":")
++                )
++            except (TypeError, ValueError, UnicodeError, RecursionError):
++                return unavailable("history_unsupported")
++
++            # Match the installed MemoryManager's whole-transcript provider egress path exactly. If that
++            # shared redactor cannot run, raw history must never fall through as a successful export.
++            from agent.memory_manager import _redact_for_provider
++            redacted = _redact_for_provider(normalized)
++            latest = self.get_session(session_id)
++            if (not latest or latest.get("profile_name") != owner or latest.get("archived")
++                    or latest.get("hidden") or latest.get("provenance_restored") != session.get("provenance_restored")
++                    or latest.get("source") != session.get("source")
++                    or latest.get("model_config") != session.get("model_config")
++                    or latest.get("parent_session_id") != session.get("parent_session_id")
++                    or latest.get("end_reason") != session.get("end_reason")
++                    or latest.get("message_count") != session.get("message_count")
++                    or latest.get("transcript_revision") != session.get("transcript_revision")):
++                return unavailable("history_session_unavailable")
++            if not isinstance(redacted, list) or len(redacted) != len(normalized) or any(
++                not isinstance(row, dict) or row.get("message_uid") != original["message_uid"]
++                or row.get("timestamp") != original["timestamp"]
++                for row, original in zip(redacted, normalized)
++            ):
++                return unavailable("history_identity_unavailable")
++            # The provider path scrubs full rows as one transcript so a secret detected in one row is
++            # masked wherever it repeats. Only canonical visible fields leave this adapter; display
++            # sidecars (including withheld prompt metadata), reasoning, and storage identity never do.
++            exported = [{key: row[key] for key in ("message_uid", "timestamp", "role", "content")} for row in redacted]
++            return {"status": "ready", "reason": None, "profile_id": owner,
++                    "session_id": session_id, "started_at": session.get("started_at"),
++                    "messages": exported}
++        except Exception:
++            return unavailable("history_identity_unavailable")
++
+     def find_pr_url_messages(self, session_ids: list[str]) -> list[dict[str, Any]]:
+         """Tool results containing ``/pull/``: a deliberately loose scan, oldest-first so the caller takes the last."""
+         ids = [s for s in session_ids if s]
+diff --git a/hermes_state_portability.py b/hermes_state_portability.py
+index f794ca6c68..4318de9fd1 100644
+--- a/hermes_state_portability.py
++++ b/hermes_state_portability.py
+@@ -43,7 +43,7 @@ _IMPORT_MESSAGE_JSON_FIELDS = (
+ _IMPORT_SESSION_INSERT_SQL = """INSERT INTO sessions (
+                            id, source, user_id, model, model_config, system_prompt,
+                            system_prompt_hash,
+-                           parent_session_id, started_at, ended_at, end_reason,
++                           parent_session_id, provenance_restored, started_at, ended_at, end_reason,
+                            message_count, tool_call_count, input_tokens, output_tokens,
+                            cache_read_tokens, cache_write_tokens, reasoning_tokens,
+                            cwd, git_branch, git_repo_root,
+@@ -53,7 +53,7 @@ _IMPORT_SESSION_INSERT_SQL = """INSERT INTO sessions (
+                        )
+                        VALUES (
+                            :id, :source, :user_id, :model, :model_config,
+-                           NULL, :system_prompt_hash, NULL, :started_at, :ended_at,
++                           NULL, :system_prompt_hash, NULL, 1, :started_at, :ended_at,
+                            :end_reason, 0, 0, :input_tokens, :output_tokens,
+                            :cache_read_tokens, :cache_write_tokens,
+                            :reasoning_tokens, :cwd, :git_branch, :git_repo_root,
+diff --git a/hermes_state_worker_lifecycle.py b/hermes_state_worker_lifecycle.py
+index 6eb85086f7..c022e0fb60 100644
+--- a/hermes_state_worker_lifecycle.py
++++ b/hermes_state_worker_lifecycle.py
+@@ -227,15 +227,39 @@ def insert_session_row_in_transaction(
+         raise RuntimeStoreError('not_found')
+     if not (profile_name or "").strip():
+         profile_name = self._own_profile_name()
++    existing = conn.execute(
++        "SELECT 1 FROM sessions WHERE id = ?", (session_id,)
++    ).fetchone()
++    now = time.time()
++    provenance_created_at = None
++    provenance_root_session_id = None
++    independent_reset = bool(
++        parent_session_id and isinstance(model_config, dict)
++        and model_config.get("_reset_from") == parent_session_id
++    )
++    if not existing:
++        if parent_session_id and not independent_reset:
++            parent = conn.execute(
++                "SELECT provenance_created_at, provenance_root_session_id FROM sessions WHERE id = ?",
++                (parent_session_id,),
++            ).fetchone()
++            if parent and parent[0] is not None and parent[1]:
++                provenance_created_at, provenance_root_session_id = parent[0], parent[1]
++        elif source != "unknown":
++            # This marker is native provenance, distinct from portable/session timestamps. Legacy
++            # rows, placeholders and direct restore SQL stay NULL and cannot be made eligible by a later upsert.
++            # Canonical /new rows carry _reset_from=parent and intentionally start independent history.
++            provenance_created_at = now
++            provenance_root_session_id = session_id
+     system_prompt_hash = self._store_system_prompt(conn, system_prompt)
+     conn.execute(
+         """INSERT INTO sessions (
+            id, source, created_source, user_id, session_key, chat_id, chat_type, thread_id,
+            model, model_config, system_prompt, system_prompt_hash,
+-           parent_session_id, cwd, profile_name, transport_profile, git_repo_root,
++           parent_session_id, provenance_created_at, provenance_root_session_id, cwd, profile_name, transport_profile, git_repo_root,
+            origin_json, display_name, started_at
+         )
+-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                source = CASE
+                    WHEN sessions.source = 'unknown'
+@@ -276,8 +300,8 @@ def insert_session_row_in_transaction(
+         (
+             session_id, source, source, user_id, session_key, chat_id, chat_type, thread_id, model,
+             json.dumps(model_config) if model_config else None, system_prompt_hash,
+-            parent_session_id, cwd, profile_name, transport_profile, git_repo_root, origin_json,
+-            display_name, time.time(),
++            parent_session_id, provenance_created_at, provenance_root_session_id, cwd, profile_name,
++            transport_profile, git_repo_root, origin_json, display_name, now,
+         ),
+     )
+     if system_prompt_hash is not None:
+diff --git a/run_agent.py b/run_agent.py
+index a57cf0144c..8ef310f634 100644
+--- a/run_agent.py
++++ b/run_agent.py
+@@ -922,6 +922,19 @@ class AIAgent(
+             turn_author = getattr(self, "_turn_author", None)
+             if turn_author is not None:
+                 sync_kwargs["turn_author"] = turn_author
++            row = getattr(self, "_memory_source_user_row", None)
++            if isinstance(row, dict) and messages and any(message is row for message in messages):
++                from agent.context_compressor import _DB_PERSISTED_MARKER
++                from agent.message_metadata import ABSORBED_MESSAGE_UIDS, MERGED_TURN_PREFIX, MESSAGE_UID
++
++                uid = row.get(MESSAGE_UID)
++                if (row.get("role") == "user" and row.get(_DB_PERSISTED_MARKER) is True
++                        and not row.get(ABSORBED_MESSAGE_UIDS) and not row.get(MERGED_TURN_PREFIX)
++                        and isinstance(uid, str) and uid):
++                    from gateway.session_ingress import profile_owner_turn
++
++                    profile_owner = profile_owner_turn.get() and not (turn_author or {}).get("is_bot", False)
++                    sync_kwargs["source_turn"] = {"message_uid": uid, "profile_owner": profile_owner}
+             self._memory_manager.sync_all(user_text, response_text, **sync_kwargs)
+             # Sibling of the build_turn_context() prefetch gate: don't key recall on zero-signal prompts.
+             if not is_trivial_prompt(user_text):

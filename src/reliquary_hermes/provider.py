@@ -407,7 +407,8 @@ class ReliquaryMemoryProvider(MemoryProvider):
         with self._lock:
             return self._recall_status
 
-    def sync_turn(self, user_content, assistant_content, *, session_id="", messages=None, turn_author=None):
+    def sync_turn(self, user_content, assistant_content, *, session_id="", messages=None, turn_author=None,
+                  source_turn=None):
         with self._lock:
             if self._status in {"non_primary", "stopped"} or session_id != self._session_id:
                 return
@@ -415,7 +416,11 @@ class ReliquaryMemoryProvider(MemoryProvider):
             if source is None or not self._set_source_scope(session_id):
                 return
             try:
-                snapshot = capture_snapshot(profile, session_id, messages, after=self._capture_cutoff)
+                snapshot = capture_snapshot(
+                    profile, session_id, messages, after=self._capture_cutoff,
+                    source_turn=source_turn, turn_author=turn_author,
+                    principal_id=self._client._principal_id if source_turn is not None else None,
+                )
             except ContractError as error:
                 if str(error) == "source_capture_historical":
                     self._sync_status = str(error)

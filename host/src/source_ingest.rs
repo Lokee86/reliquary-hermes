@@ -2,7 +2,7 @@
 use crate::{
     registry::Registry,
     runtime::RuntimeRegistry,
-    service_http::{HttpError, HttpResponse, INVALID, UNAVAILABLE, hex},
+    service_http::{FORBIDDEN, HttpError, HttpResponse, INVALID, UNAVAILABLE, hex},
     source_store::{PendingRewind, SourceHead, SourceState, SourceStore},
     source_wire::{Evidence, RewindArguments, Snapshot, SourceAction, SourceRequest},
 };
@@ -41,9 +41,25 @@ pub(crate) struct DashboardSourceStatus {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct SourceBinding {
+pub(crate) struct SourceBinding<'a> {
     pub(crate) rel: OwnerId,
     pub(crate) phy: OwnerId,
+    pub(crate) processor: Option<&'a Instance>,
+    pub(crate) admitted_capture: bool,
+}
+
+impl<'a> SourceBinding<'a> {
+    fn stage_actor(
+        self,
+        provider: &'a Instance,
+        destination: Option<OwnerId>,
+    ) -> Result<&'a Instance, HttpError> {
+        match destination {
+            Some(phy) if phy == self.phy => self.processor.ok_or(PHY_INACTIVE),
+            Some(_) => Err(PHY_INACTIVE),
+            None => Ok(provider),
+        }
+    }
 }
 
 pub(crate) struct SourceService {
@@ -170,6 +186,7 @@ impl SourceService {
                              "snapshot_digest": head.wire_digest}),
             );
         };
+        let mut attribution_held = false;
         let label = match status {
             status if status.state == NativeImportState::Completed => "complete",
             status if status.state == NativeImportState::Staging => "processing",
@@ -183,6 +200,7 @@ impl SourceService {
                 let progress = instance
                     .processing_status(owner, Some(&head.import_id))
                     .map_err(|_| UNAVAILABLE)?;
+                attribution_held = progress.personal_attribution_held;
                 if progress.failed > 0 || progress.held > 0 {
                     "failed"
                 } else if progress.processing > 0 {
@@ -196,9 +214,13 @@ impl SourceService {
                 }
             }
         };
-        Ok(json!({"session_id": session, "state": label,
+        let mut result = json!({"session_id": session, "state": label,
                   "receipt": head.receipt.map(|value| hex(&value)), "import_id": head.import_id,
-                  "owner_id": owner.to_string(), "snapshot_digest": head.wire_digest}))
+                  "owner_id": owner.to_string(), "snapshot_digest": head.wire_digest});
+        if attribution_held {
+            result["diagnostic"] = json!("source_personal_attribution_unverified");
+        }
+        Ok(result)
     }
 
     pub(crate) fn resume_all(
@@ -213,7 +235,7 @@ impl SourceService {
         }
         let store = self.store.clone();
         let mut resumed = 0;
-        store.visit_resumable_imports(|session, owner_id, import_id, manual, phy| {
+        store.visit_resumable_imports(|session, owner_id, head, manual, phy| {
             if phy.unwrap_or_else(|| registry.legacy_phy()) != registry.active_phy() {
                 return true;
             }
@@ -223,19 +245,8 @@ impl SourceService {
             if runtimes.has_fence("hermes", &session).unwrap_or(true) || !embedding_allowed(owner) {
                 return true;
             }
-            let status = instance
-                .native_import_status(owner, &import_id)
-                .ok()
-                .flatten();
-            if status.is_some_and(|status| {
-                matches!(
-                    status.state,
-                    NativeImportState::Staged | NativeImportState::Settled
-                )
-            }) {
-                if self.schedule(instance, owner, &import_id) {
-                    resumed += 1;
-                }
+            if self.schedule(instance, owner, head, registry.source_processor()) {
+                resumed += 1;
             }
             resumed < 130
         });
@@ -245,7 +256,7 @@ impl SourceService {
     pub(crate) fn handle(
         &mut self,
         instance: &Instance,
-        binding: SourceBinding,
+        binding: SourceBinding<'_>,
         request: SourceRequest,
         reconciliation_required: bool,
         bind_embedding_identity: impl FnOnce() -> Result<(), HttpError>,
@@ -255,6 +266,13 @@ impl SourceService {
         } else {
             None
         };
+        if snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.turn_author.is_some())
+            && !binding.admitted_capture
+        {
+            return Err(FORBIDDEN);
+        }
         verify_key(
             &request,
             snapshot.as_ref().map(|snapshot| snapshot.digest.as_str()),
@@ -295,7 +313,7 @@ impl SourceService {
             }
             self.settle_before_removal(
                 instance,
-                owner,
+                binding,
                 &request,
                 &mut state,
                 &path,
@@ -339,7 +357,7 @@ impl SourceService {
             self.store.write(&path, &state)?;
             self.settle_before_removal(
                 instance,
-                owner,
+                binding,
                 &request,
                 &mut state,
                 &path,
@@ -420,9 +438,9 @@ impl SourceService {
     fn submit(
         &mut self,
         instance: &Instance,
-        binding: SourceBinding,
+        binding: SourceBinding<'_>,
         request: &SourceRequest,
-        snapshot: Snapshot,
+        mut snapshot: Snapshot,
         path: &Path,
         mut state: SourceState,
         mut bind_embedding_identity: Option<impl FnOnce() -> Result<(), HttpError>>,
@@ -430,7 +448,7 @@ impl SourceService {
         let owner = binding.rel;
         let reconciling = request.fence_epoch.is_some();
         if state.pending.is_some() {
-            self.recover_pending(instance, owner, &mut state, path)?;
+            self.recover_pending(instance, owner, &mut state, path, false)?;
             if state
                 .pending
                 .as_ref()
@@ -452,7 +470,7 @@ impl SourceService {
                     .take()
                     .is_some_and(|bind| bind().is_ok())
             {
-                self.schedule(instance, owner, &accepted.import_id);
+                self.schedule(instance, owner, accepted, binding.processor);
             }
             return Ok(receipt(request, hex(&evidence)));
         }
@@ -506,7 +524,7 @@ impl SourceService {
                     .take()
                     .is_some_and(|bind| bind().is_ok())
                 {
-                    self.schedule(instance, owner, &accepted.import_id);
+                    self.schedule(instance, owner, accepted, binding.processor);
                 }
                 return Ok(receipt(request, hex(&evidence)));
             }
@@ -514,7 +532,7 @@ impl SourceService {
                 .native_import_status(owner, &accepted.import_id)
                 .map_err(|_| UNAVAILABLE)?;
             if !status.is_some_and(|status| status.state == NativeImportState::Completed) {
-                self.schedule(instance, owner, &accepted.import_id);
+                self.schedule(instance, owner, accepted, binding.processor);
                 return Err(PENDING);
             }
             skip
@@ -526,18 +544,29 @@ impl SourceService {
         if self.jobs.get(&owner).is_some_and(|job| !job.is_finished()) {
             return Err(PENDING);
         }
+        let processing_phy = state.pending.as_ref().map_or_else(
+            || {
+                (binding.admitted_capture
+                    && binding.processor.is_some()
+                    && snapshot.turn_author.is_some())
+                .then_some(binding.phy)
+            },
+            |pending| pending.processing_phy,
+        );
+        let actor = binding.stage_actor(instance, processing_phy)?;
         let plan = copied_plan(
             scope(request)?,
-            snapshot.branch.clone(),
-            snapshot.revision,
-            snapshot.messages.into_iter().skip(skip).collect(),
+            &mut snapshot,
+            skip,
             state.accepted.as_ref(),
+            processing_phy,
         )?;
         let mut candidate = SourceHead {
             wire_digest: snapshot.digest,
             request_key: request.idempotency_key.clone(),
             native_digest: plan.source_sha256(),
             import_id: plan.import_id(owner),
+            processing_phy,
             branch: snapshot.branch,
             evidence: snapshot.evidence,
             rewind_anchor: None,
@@ -555,7 +584,7 @@ impl SourceService {
         state.pending = Some(candidate.clone());
         state.pending_snapshot = Some(request.arguments.clone());
         self.store.write(path, &state)?;
-        let staged = instance
+        let staged = actor
             .stage_native_import(owner, plan)
             .map_err(|_| PENDING)?;
         if staged.source_sha256 != candidate.native_digest
@@ -569,13 +598,13 @@ impl SourceService {
         state.available = true;
         state.pending = None;
         state.pending_snapshot = None;
-        state.accepted = Some(candidate);
+        state.accepted = Some(candidate.clone());
         self.store.write(path, &state)?;
         if bind_embedding_identity
             .take()
             .is_some_and(|bind| bind().is_ok())
         {
-            self.schedule(instance, owner, &staged.import_id);
+            self.schedule(instance, owner, &candidate, binding.processor);
         }
         Ok(receipt(request, hex(&staged.receipt_digest)))
     }
@@ -586,16 +615,18 @@ impl SourceService {
         owner: OwnerId,
         state: &mut SourceState,
         path: &Path,
+        discard_unstaged: bool,
     ) -> Result<(), HttpError> {
         if let Some(pending) = &state.pending {
             let status = instance
                 .native_import_status(owner, &pending.import_id)
                 .map_err(|_| UNAVAILABLE)?;
             match status {
-                None => {
+                None if discard_unstaged => {
                     state.pending = None;
                     state.pending_snapshot = None;
                 }
+                None => {}
                 Some(status) => {
                     if status.source_key != hex(&pending.native_digest) {
                         return Err(UNAVAILABLE);
@@ -618,45 +649,51 @@ impl SourceService {
     fn settle_before_removal(
         &mut self,
         instance: &Instance,
-        owner: OwnerId,
+        binding: SourceBinding<'_>,
         request: &SourceRequest,
         state: &mut SourceState,
         path: &Path,
         bind_embedding_identity: Option<impl FnOnce() -> Result<(), HttpError>>,
     ) -> Result<(), HttpError> {
+        let owner = binding.rel;
         if state.pending.is_some() {
-            self.recover_pending(instance, owner, state, path)?;
+            self.recover_pending(instance, owner, state, path, true)?;
             if let Some(pending) = &state.pending {
                 let args = state.pending_snapshot.as_ref().ok_or(PENDING)?;
-                let snapshot =
-                    Snapshot::parse_arguments(args, &request.profile_id, &request.session_id)?;
+                let mut snapshot = Snapshot::parse_arguments(
+                    args,
+                    &request.profile_id,
+                    &request.session_id,
+                    &request.principal_id,
+                )?;
                 let skip = match &state.accepted {
                     Some(head) => overlap(head, &snapshot).ok_or(PENDING)?,
                     None => 0,
                 };
                 let plan = copied_plan(
                     scope(request)?,
-                    snapshot.branch,
-                    snapshot.revision,
-                    snapshot.messages.into_iter().skip(skip).collect(),
+                    &mut snapshot,
+                    skip,
                     state.accepted.as_ref(),
+                    pending.processing_phy,
                 )?;
                 if plan.source_sha256() != pending.native_digest
                     || plan.import_id(owner) != pending.import_id
                 {
                     return Err(PENDING);
                 }
-                instance
+                binding
+                    .stage_actor(instance, pending.processing_phy)?
                     .stage_native_import(owner, plan)
                     .map_err(|_| PENDING)?;
-                self.recover_pending(instance, owner, state, path)?;
+                self.recover_pending(instance, owner, state, path, false)?;
             }
             self.store.write(path, state)?;
         }
         if let Some(accepted) = &state.accepted
             && bind_embedding_identity.is_some_and(|bind| bind().is_ok())
         {
-            self.schedule(instance, owner, &accepted.import_id);
+            self.schedule(instance, owner, accepted, binding.processor);
         }
         Ok(())
     }
@@ -855,11 +892,25 @@ impl SourceService {
                 resumable_owner(registry, session, state.owner_id.as_deref(), state.manual)
             && embedding_allowed(owner)
         {
-            self.schedule(instance, owner, &head.import_id);
+            self.schedule(instance, owner, &head, registry.source_processor());
         }
     }
 
-    fn schedule(&mut self, instance: &Instance, owner: OwnerId, import_id: &str) -> bool {
+    fn schedule(
+        &mut self,
+        instance: &Instance,
+        owner: OwnerId,
+        head: &SourceHead,
+        processor: Option<&Instance>,
+    ) -> bool {
+        let import_id = head.import_id.as_str();
+        let actor = match head.processing_phy {
+            Some(_) => match processor {
+                Some(actor) => actor,
+                None => return false,
+            },
+            None => instance,
+        };
         let Some(runtime) = self.runtime.as_ref() else {
             return false;
         };
@@ -883,12 +934,12 @@ impl SourceService {
         {
             return false;
         }
-        if let Ok(job) = instance.start_processing(
+        if let Ok(job) = actor.start_processing(
             owner,
             runtime,
             ProcessOptions {
                 import_id: Some(import_id.to_owned()),
-                destination: None,
+                destination: head.processing_phy,
                 ..ProcessOptions::default()
             },
         ) {
@@ -949,22 +1000,37 @@ fn overlap(previous: &SourceHead, snapshot: &Snapshot) -> Option<usize> {
 
 fn copied_plan(
     scope: HermesCopyScope,
-    branch_id: Option<String>,
-    source_revision: Option<String>,
-    messages: Vec<reliquary_memory::HermesCopiedMessage>,
+    snapshot: &mut Snapshot,
+    skip: usize,
     previous: Option<&SourceHead>,
+    destination: Option<OwnerId>,
 ) -> Result<NativeImportPlan, HttpError> {
+    let verified = snapshot.turn_author.take().filter(|author| {
+        author.profile_owner
+            && snapshot.messages[skip..]
+                .iter()
+                .any(|row| row.message_uid == author.message_uid)
+    });
     let native = HermesCopiedSnapshot {
         scope,
-        branch_id,
-        source_revision,
-        messages,
+        branch_id: snapshot.branch.clone(),
+        source_revision: snapshot.revision.take(),
+        messages: std::mem::take(&mut snapshot.messages)
+            .into_iter()
+            .skip(skip)
+            .collect(),
     };
-    match previous {
+    let plan = match previous {
         Some(head) => NativeImportPlan::from_hermes_copy_extension(native, head.native_digest),
         None => NativeImportPlan::from_hermes_copy(native),
     }
-    .map_err(|_| INVALID)
+    .map_err(|_| INVALID)?;
+    match destination {
+        Some(phy) => plan
+            .bind_hermes_live_source(phy, verified.map(|author| author.message_uid))
+            .map_err(|_| INVALID),
+        None => Ok(plan),
+    }
 }
 
 fn scope(request: &SourceRequest) -> Result<HermesCopyScope, HttpError> {

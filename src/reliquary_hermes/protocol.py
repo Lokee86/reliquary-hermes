@@ -220,6 +220,9 @@ class Response:
                 keys = {"memory_id", "source_snapshot_digests"}
                 if type(item) is dict and "owner_id" in item:
                     keys.add("owner_id")
+                if type(item) is dict and "source_principal_id" in item:
+                    keys.add("source_principal_id")
+                    identifier(item["source_principal_id"])
                 source = obj(item, keys)
                 memory_id = identifier(source["memory_id"])
                 key = (_recall_owner(source["owner_id"]), memory_id) if "owner_id" in source else (
