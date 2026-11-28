@@ -23,6 +23,9 @@ def hosted_model(dimensions, *, perception=None, embed=None, decide=None, comple
         def do_POST(self):
             native = self.path == "/decisions"
             embedding = self.path == "/embedding-provider/embeddings"
+            if not (native or embedding or self.path.endswith("/chat/completions")):
+                self.send_error(404)
+                return
             key = (NATIVE_DECISION_KEY if native else state["embedding_key"] if embedding
                    else "synthetic-hosted-inference-key")
             if self.headers.get("Authorization") != f"Bearer {key}":
@@ -45,7 +48,6 @@ def hosted_model(dimensions, *, perception=None, embed=None, decide=None, comple
                         state["calls"].append({"schema_name": "conversation", "model": raw["model"]})
                         return self.conversation(raw, chat)
                     else:
-                        assert self.path.endswith("/chat/completions") or embedding
                         request = decode_hermes_sdk_request(raw)
                         name = request.get("schema_name", "embed")
                         assert (name == "embed") == embedding, "completion/embedding route crossed"
